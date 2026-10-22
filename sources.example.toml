@@ -1,0 +1,28 @@
+# 원천 목록 견본. 실제 파일은 ~/.ai-hub/sources.toml 이다(저장소에는 실제 경로·회사 이름을 두지 않는다).
+vault = "/path/to/vault"
+
+# 분류 규칙: 작업 경로(cwd)에 가장 길게 맞는 규칙. 맞는 규칙이 없으면 볼트에 쓰지 않는다(미분류).
+[[classify]]
+path = "/path/to/work/company-a"
+class = "company"        # company | personal | study | career | exclude
+name = "company-a"       # 일지의 소제목
+
+[[classify]]
+glob = "/path/to/work/*-practice_*"
+class = "study"
+name = "practice"
+
+[[classify]]
+path = "/path/to/work/scratch"
+class = "exclude"
+
+# 등록 저장소: 커밋(git config user.email 기준)과 문서 변경
+# doc_dirs: "." 최상위 문서만, "" 폴더 전체, 그 밖의 값은 하위 폴더(하위 포함)
+[[repo]]
+path = "/path/to/work/company-a"
+class = "company"
+name = "company-a"
+doc_dirs = ["docs"]
+
+[ignore]
+repos = ["/path/to/vault"]

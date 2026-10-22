@@ -1,0 +1,24 @@
+# 요금제 설정 견본. 실제 파일은 ~/.ai-hub/plans.toml 이다.
+# allow에 없는 분류의 자료는 그 요금제로 보내지 않는다. 회사 자료는 회사 정책이 허용할 때만 연다.
+
+[[plans]]
+id = "claude-personal"
+tool = "claude"          # claude | codex | agy (C1 지원 도구)
+plan = "Pro"             # 자유 입력
+owner = "personal"       # personal | company
+allow = ["personal", "study", "career"]
+model = "haiku"          # 비우면 CLI 기본 모델
+daily_limit_calls = 30   # 비우면 상한 없음
+
+[[plans]]
+id = "codex-personal"
+tool = "codex"
+plan = "Pro 100"
+owner = "personal"
+allow = ["personal", "study", "career"]
+
+[routing]
+personal = ["claude-personal", "codex-personal"]
+study = ["claude-personal", "codex-personal"]
+career = ["claude-personal", "codex-personal"]
+company = []             # 비우면 회사 대화는 최소 기록만 남는다

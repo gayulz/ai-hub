@@ -20,14 +20,11 @@ AI_SIGNATURE = re.compile(
 
 
 def _find_leaks(text: str, values: list[str]) -> list[str]:
+	# 필터(codec.encode)와 같은 규칙: 대소문자와 붙은 글자에 상관없이 찾는다
 	kinds = []
-	for value in values:
-		pattern = re.escape(value)
-		if value.isascii():
-			pattern = rf"(?<![A-Za-z0-9]){pattern}(?![A-Za-z0-9])"
-		if re.search(pattern, text):
-			kinds.append("사전 원문")
-			break
+	lowered = text.lower()
+	if any(value.lower() in lowered for value in values):
+		kinds.append("사전 원문")
 	for name, pattern in (("이메일", redact_pii.EMAIL), ("전화번호", redact_pii.PHONE), ("IP", redact_pii.IPV4)):
 		if pattern.search(text):
 			kinds.append(name)

@@ -9,6 +9,7 @@ from unittest import mock
 from collector import redact_pii
 from vaultfilter.codec import decode, encode
 from vaultfilter.store import Dictionary
+from vaultfilter.verify import _find_leaks
 
 
 class CodecTest(unittest.TestCase):
@@ -34,11 +35,19 @@ class CodecTest(unittest.TestCase):
 		self.assertNotIn("10.1.2.3", enc)
 		self.assertEqual(decode(enc, self.dic), text)
 
-	def test_ascii_name_respects_word_boundary(self):
-		self.dic.entries.append({"value": "svc-1", "kind": "서비스명", "token": "⟦서비스명-1⟧"})
-		enc = encode("svc-1-svc-2 와 svc-1x 와 svc-1", self.dic)
-		self.assertIn("svc-1x", enc)  # 다른 영문 단어 일부는 가리지 않는다
-		self.assertEqual(enc.count("⟦서비스명-1⟧"), 2)
+	def test_case_variants_and_joined_words_are_masked_and_restored(self):
+		self.dic.entries.append({"value": "xyz", "kind": "서비스명", "token": "⟦서비스명-1⟧"})
+		text = "xyz-app, XYZ 문서, insertXyzUser(), com.xyz.usr, xyzpoc"
+		enc = encode(text, self.dic)
+		self.assertNotIn("xyz", enc.lower())
+		self.assertEqual(decode(enc, self.dic), text)
+		tokens = {e["value"]: e["token"] for e in self.dic.entries}
+		self.assertEqual(len({tokens["xyz"], tokens["XYZ"], tokens["Xyz"]}), 3)  # 표기마다 토큰이 다르다
+		self.assertEqual(encode(text, self.dic), enc)  # 다시 돌려도 같은 결과
+
+	def test_verify_catches_variants_left_unmasked(self):
+		self.assertEqual(_find_leaks("insertXyzUser 와 XYZ", ["xyz"]), ["사전 원문"])
+		self.assertEqual(_find_leaks("⟦서비스명-1⟧ 만 있음", ["xyz"]), [])
 
 	def test_same_value_gets_same_token_and_dictionary_grows_once(self):
 		first = encode("a 010-1234-5678", self.dic)

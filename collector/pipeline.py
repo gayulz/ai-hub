@@ -167,6 +167,8 @@ def load_all() -> tuple[Sources, Plans | None, list[str]]:
 	"""설정 읽기. plans.toml이 없거나 틀리면 요약 없이 최소 기록만 남기고 경고를 알린다."""
 	sources = load_sources()
 	warnings: list[str] = []
+	if not (home() / "redact_hosts.toml").exists():
+		warnings.append("redact_hosts.toml 이 없어 사내 호스트 마스킹을 건너뜁니다")
 	try:
 		plans: Plans | None = load_plans()
 	except ConfigError as exc:

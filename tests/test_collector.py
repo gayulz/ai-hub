@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
-from collector import config, redact, render, sessions, summarize, vault
+from collector import config, redact, redact_pii, render, sessions, summarize, vault
 from collector.ledger import Ledger
 from collector.sessions import Session, Turn
 
@@ -187,6 +187,48 @@ class ConfigFileTest(unittest.TestCase):
 	def test_missing_file_is_config_error(self):
 		with self.assertRaises(config.ConfigError):
 			config.load_sources(Path("/nonexistent/sources.toml"))
+
+
+class PiiRedactTest(unittest.TestCase):
+	def setUp(self):
+		self.tmp = tempfile.TemporaryDirectory()
+		self.env = mock.patch.dict(os.environ, {"AI_HUB_HOME": self.tmp.name})
+		self.env.start()
+		redact_pii.host_pattern.cache_clear()
+
+	def tearDown(self):
+		self.env.stop()
+		redact_pii.host_pattern.cache_clear()
+		self.tmp.cleanup()
+
+	def write_hosts(self, domains):
+		Path(self.tmp.name, "redact_hosts.toml").write_text(
+			"domains = [" + ", ".join(f'"{d}"' for d in domains) + "]\n", encoding="utf-8")
+		redact_pii.host_pattern.cache_clear()
+
+	def test_email_phone_and_ip_are_masked(self):
+		out = redact.redact("메일 a.b@example.co.kr 전화 010-1234-5678 또는 +82 10 2345 6789 서버 10.20.30.40:8080")
+		self.assertNotIn("example.co.kr", out)
+		self.assertNotIn("1234-5678", out)
+		self.assertNotIn("2345 6789", out)
+		self.assertNotIn("10.20.30.40", out)
+		self.assertIn(":8080", out)
+
+	def test_versions_dates_and_amounts_are_kept(self):
+		text = "버전 3.14.6 날짜 2026-10-22 금액 1,234,000 원 번호 1.2.3.4.5"
+		self.assertEqual(redact.redact(text), text)
+
+	def test_internal_hosts_only_when_configured(self):
+		self.assertIn("wiki.corp.test", redact.redact("주소 wiki.corp.test:8443"))
+		self.write_hosts(["corp.test"])
+		out = redact.redact("주소 wiki.corp.test:8443 그리고 notcorp.test")
+		self.assertNotIn("wiki.corp.test", out)
+		self.assertIn("notcorp.test", out)  # 접미사가 같아도 다른 도메인은 가리지 않는다
+
+	def test_count_reports_kinds_without_content(self):
+		self.write_hosts(["corp.test"])
+		counts = redact_pii.count_pii("a@b.co 010-1234-5678 10.1.1.1 host.corp.test")
+		self.assertEqual(counts, {"email": 1, "phone": 1, "ipv4": 1, "host": 1})
 
 
 if __name__ == "__main__":

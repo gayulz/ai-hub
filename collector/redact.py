@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from .redact_pii import redact_pii
+
 MASK = "[보안값]"
 
 SECRET_KEY = (
@@ -47,7 +49,7 @@ def _assign_repl(match: re.Match) -> str:
 
 
 def redact(text: str) -> str:
-	"""비밀값을 [보안값]으로 바꾼 문자열을 돌려준다."""
+	"""비밀값과 개인 연락처·내부 주소를 [보안값]으로 바꾼 문자열을 돌려준다."""
 	text = PRIVATE_KEY.sub(MASK, text)
 	text = SECRET_ASSIGN.sub(_assign_repl, text)
 	text = SECRET_TAG.sub(lambda m: f"{m.group(1)}{MASK}{m.group(3)}", text)
@@ -55,4 +57,4 @@ def redact(text: str) -> str:
 	text = JWT.sub(MASK, text)
 	text = TOKEN_PREFIX.sub(MASK, text)
 	text = URL_AUTH.sub(lambda m: f"{m.group(1)}{MASK}@", text)
-	return text
+	return redact_pii(text)

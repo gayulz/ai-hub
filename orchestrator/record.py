@@ -50,7 +50,7 @@ class Run:
 	branch: str = ""
 	step: str = "prepare"  # prepare → implement → verify → review → (fix → verify → review) → done
 	fixes: int = 0
-	status: str = "작업 중"  # 작업 중·승인 필요·완료·실패·예산 소진·사용자 입력 필요·취소
+	status: str = "작업 중"  # 작업 중·승인 필요·완료·실패·시간 초과·호출 한도 소진·사용자 입력 필요·취소
 	current_action: str = ""
 	agent: str = ""
 	approval_pending: bool = False

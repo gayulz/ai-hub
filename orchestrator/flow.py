@@ -63,8 +63,11 @@ class Flow:
 		"""역할 담당에게 묻는다. 실패하면 다음 요금제로 한 번만 넘어간다. 못 받으면 실행을 끝내고 None."""
 		r = self.run
 		for plan in role_plans(self.plans, self.orchestration, role)[:2]:
-			if r.calls_left() <= 0 or r.seconds_left() <= 0:
-				r.finish("예산 소진", f"{role} 호출 전에 예산(호출 {r.budget['calls']}회·{r.budget['seconds']}초)을 다 썼습니다")
+			if r.seconds_left() <= 0:
+				r.finish("시간 초과", f"{role} 호출 전에 시간 한도({r.budget['seconds']}초)를 다 썼습니다. 이어 가려면 resume --minutes")
+				return None
+			if r.calls_left() <= 0:
+				r.finish("호출 한도 소진", f"{role} 호출 전에 호출 한도({r.budget['calls']}회)를 다 썼습니다. 이어 가려면 resume --calls")
 				return None
 			record = {"role": role, "plan": plan.id, "tool": plan.tool, "started": now(), "ok": None}
 			r.calls.append(record)
@@ -82,8 +85,8 @@ class Flow:
 			self.save()
 			return reply.data
 		if r.status == "작업 중":
-			if r.seconds_left() < 60:  # 남은 시간이 거의 없어 시간 초과로 끝난 경우
-				r.finish("예산 소진", f"{role} 호출 중 시간 예산({r.budget['seconds']}초)을 다 썼습니다")
+			if r.seconds_left() < 60:  # 남은 시간이 거의 없어 호출이 시간 초과로 끝난 경우
+				r.finish("시간 초과", f"{role} 호출 중 시간 한도({r.budget['seconds']}초)를 다 썼습니다. 이어 가려면 resume --minutes")
 			else:
 				r.finish("실패", f"{role} 담당 호출이 모두 실패했습니다(요금제·로그인 확인 필요)")
 		return None

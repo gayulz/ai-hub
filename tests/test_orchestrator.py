@@ -129,19 +129,21 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertEqual(run.fixes, 1)
 		self.assertEqual([c["role"] for c in run.calls], ["implement", "review", "implement", "review"])
 
-	def test_budget_stops_new_calls(self):
+	def test_call_limit_stops_new_calls(self):
 		run = self.flow(self.new_run(calls=2), FakeAI([CHANGES, CHANGES], {"src/a.py": "VALUE = 2\n"}))
-		self.assertEqual(run.status, "예산 소진")
+		self.assertEqual(run.status, "호출 한도 소진")
+		self.assertIn("--calls", run.end_reason)
 		self.assertEqual(len(run.calls), 2)
 
-	def test_timeout_at_end_of_time_budget_is_reported_as_budget(self):
+	def test_timeout_at_end_of_time_limit_is_reported_as_time_over(self):
 		run = self.new_run(seconds=1)
 
 		def slow(*_args):
 			run.elapsed = run.budget["seconds"]  # 호출하는 사이 시간을 다 쓴 것처럼 만든다
 			raise ProviderError("timeout", "시간 초과")
 		result = self.flow(run, slow)
-		self.assertEqual(result.status, "예산 소진")
+		self.assertEqual(result.status, "시간 초과")
+		self.assertIn("--minutes", result.end_reason)
 
 	def test_reviewer_failure_falls_back_once(self):
 		fake = FakeAI([PASS], {"src/a.py": "VALUE = 2\n"}, fail_tools=("claude",))

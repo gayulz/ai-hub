@@ -23,7 +23,9 @@ PATTERNS = {
 	"codex": ("sessions/**/*.jsonl", "archived_sessions/*.jsonl", "archived_sessions/*.jsonl.zst"),
 	"gemini": ("*/chats/**/*",),
 	"agy": ("antigravity-cli/conversations/*.db", "antigravity-cli/conversation_summaries.db",
-		"antigravity/conversation_summaries.db", "antigravity/conversations/*.pb"),
+		"antigravity/conversation_summaries.db", "antigravity/conversations/*.pb",
+		"antigravity-ide/conversations/*.db", "antigravity-ide/conversations/*.pb",
+		"antigravity-backup/conversations/*.pb"),
 }
 
 

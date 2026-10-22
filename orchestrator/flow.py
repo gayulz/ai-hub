@@ -82,7 +82,10 @@ class Flow:
 			self.save()
 			return reply.data
 		if r.status == "작업 중":
-			r.finish("실패", f"{role} 담당 호출이 모두 실패했습니다(요금제 확인 필요)")
+			if r.seconds_left() < 60:  # 남은 시간이 거의 없어 시간 초과로 끝난 경우
+				r.finish("예산 소진", f"{role} 호출 중 시간 예산({r.budget['seconds']}초)을 다 썼습니다")
+			else:
+				r.finish("실패", f"{role} 담당 호출이 모두 실패했습니다(요금제·로그인 확인 필요)")
 		return None
 
 	def prepare(self) -> None:

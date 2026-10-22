@@ -23,11 +23,7 @@ def _term_pattern(value: str) -> re.Pattern:
 
 
 def encode(text: str, dictionary: Dictionary) -> str:
-	# 1) 사전에 있는 이름을 긴 값부터 토큰으로
-	for entry in sorted(dictionary.entries, key=lambda e: len(e["value"]), reverse=True):
-		if entry["value"] and entry["value"] in text:
-			text = _term_pattern(entry["value"]).sub(lambda _m, t=entry["token"]: t, text)
-	# 2) 개인 연락처·내부 주소는 찾아서 새 토큰을 만든다
+	# 1) 개인 연락처·내부 주소를 먼저 통째로 찾는다(이메일 전체를 하나로 가리기 위해)
 	for kind, pattern in PII_KINDS:
 		for value in sorted(set(pattern.findall(text)), key=len, reverse=True):
 			token = dictionary.token_for(value, kind)
@@ -36,6 +32,10 @@ def encode(text: str, dictionary: Dictionary) -> str:
 	if pattern is not None:
 		for value in sorted(set(m.group(0) for m in pattern.finditer(text)), key=len, reverse=True):
 			text = text.replace(value, dictionary.token_for(value, "호스트"))
+	# 2) 사전의 이름을 긴 값부터 토큰으로
+	for entry in sorted(dictionary.entries, key=lambda e: len(e["value"]), reverse=True):
+		if entry["value"] and entry["value"] in text:
+			text = _term_pattern(entry["value"]).sub(lambda _m, t=entry["token"]: t, text)
 	return text
 
 

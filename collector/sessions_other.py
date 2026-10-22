@@ -17,7 +17,6 @@ from .sessions import INJECTED, Session, Turn, parse_time
 
 GEMINI_HOME = Path.home() / ".gemini"
 AGY_DB = GEMINI_HOME / "antigravity-cli" / "conversation_summaries.db"
-AUTO_CALL_MAX_STEPS = 2  # 이하이면 한 번 묻고 끝나는 자동 호출로 보고 제외(정본 계획 2절)
 
 
 def _gemini_names() -> dict[str, str]:
@@ -76,7 +75,7 @@ def _agy_cwd(uris: str) -> str | None:
 
 
 def read_agy(since: datetime) -> tuple[list[Session], list[str]]:
-	"""(포함할 대화, 자동 호출로 제외한 대화의 제목 목록). 제외 목록은 첫 실행 때 사용자가 확인한다."""
+	"""(모든 대화, 제외 목록). AGY는 사람이 요청하는 경우가 거의 없어 자동 호출도 포함한다(2026-10-22 결정). 제외 목록은 항상 비운다."""
 	if not AGY_DB.exists():
 		return [], []
 	since_utc = (since - timedelta(days=1)).astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -90,13 +89,10 @@ def read_agy(since: datetime) -> tuple[list[Session], list[str]]:
 	finally:
 		conn.close()
 	included: list[Session] = []
-	excluded: list[str] = []
-	for cid, title, preview, steps, modified, uris, agent in rows:
+	excluded: list[str] = []  # 자동 호출 제외는 하지 않는다
+	for cid, title, preview, _steps, modified, uris, _agent in rows:
 		last = parse_time(modified.replace(" ", "T", 1))
 		if last is None:
-			continue
-		if steps <= AUTO_CALL_MAX_STEPS or agent:
-			excluded.append(title or cid)
 			continue
 		sess = Session("agy", cid, _agy_cwd(uris), last, last, partial=True, title=title or "")
 		if preview:

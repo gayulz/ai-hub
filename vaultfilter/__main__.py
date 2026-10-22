@@ -3,6 +3,7 @@
 	python3 -m vaultfilter add 값 종류         사전에 항목 추가(종류: 회사명, 서비스명, 사람이름 ...)
 	python3 -m vaultfilter clean               표준입력 → 토큰(git clean 용)
 	python3 -m vaultfilter smudge              표준입력 → 원래 이름(git smudge 용)
+	python3 -m vaultfilter verify tree|messages <범위>   푸시 전 누출 검사(위치·종류만 출력)
 """
 
 from __future__ import annotations
@@ -64,6 +65,9 @@ def main(argv: list[str]) -> int:
 			return cmd_add(argv[1], argv[2])
 		if command in ("clean", "smudge"):
 			return cmd_filter(command)
+		if command == "verify":
+			from .verify import main as verify_main
+			return verify_main(argv[1:])
 	except Exception as exc:  # 필터 실패를 숨기지 않는다
 		print(f"vaultfilter 실패: {type(exc).__name__}: {exc}", file=sys.stderr)
 		return 1

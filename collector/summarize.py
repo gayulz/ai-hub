@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+from collections.abc import Iterator
 
 from .config import Plan, Plans, run_dir
 from .ledger import Ledger
@@ -32,17 +32,22 @@ class SummarizeError(Exception):
 	"""호출 실패. 메시지에는 비밀값을 넣지 않는다."""
 
 
-def pick_plan(cls: str, plans: Plans | None, ledger: Ledger, day: str) -> Plan | None:
+def usable_plans(cls: str, plans: Plans | None, ledger: Ledger, day: str,
+		skip: set[str] = frozenset()) -> Iterator[Plan]:
+	"""routing 순서대로 지금 쓸 수 있는 요금제. 호출이 실패하면 호출자가 다음 것으로 넘어간다."""
 	if plans is None:
-		return None
+		return
 	for pid in plans.routing.get(cls, ()):
 		plan = plans.plans[pid]
-		if cls not in plan.allow:
+		if pid in skip or cls not in plan.allow:
 			continue
 		if plan.daily_limit is not None and ledger.calls_today(pid, day) >= plan.daily_limit:
 			continue
-		return plan
-	return None
+		yield plan
+
+
+def pick_plan(cls: str, plans: Plans | None, ledger: Ledger, day: str) -> Plan | None:
+	return next(usable_plans(cls, plans, ledger, day), None)
 
 
 def _clip(text: str, limit: int) -> str:

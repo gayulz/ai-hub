@@ -231,5 +231,52 @@ class PiiRedactTest(unittest.TestCase):
 		self.assertEqual(counts, {"email": 1, "phone": 1, "ipv4": 1, "host": 1})
 
 
+class FallbackTest(unittest.TestCase):
+	"""주 AI 호출이 실패하면(한도 초과 등) 다음 요금제로 넘어간다."""
+
+	def test_failed_plan_falls_back_and_is_skipped_for_the_rest_of_run(self):
+		from collector import pipeline
+		plans = config.Plans(
+			{
+				"claude": config.Plan("claude", "claude", "", "personal", ("personal",), None, None),
+				"codex": config.Plan("codex", "codex", "", "personal", ("personal",), None, None),
+			},
+			{"personal": ("claude", "codex")},
+		)
+		calls = []
+
+		def fake_call(plan, prompt):
+			calls.append(plan.id)
+			if plan.id == "claude":
+				raise summarize.SummarizeError("claude 종료 코드 1")
+			return "- 요약"
+
+		with tempfile.TemporaryDirectory() as tmp:
+			ledger = Ledger(Path(tmp) / "l.db")
+			runner = pipeline.Pipeline(mock.Mock(), plans, ledger, dry_run=False)
+			with mock.patch.object(summarize, "call", side_effect=fake_call):
+				first = runner.summarize(_session(sid="a"), "personal")
+				second = runner.summarize(_session(sid="b"), "personal")
+			ledger.close()
+		self.assertEqual(first[:2], ("- 요약", "codex"))
+		self.assertEqual(second[:2], ("- 요약", "codex"))
+		self.assertEqual(calls, ["claude", "codex", "codex"])  # 실패한 claude 는 두 번째부터 건너뛴다
+
+	def test_all_plans_failing_leaves_minimal_reason(self):
+		from collector import pipeline
+		plans = config.Plans(
+			{"codex": config.Plan("codex", "codex", "", "personal", ("personal",), None, None)},
+			{"personal": ("codex",)},
+		)
+		with tempfile.TemporaryDirectory() as tmp:
+			ledger = Ledger(Path(tmp) / "l.db")
+			runner = pipeline.Pipeline(mock.Mock(), plans, ledger, dry_run=False)
+			with mock.patch.object(summarize, "call", side_effect=summarize.SummarizeError("codex 빈 응답")):
+				summary, plan_id, reason = runner.summarize(_session(), "personal")
+			ledger.close()
+		self.assertIsNone(summary)
+		self.assertIn("호출 실패", reason)
+
+
 if __name__ == "__main__":
 	unittest.main()

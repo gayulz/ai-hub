@@ -56,6 +56,7 @@ class Pipeline:
 		self.dry_run = dry_run
 		self.counts: Counter[str] = Counter()
 		self.excluded_titles: list[str] = []
+		self.failed_plans: set[str] = set()
 		self.now = datetime.now().astimezone()
 		self.today = self.now.date()
 
@@ -99,15 +100,21 @@ class Pipeline:
 		self.counts[status] += 1
 
 	def summarize(self, session: Session, cls: str) -> tuple[str | None, str | None, str]:
+		"""routing 순서대로 부르고, 실패하면(한도 초과 등) 다음 요금제로 넘어간다.
+
+		한 번 실패한 요금제는 이 실행이 끝날 때까지 다시 부르지 않는다(한도가 찬 요금제를 대화마다 두드리지 않게).
+		"""
 		today = self.today.isoformat()
-		plan = summarize.pick_plan(cls, self.plans, self.ledger, today)
-		if plan is None:
-			return None, None, "사용 가능한 요금제 없음"
-		self.ledger.bump_call(plan.id, today)
-		try:
-			return summarize.call(plan, summarize.build_prompt(redacted(session))), plan.id, ""
-		except summarize.SummarizeError as exc:
-			return None, None, f"호출 실패({exc})"
+		prompt = summarize.build_prompt(redacted(session))
+		reason = "사용 가능한 요금제 없음"
+		for plan in summarize.usable_plans(cls, self.plans, self.ledger, today, self.failed_plans):
+			self.ledger.bump_call(plan.id, today)
+			try:
+				return summarize.call(plan, prompt), plan.id, ""
+			except summarize.SummarizeError as exc:
+				self.failed_plans.add(plan.id)
+				reason = f"호출 실패({exc})"
+		return None, None, reason
 
 	def handle_repos(self, since: date) -> None:
 		day = since

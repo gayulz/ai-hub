@@ -23,6 +23,8 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 | `261022-03-collector-c1-plan.md` | 수집기 1단계(C1) 구현 계획 |
 | `261021-07-ai-memory-roadmap.md`, `261021-05-ai-orchestration.md` | 배경 분석, Codex의 오케스트레이션 제안 |
 
+**진행 중 작업 인계**: `~/.ai-hub/handoff.md`가 있으면 가장 먼저 읽는다. 다른 AI가 한도 등으로 멈춘 작업의 현재 상태와 다음 할 일이 적혀 있다. 이어서 진행한 뒤 그 문서의 상태 표를 갱신한다.
+
 ## 절대 규칙
 
 - **원천은 읽기만 한다.** 프로젝트 폴더(`~/NEWPOC`, `~/LEGACYPOC`, `~/workspace/*` 등)와 AI 대화 원문에 쓰지 않는다. 체크아웃·빌드도 하지 않는다.

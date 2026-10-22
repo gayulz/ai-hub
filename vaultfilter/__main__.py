@@ -45,6 +45,8 @@ def cmd_add(value: str, kind: str) -> int:
 def cmd_filter(mode: str) -> int:
 	# 필터 실패는 종료 코드 0이 아니어야 git이 커밋을 거부한다
 	dictionary = Dictionary()
+	if mode == "clean" and (not dictionary.path.is_file() or not dictionary.entries):
+		raise ValueError("마스킹 사전이 없거나 비어 있습니다")
 	data = sys.stdin.read()
 	result = encode(data, dictionary) if mode == "clean" else decode(data, dictionary)
 	if mode == "clean":

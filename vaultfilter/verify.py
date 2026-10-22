@@ -1,6 +1,6 @@
-"""푸시 전 검사: 저장될 내용(HEAD 트리)과 커밋 메시지에 사전 원문·개인 연락처·AI 서명이 남았는지 본다.
+"""푸시 전 검사: 전송할 이력의 파일 경로·본문과 커밋 메시지에서 누출을 찾는다.
 
-결과에는 위치와 종류만 적고, 찾은 값은 출력하지 않는다.
+결과에는 커밋·파일 순번과 종류만 적고, 찾은 값이나 원문 경로는 출력하지 않는다.
 """
 
 from __future__ import annotations
@@ -9,13 +9,17 @@ import re
 import subprocess
 import sys
 
-from collector import redact_pii
+from collector import redact as secrets, redact_pii
 
 from .store import Dictionary
 
 AI_SIGNATURE = re.compile(
 	r"(?im)^(co-authored-by:.*(claude|anthropic|codex|openai|gemini)|generated-by:"
 	r"|signed-off-by:.*(claude|codex|gemini)|.*🤖|.*🐙 autopus)"
+)
+SECRET_LITERAL = re.compile(
+	rf"(?i)(?<![\w.-])(?:{secrets.SECRET_KEY}|[\w.-]+[_-](?:key|secret|token))"
+	r"[\"']?[ \t]*[:=][ \t]*[\"']?[A-Za-z0-9_+/=-]{16,}(?![\w.-])"
 )
 
 
@@ -31,6 +35,8 @@ def _find_leaks(text: str, values: list[str]) -> list[str]:
 	host = redact_pii.host_pattern()
 	if host is not None and host.search(text):
 		kinds.append("사내 호스트")
+	if any(pattern.search(text) for pattern in (secrets.PRIVATE_KEY, secrets.JWT, secrets.TOKEN_PREFIX, SECRET_LITERAL)):
+		kinds.append("비밀값")
 	return kinds
 
 
@@ -38,26 +44,59 @@ def _git(*args: str) -> bytes:
 	return subprocess.run(["git", *args], capture_output=True, check=True).stdout
 
 
-def check_tree() -> int:
-	values = [e["value"] for e in Dictionary().entries if len(e["value"]) >= 2]
+def _values() -> list[str]:
+	dictionary = Dictionary()
+	if not dictionary.path.is_file() or not dictionary.entries:
+		raise ValueError("마스킹 사전이 없거나 비어 있습니다")
+	return [e["value"] for e in dictionary.entries if len(e["value"]) >= 2]
+
+
+def check_tree(revs: str = "HEAD") -> int:
+	values = _values()
 	problems = 0
-	listing = _git("ls-tree", "-r", "-z", "HEAD").split(b"\0")
-	for entry in filter(None, listing):
-		meta, path = entry.split(b"\t", 1)
-		sha = meta.split()[2].decode()
-		if not path.decode().endswith(".md"):
-			continue
-		text = _git("cat-file", "blob", sha).decode("utf-8", errors="replace")
-		kinds = _find_leaks(text, values)
-		if kinds:
+	seen_blobs = set()
+	for commit in _git("rev-list", revs).decode().splitlines():
+		metadata = _git("show", "-s", "--format=%an%n%ae%n%cn%n%ce", commit).decode("utf-8")
+		if any(value.lower() in metadata.lower() for value in values):
 			problems += 1
-			print(f"누출 의심: {path.decode()} ({', '.join(kinds)})")
+			print(f"작성자 정보에 사전 원문: {commit[:12]}")
+		listing = _git("ls-tree", "-r", "-z", commit).split(b"\0")
+		for index, entry in enumerate(filter(None, listing), 1):
+			meta, path = entry.split(b"\t", 1)
+			mode, _, sha = meta.decode().split()
+			name = path.decode("utf-8", errors="strict")
+			location = f"{commit[:12]} 파일 #{index}"
+			if any(part.startswith("🔐") for part in name.split("/")):
+				problems += 1
+				print(f"커밋 금지 경로: {location}")
+				continue
+			kinds = _find_leaks(name, values)
+			if kinds:
+				problems += 1
+				print(f"경로 누출 의심: {location} ({', '.join(kinds)})")
+			if mode not in ("100644", "100755"):
+				problems += 1
+				print(f"검사할 수 없는 파일 유형: {location}")
+				continue
+			if sha in seen_blobs:
+				continue
+			seen_blobs.add(sha)
+			try:
+				text = _git("cat-file", "blob", sha).decode("utf-8", errors="strict")
+			except UnicodeDecodeError:
+				problems += 1
+				print(f"검사할 수 없는 비텍스트 파일: {location}")
+				continue
+			kinds = _find_leaks(text, values)
+			if kinds:
+				problems += 1
+				print(f"본문 누출 의심: {location} ({', '.join(kinds)})")
 	return problems
 
 
 def check_messages(revs: str) -> int:
 	text = _git("log", "--format=%B%x00", revs).decode("utf-8", errors="replace")
-	values = [e["value"] for e in Dictionary().entries if len(e["value"]) >= 2]
+	values = _values()
 	problems = 0
 	for message in filter(None, text.split("\0")):
 		if AI_SIGNATURE.search(message):
@@ -72,7 +111,7 @@ def check_messages(revs: str) -> int:
 def check_message_file(path: str) -> int:
 	with open(path, encoding="utf-8", errors="replace") as fh:
 		message = fh.read()
-	values = [e["value"] for e in Dictionary().entries if len(e["value"]) >= 2]
+	values = _values()
 	problems = 0
 	if AI_SIGNATURE.search(message):
 		problems += 1
@@ -86,12 +125,12 @@ def check_message_file(path: str) -> int:
 def main(argv: list[str]) -> int:
 	if argv[:1] == ["message-file"] and len(argv) == 2:
 		count = check_message_file(argv[1])
-	elif argv[:1] == ["tree"]:
-		count = check_tree()
+	elif argv[:1] == ["tree"] and len(argv) <= 2:
+		count = check_tree(argv[1] if len(argv) > 1 else "HEAD")
 	elif argv[:1] == ["messages"]:
 		count = check_messages(argv[1] if len(argv) > 1 else "HEAD")
 	else:
-		print("사용법: verify tree | verify messages <rev-range>", file=sys.stderr)
+		print("사용법: verify tree [rev-range] | verify messages <rev-range>", file=sys.stderr)
 		return 2
 	print("검사 통과" if count == 0 else f"검사 실패: {count}건")
 	return 0 if count == 0 else 1

@@ -1,7 +1,8 @@
 """볼트 자동 커밋·push 한 바퀴.
 
 사람이 Git 작업 중이면 건너뛴다. 커밋 전에 파일마다 검사해 문제 파일은 빼고 나머지만 커밋한다(D2 A).
-push 전 최종 검사는 볼트의 pre-push 훅이 맡는다. 볼트 안에는 아무것도 쓰지 않는다.
+본문은 git-crypt가 암호화하므로 검사하지 않는다. 암호화되지 않는 경로·종류·링크만 본다.
+push 전 최종 검사(모두 암호화됐는지)는 볼트의 pre-push 훅이 맡는다. 볼트 안에는 아무것도 쓰지 않는다.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 
 from collector.config import run_dir
-from vaultfilter.codec import encode
 from vaultfilter.store import Dictionary
 from vaultfilter.verify import _find_leaks
 
@@ -67,35 +67,24 @@ def allowed(path: str) -> bool:
 	return path.endswith(".md") or path.startswith(".obsidian/") or path in ROOT_FILES
 
 
-def problem(vault: Path, path: str, dictionary: Dictionary, values: list[str]) -> str:
+def problem(vault: Path, path: str, values: list[str]) -> str:
 	"""커밋하면 안 되는 이유. 비어 있으면 넣어도 된다. 찾은 값은 돌려주지 않는다."""
 	if not allowed(path):
 		return "허용하지 않는 파일 종류"
 	if _find_leaks(path, values):
 		return "경로에 사전 이름 또는 연락처"
-	file = vault / path
-	if file.is_symlink():
+	if (vault / path).is_symlink():
 		return "심볼릭 링크"
-	if not file.exists():
-		return ""  # 삭제는 그대로 반영한다
-	try:
-		text = file.read_text(encoding="utf-8")
-	except UnicodeDecodeError:
-		return "텍스트가 아님"
-	if path.endswith(".md"):
-		text = encode(text, dictionary)  # 커밋 때 필터가 하는 일과 같다. 사전 저장은 필터가 한다
-	kinds = _find_leaks(text, values)
-	return f"필터 뒤에도 누출 의심({', '.join(kinds)})" if kinds else ""
+	return ""
 
 
 def plan(vault: Path) -> Result:
 	result = Result(skipped_run=busy(vault))
 	if result.skipped_run:
 		return result
-	dictionary = Dictionary()
-	values = [e["value"] for e in dictionary.entries if len(e["value"]) >= 2]
+	values = [e["value"] for e in Dictionary().entries if len(e["value"]) >= 2]
 	for path in changes(vault):
-		reason = problem(vault, path, dictionary, values)
+		reason = problem(vault, path, values)
 		if reason:
 			result.excluded.append((path, reason))
 		else:

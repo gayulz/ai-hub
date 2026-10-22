@@ -1,6 +1,7 @@
 """푸시 전 검사: 전송할 이력의 파일 경로·본문과 커밋 메시지에서 누출을 찾는다.
 
-결과에는 커밋·파일 순번과 종류만 적고, 찾은 값이나 원문 경로는 출력하지 않는다.
+볼트는 10-22부터 git-crypt로 암호화해 저장하므로 `verify encrypted`를 쓴다(본문은 암호화 여부만 확인).
+`verify tree`는 마스킹 저장소용이다. 결과에는 커밋·파일 순번과 종류만 적고, 찾은 값이나 원문 경로는 출력하지 않는다.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ AI_SIGNATURE = re.compile(
 	r"(?im)^(co-authored-by:.*(claude|anthropic|codex|openai|gemini)|generated-by:"
 	r"|signed-off-by:.*(claude|codex|gemini)|.*🤖|.*🐙 autopus)"
 )
+CRYPT_HEADER = b"\x00GITCRYPT\x00"
 SECRET_LITERAL = re.compile(
 	rf"(?i)(?<![\w.-])(?:{secrets.SECRET_KEY}|[\w.-]+[_-](?:key|secret|token))"
 	r"[\"']?[ \t]*[:=][ \t]*[\"']?[A-Za-z0-9_+/=-]{16,}(?![\w.-])"
@@ -51,7 +53,43 @@ def _values() -> list[str]:
 	return [e["value"] for e in dictionary.entries if len(e["value"]) >= 2]
 
 
+def _inspect_plain(name: str, blob: bytes, location: str, values: list[str]) -> int:
+	"""마스킹 저장소용: 본문에 남은 사전 원문·연락처·비밀값을 찾는다."""
+	try:
+		text = blob.decode("utf-8", errors="strict")
+	except UnicodeDecodeError:
+		print(f"검사할 수 없는 비텍스트 파일: {location}")
+		return 1
+	kinds = _find_leaks(text, values)
+	if kinds:
+		print(f"본문 누출 의심: {location} ({', '.join(kinds)})")
+		return 1
+	return 0
+
+
+def _inspect_encrypted(name: str, blob: bytes, location: str, values: list[str]) -> int:
+	"""암호화 저장소용: .gitattributes 말고는 모두 git-crypt 머리로 시작해야 한다."""
+	if name == ".gitattributes":
+		if b"* filter=git-crypt" in blob and not _find_leaks(blob.decode("utf-8", errors="replace"), values):
+			return 0
+		print(f"암호화 규칙이 없거나 누출이 의심되는 .gitattributes: {location}")
+		return 1
+	if blob.startswith(CRYPT_HEADER):
+		return 0
+	print(f"암호화되지 않은 파일: {location}")
+	return 1
+
+
 def check_tree(revs: str = "HEAD") -> int:
+	return _scan(revs, _inspect_plain)
+
+
+def check_encrypted(revs: str = "HEAD") -> int:
+	return _scan(revs, _inspect_encrypted)
+
+
+def _scan(revs: str, inspect) -> int:
+	"""전송할 이력의 작성자·경로를 검사하고, 파일 본문은 inspect 로 검사한다."""
 	values = _values()
 	problems = 0
 	seen_blobs = set()
@@ -81,16 +119,7 @@ def check_tree(revs: str = "HEAD") -> int:
 			if sha in seen_blobs:
 				continue
 			seen_blobs.add(sha)
-			try:
-				text = _git("cat-file", "blob", sha).decode("utf-8", errors="strict")
-			except UnicodeDecodeError:
-				problems += 1
-				print(f"검사할 수 없는 비텍스트 파일: {location}")
-				continue
-			kinds = _find_leaks(text, values)
-			if kinds:
-				problems += 1
-				print(f"본문 누출 의심: {location} ({', '.join(kinds)})")
+			problems += inspect(name, _git("cat-file", "blob", sha), location, values)
 	return problems
 
 
@@ -127,10 +156,12 @@ def main(argv: list[str]) -> int:
 		count = check_message_file(argv[1])
 	elif argv[:1] == ["tree"] and len(argv) <= 2:
 		count = check_tree(argv[1] if len(argv) > 1 else "HEAD")
+	elif argv[:1] == ["encrypted"] and len(argv) <= 2:
+		count = check_encrypted(argv[1] if len(argv) > 1 else "HEAD")
 	elif argv[:1] == ["messages"]:
 		count = check_messages(argv[1] if len(argv) > 1 else "HEAD")
 	else:
-		print("사용법: verify tree [rev-range] | verify messages <rev-range>", file=sys.stderr)
+		print("사용법: verify tree|encrypted [rev-range] | verify messages <rev-range>", file=sys.stderr)
 		return 2
 	print("검사 통과" if count == 0 else f"검사 실패: {count}건")
 	return 0 if count == 0 else 1

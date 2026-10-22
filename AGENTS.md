@@ -9,8 +9,8 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 | 구성 | 언어 | 상태 |
 |---|---|---|
 | `collector/` 수집기 — 원천을 훑어 볼트에 1차 정제 기록 | Python(표준 라이브러리만) | C1 계획 단계 |
-| `vaultfilter/` 마스킹 Git 필터 — 볼트를 GitHub에 올릴 때 이름을 가림, push 전 검사 | Python | 사용 중 |
-| `vaultsync/` 볼트 자동 기록 — 매시 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05-vault-autosync-plan.md`) | Python | 사용 중 |
+| `vaultfilter/` push 전 검사(`verify encrypted`: 암호화 여부·경로·작성자·메시지). 마스킹 clean/smudge는 10-22 이후 볼트에서 쓰지 않음 | Python | 사용 중 |
+| `vaultsync/` 볼트 자동 기록 — 하루 2회(12:30·23:30) 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05`, `261022-06`) | Python | 사용 중 |
 | 검색 엔진·기억 서버(MCP) | Java/Spring Boot + Lucene + Nori | 예정 |
 
 ## 작업 전에 반드시 읽을 것
@@ -32,7 +32,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 - **볼트에는 정해진 착지점에만 쓴다**(정본 계획 6절). 폴더를 새로 만들지 않는다.
 - **`🔐`로 시작하는 노트는 읽지도, 색인하지도, 커밋하지도 않는다.** 사용자가 직접 관리하는 비밀 노트다.
 - **이 저장소에는 회사 이름·회사 경로·비밀값을 넣지 않는다.** 나중에 공개할 수 있어야 한다. 원천 목록·요금제 같은 실제 값은 `~/.ai-hub/`의 설정 파일(`sources.toml`, `plans.toml`)에만 둔다. 테스트는 합성 자료만 쓴다.
-- **볼트를 GitHub에 올리는 경로는 마스킹 필터 하나다.** 필터가 실패하면 커밋이 거부되게 둔다(`required`). 우회하지 않는다.
+- **볼트는 git-crypt로 암호화해서만 GitHub에 올린다**(10-22 결정, 마스킹 필터를 대체). 필터는 `required`라 실패하면 커밋이 거부된다. push 전 검사(`vf verify encrypted`)와 훅을 우회하지 않는다. 파일·폴더 이름과 커밋 메시지는 암호화되지 않으므로 회사·서비스 이름을 쓰지 않는다. 키(`~/.ai-hub/keys/`)는 출력하거나 저장소에 넣지 않는다.
 - 사용자의 요금제·회사 정책을 추측하지 않는다. `~/.ai-hub/plans.toml`에 없는 요금제로 AI를 부르지 않는다.
 - naver-blog-agent의 상주 데몬·대시보드와 무관하다. 그 저장소의 규칙(`RULES.md`)을 여기에 끌어오지 않는다.
 

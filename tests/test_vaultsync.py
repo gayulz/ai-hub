@@ -62,33 +62,30 @@ class VaultSyncTest(unittest.TestCase):
 			capture_output=True, text=True).stdout
 
 	def test_problem_files_are_excluded_with_reasons(self):
-		self.write("notes/ok.md", "acme 회의, 연락 dev@acme.test")  # 필터가 가리므로 넣어도 된다
+		self.write("notes/ok.md", "acme 회의, 연락 dev@acme.test")
 		self.write("notes/acme-plan.md", "경로에 이름")
-		self.write("notes/token.md", f"git 토큰\n{TOKEN}\n")
+		self.write("notes/token.md", f"git 토큰\n{TOKEN}\n")  # 본문은 git-crypt가 암호화하므로 막지 않는다
 		self.write("notes/data.csv", "a,b")
 		result = sync.plan(self.vault)
-		self.assertEqual(result.committed, ["notes/ok.md"])
+		self.assertEqual(sorted(result.committed), ["notes/ok.md", "notes/token.md"])
 		reasons = dict(result.excluded)
 		self.assertIn("경로", reasons["notes/acme-plan.md"])
-		self.assertIn("비밀값", reasons["notes/token.md"])
 		self.assertEqual(reasons["notes/data.csv"], "허용하지 않는 파일 종류")
-		self.assertNotIn(TOKEN, json.dumps(result.excluded))
 
 	def test_run_commits_pushes_deletions_and_leaves_excluded_files(self):
 		self.write("notes/new.md", "# 새 노트\n")
-		self.write("notes/token.md", f"{TOKEN}\n")
+		self.write("notes/acme-plan.md", "경로에 이름")
 		(self.vault / "notes/old.md").unlink()
 		self.assertEqual(cli.main(["run"]), 0)
 		pushed = subprocess.run(["git", "--git-dir", str(self.remote), "ls-tree", "-r", "--name-only", "main"],
 			capture_output=True, text=True).stdout.split()
 		self.assertIn("notes/new.md", pushed)
 		self.assertNotIn("notes/old.md", pushed)
-		self.assertNotIn("notes/token.md", pushed)
-		self.assertEqual(self.status().strip(), "?? notes/token.md")  # 뺀 파일은 작업 폴더에 그대로
+		self.assertNotIn("notes/acme-plan.md", pushed)
+		self.assertEqual(self.status().strip(), "?? notes/acme-plan.md")  # 뺀 파일은 작업 폴더에 그대로
 		self.notified.assert_called_once()
 		log = (self.home / "logs" / "vaultsync.log").read_text(encoding="utf-8")
 		self.assertIn("push 성공", log)
-		self.assertNotIn(TOKEN, log)
 
 	def test_nothing_changed_makes_no_commit(self):
 		before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.vault, capture_output=True, text=True).stdout

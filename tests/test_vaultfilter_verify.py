@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ from unittest import mock
 from collector import redact_pii
 from vaultfilter.__main__ import cmd_filter
 from vaultfilter.store import Dictionary
-from vaultfilter.verify import _find_leaks, check_tree
+from vaultfilter.verify import _find_leaks, check_encrypted, check_tree
 
 
 class VerifyTest(unittest.TestCase):
@@ -98,6 +99,34 @@ class VerifyTest(unittest.TestCase):
 		count, output = self.check()
 		self.assertEqual(count, 1)
 		self.assertNotIn("Acme", output)
+
+	def check_enc(self, revs="HEAD"):
+		output = io.StringIO()
+		with mock.patch("vaultfilter.verify._git", side_effect=self.git), contextlib.redirect_stdout(output):
+			count = check_encrypted(revs)
+		return count, output.getvalue()
+
+	def test_encrypted_mode_needs_crypt_header_rule_and_clean_paths(self):
+		self.commit(".gitattributes", "* filter=git-crypt diff=git-crypt\n.gitattributes !filter !diff\n")
+		(self.repo / "note.md").write_bytes(b"\x00GITCRYPT\x00" + b"\x01\x02Acme")
+		self.git("add", "--", "note.md")
+		self.git("commit", "-q", "-m", "합성 암호문")
+		self.assertEqual(self.check_enc(), (0, ""))
+		self.commit("plain.md", "평문 노트")
+		self.commit("Acme.md", "\x00GITCRYPT\x00")
+		count, output = self.check_enc()
+		self.assertEqual(count, 2)  # 평문 1건, 경로 누출 1건
+		self.assertIn("암호화되지 않은 파일", output)
+		self.assertNotIn("Acme", output)
+
+	@unittest.skipUnless(shutil.which("git-crypt"), "git-crypt 미설치")
+	def test_real_git_crypt_output_passes_and_hides_text(self):
+		subprocess.run(["git-crypt", "init"], cwd=self.repo, capture_output=True, check=True)
+		self.commit(".gitattributes", "* filter=git-crypt diff=git-crypt\n.gitattributes !filter !diff\n")
+		self.commit("note.md", "암호화될 본문 Acme")
+		self.assertEqual(self.check_enc()[0], 0)
+		blob = self.git("cat-file", "blob", "HEAD:note.md")
+		self.assertNotIn("암호화될 본문".encode(), blob)
 
 
 if __name__ == "__main__":

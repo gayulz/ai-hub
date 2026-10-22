@@ -18,6 +18,10 @@ def dictionary_path() -> Path:
 	return home() / "redaction" / "dictionary.json"
 
 
+def _number_of(token: str) -> int:
+	return int(token.rsplit("-", 1)[1].rstrip("⟧"))
+
+
 class Dictionary:
 	def __init__(self, path: Path | None = None):
 		self.path = path or dictionary_path()
@@ -38,7 +42,8 @@ class Dictionary:
 				return entry["token"]
 		if kind not in KINDS:
 			raise ValueError(f"알 수 없는 종류: {kind}")
-		number = sum(1 for e in self.entries if e["kind"] == kind) + 1
+		# 항목을 지워도 번호가 겹치지 않도록 같은 종류의 최댓값 다음 번호를 쓴다
+		number = max((_number_of(e["token"]) for e in self.entries if e["kind"] == kind), default=0) + 1
 		token = f"⟦{kind}-{number}⟧"
 		self.entries.append({"value": value, "kind": kind, "token": token})
 		return token

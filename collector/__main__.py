@@ -1,5 +1,6 @@
 """사용법: python3 -m collector run [--dry-run] [--since 오늘|YYYY-MM-DD]
         python3 -m collector check [--since 오늘|YYYY-MM-DD]
+        python3 -m collector archive
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ import sys
 import traceback
 from datetime import date
 
-from . import pipeline
+from . import archive, pipeline
 from .config import ConfigError
 
 
@@ -21,7 +22,18 @@ def parse_since(value: str | None) -> date | None:
 	return date.fromisoformat(value)
 
 
+def cmd_archive() -> int:
+	try:
+		return int(archive.archive().failed > 0)
+	except Exception as exc:
+		print(f"보관 실패: {type(exc).__name__}")
+		print(archive.ArchiveStats(failed=1).summary())
+		return 1
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+	if not args.dry_run:
+		cmd_archive()
 	sources, plans, warnings = pipeline.load_all()
 	for line in warnings:
 		print(f"경고: {line}")
@@ -78,8 +90,11 @@ def main(argv: list[str] | None = None) -> int:
 	run.add_argument("--since", help="이 날짜 이후 시작한 대화(오늘 또는 YYYY-MM-DD)")
 	check = sub.add_parser("check", help="누락 점검")
 	check.add_argument("--since", help="점검 시작일(오늘 또는 YYYY-MM-DD)")
+	sub.add_parser("archive", help="대화 원문을 로컬 압축 사본으로 보관")
 	args = parser.parse_args(argv)
 	try:
+		if args.command == "archive":
+			return cmd_archive()
 		return cmd_run(args) if args.command == "run" else cmd_check(args)
 	except ConfigError as exc:
 		print(f"설정 오류: {exc}", file=sys.stderr)

@@ -9,7 +9,8 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 | 구성 | 언어 | 상태 |
 |---|---|---|
 | `collector/` 수집기 — 원천을 훑어 볼트에 1차 정제 기록 | Python(표준 라이브러리만) | C1 계획 단계 |
-| 마스킹 Git 필터 — 볼트를 GitHub에 올릴 때 이름을 가림 | Python | 예정 |
+| `vaultfilter/` 마스킹 Git 필터 — 볼트를 GitHub에 올릴 때 이름을 가림, push 전 검사 | Python | 사용 중 |
+| `vaultsync/` 볼트 자동 기록 — 매시 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05-vault-autosync-plan.md`) | Python | 사용 중 |
 | 검색 엔진·기억 서버(MCP) | Java/Spring Boot + Lucene + Nori | 예정 |
 
 ## 작업 전에 반드시 읽을 것

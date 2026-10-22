@@ -10,6 +10,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 |---|---|---|
 | `collector/` 수집기 — 원천을 훑어 볼트에 1차 정제 기록 | Python(표준 라이브러리만) | C1 계획 단계 |
 | `vaultfilter/` push 전 검사(`verify encrypted`: 암호화 여부·경로·작성자·메시지). 마스킹 clean/smudge는 10-22 이후 볼트에서 쓰지 않음 | Python | 사용 중 |
+| `orchestrator/` AI 개발 오케스트레이션(A안) — 구현 AI·독립 검토 AI·기계 검증·보완, 실행 기록 `~/.ai-hub/runs/`, 반영은 사용자 승인 뒤 `apply`(계획: 볼트 `261022-07`) | Python | 사용 중 |
 | `vaultsync/` 볼트 자동 기록 — 하루 2회(12:30·23:30) 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05`, `261022-06`) | Python | 사용 중 |
 | 검색 엔진·기억 서버(MCP) | Java/Spring Boot + Lucene + Nori | 예정 |
 

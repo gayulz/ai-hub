@@ -36,15 +36,14 @@ def other_home(value: str) -> bool:
 
 
 def path_problems(data: dict) -> list[str]:
-	paths = list(config_paths(data))
-	for index, repo in enumerate(data.get("repo", [])):
-		for directory in repo.get("doc_dirs", []):
-			if not directory.startswith(("/", "~/")):
-				paths.append((f"repo[{index}].doc_dirs", str(Path(repo["path"]).expanduser() / directory)))
 	problems = []
-	for field, value in paths:
+	for field, value in config_paths(data):
 		if other_home(value):
 			problems.append(f"{field}: 다른 사용자 홈 경로")
+			continue
+		# 분류 규칙은 대화의 작업 경로 문자열과 맞추는 것이라 지워진 폴더·임시 폴더도 정상이다.
+		# 문서 폴더(doc_dirs)도 아직 없을 수 있어 존재를 따지지 않는다.
+		if field.startswith("classify") or ".doc_dirs" in field:
 			continue
 		expanded = os.path.expanduser(value)
 		if glob.has_magic(expanded):

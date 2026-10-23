@@ -66,13 +66,15 @@ class HubSetupCheckTest(HubSetupCase):
 				self.assertNotIn("/Users/xyz", result.stdout)
 				path.write_text(before)
 
-	def test_missing_config_paths_and_relative_document_paths_fail(self):
+	def test_missing_repo_path_fails_but_classify_and_doc_dirs_do_not(self):
+		self.assertEqual(check.path_problems({"classify": [{"path": "~/xyz-gone"}],
+			"repo": [{"path": "~/source", "doc_dirs": ["xyz"]}]}), [])
 		self.apply()
 		path = self.hub / "sources.toml"
-		path.write_text(path.read_text().replace('doc_dirs = ["docs"]', 'doc_dirs = ["xyz"]'))
+		path.write_text(path.read_text().replace('[[repo]]\npath = "~/source"', '[[repo]]\npath = "~/xyz"'))
 		result = self.command("check")
 		self.assertEqual(result.returncode, 1)
-		self.assertIn("doc_dirs: 경로 없음", result.stdout)
+		self.assertIn("repo[0].path: 경로 없음", result.stdout)
 
 	def test_glob_paths_are_checked_without_treating_wildcards_as_literal_names(self):
 		self.assertEqual(check.path_problems({"glob": "~/source/*"}), [])

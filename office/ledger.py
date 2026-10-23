@@ -67,7 +67,7 @@ def batches(conn) -> dict:
 		sum(i.state='prepared') as prepared, sum(i.state='held') as held
 		from c4_batches b join c4_scopes s on s.id=b.scope
 		left join c4_items i on i.batch=b.id where b.state='prepared'
-		group by b.id order by b.id""")
+		group by b.id having sum(i.state='prepared') > 0 order by b.id""")
 	items = []
 	for row in rows:
 		bid = identifier(row["id"])

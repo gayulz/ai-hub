@@ -10,6 +10,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 |---|---|---|
 | `collector/` 수집기 — 원천을 훑어 볼트에 1차 정제 기록. 매시 실행 때 네 AI 도구의 대화 원문을 `~/.ai-hub/archive/`에 gzip 사본으로 먼저 보관(로컬 전용, 지우지 않음) | Python(표준 라이브러리만) | 사용 중 |
 | `hubbackup/` 상태 백업 — `~/.ai-hub`(키 제외)·AI 도구 설정을 age로 암호화해 iCloud `ai-hub-backup/state/`에 사본(이름은 해시). 비밀키는 iCloud에 두지 않음(계획: 볼트 `261022-08`) | Python + age | 사용 중 |
+| `office/` 사무실 화면 — ZEP 스타일 픽셀 사무실로 AI 직원·자동 작업의 상태와 결재함을 보여 준다. 보기 전용, `127.0.0.1:8765`(launchd), 결정 목록 `~/.ai-hub/decisions.toml`(계획: 볼트 `261023-01`) | Python + HTML | 사용 중 |
 | `vaultfilter/` push 전 검사(`verify encrypted`: 암호화 여부·경로·작성자·메시지). 마스킹 clean/smudge는 10-22 이후 볼트에서 쓰지 않음 | Python | 사용 중 |
 | `orchestrator/` AI 개발 오케스트레이션(A안) — 구현 AI·독립 검토 AI·기계 검증·보완, 실행 기록 `~/.ai-hub/runs/`, 반영은 사용자 승인 뒤 `apply`(계획: 볼트 `261022-07`) | Python | 사용 중 |
 | `vaultsync/` 볼트 자동 기록 — 하루 2회(12:30·23:30) 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05`, `261022-06`) | Python | 사용 중 |
@@ -36,7 +37,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 - **이 저장소에는 회사 이름·회사 경로·비밀값을 넣지 않는다.** 나중에 공개할 수 있어야 한다. 원천 목록·요금제 같은 실제 값은 `~/.ai-hub/`의 설정 파일(`sources.toml`, `plans.toml`)에만 둔다. 테스트는 합성 자료만 쓴다.
 - **볼트는 git-crypt로 암호화해서만 GitHub에 올린다**(10-22 결정, 마스킹 필터를 대체). 필터는 `required`라 실패하면 커밋이 거부된다. push 전 검사(`vf verify encrypted`)와 훅을 우회하지 않는다. 파일·폴더 이름과 커밋 메시지는 암호화되지 않으므로 회사·서비스 이름을 쓰지 않는다. 키(`~/.ai-hub/keys/`)는 출력하거나 저장소에 넣지 않는다.
 - 사용자의 요금제·회사 정책을 추측하지 않는다. `~/.ai-hub/plans.toml`에 없는 요금제로 AI를 부르지 않는다.
-- naver-blog-agent의 상주 데몬·대시보드와 무관하다. 그 저장소의 규칙(`RULES.md`)을 여기에 끌어오지 않는다.
+- naver-blog-agent는 상태만 읽는다(사무실 화면의 데몬 실행 여부). 그 저장소의 자료·데몬을 고치거나 재기동하지 않고, 그 저장소의 규칙(`RULES.md`)을 여기에 끌어오지 않는다. 개발 요청은 오케스트레이션, 운영 요청은 그 저장소의 창구로 보낸다(사무실 2·3단계, 계획 `261023-01`).
 
 ## 코드 규칙
 

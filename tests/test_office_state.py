@@ -111,6 +111,14 @@ class OfficeStateTest(OfficeCase):
 		self.assertEqual(state["approvals"]["runs"]["status"], "확인 불가")
 		self.assertEqual(state["approvals"]["c4"]["status"], "정상")
 
+	def test_old_runs_do_not_hide_current_agent_states(self):
+		self.run_record("2026-10-22-002", "예산 소진")
+		broken = self.run_record("2026-10-22-001", "완료")
+		(broken / "run.json").write_text("[]")
+		people = self.people(self.state())
+		self.assertEqual(people["codex"]["status"], "대기 중")
+		self.assertEqual(people["agy"]["status"], "대기 중")
+
 	def test_gemini_uses_only_mtime_and_excludes_protected_names(self):
 		original = Path.open
 		def guard(path, *args, **kwargs):

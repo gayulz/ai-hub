@@ -14,7 +14,8 @@ from urllib.error import URLError
 
 from .common import identifier, normal, regular, stamp, unavailable
 
-RUN_STATUSES = {"작업 중", "승인 필요", "완료", "실패", "시간 초과", "호출 한도 소진", "사용자 입력 필요", "취소"}
+# "예산 소진"은 10-22 이전 실행 기록의 옛 상태 이름이다.
+RUN_STATUSES = {"예산 소진", "작업 중", "승인 필요", "완료", "실패", "시간 초과", "호출 한도 소진", "사용자 입력 필요", "취소"}
 EVENTS = {"start": "실행 시작", "resume": "실행 재개", "call": "AI 호출", "call_failed": "AI 호출 실패",
 	"prepare": "준비 완료", "implemented": "구현 완료", "verified": "기계 검사", "reviewed": "독립 검토", "finish": "실행 종료"}
 NAMES = {"codex": "Codex", "agy": "AGY", "claude": "Claude", "gemini": "Gemini CLI", "gemma": "로컬 모델", "blog": "블로그 에이전트"}
@@ -87,12 +88,12 @@ def orchestration(runs: dict, plans: dict) -> list[dict]:
 	result = []
 	for aid in ("codex", "agy", "claude"):
 		status = "상태 미확인" if aid == "claude" else "대기 중"
-		agent = {"id": aid, "status": status, "task": "오케스트레이션 역할 없음", "result": latest}
+		agent = {"id": aid, "status": status, "task": "맡은 실행 없음", "result": latest}
 		if runs["status"] == "확인 불가" or plans["status"] == "확인 불가":
 			agent.update(unavailable("실행 기록 또는 요금제 설정을 확인할 수 없습니다"))
 		else:
 			for item in items:
-				if item["status"] == "확인 불가" or (item["active"] and item["events"]["status"] == "확인 불가"):
+				if item["active"] and (item["status"] == "확인 불가" or item["events"]["status"] == "확인 불가"):
 					agent.update(unavailable("일부 실행의 상태·사건을 확인할 수 없습니다"))
 					continue
 				call = item.get("call")
@@ -122,7 +123,7 @@ def gemini(user_home: Path, now: datetime) -> dict:
 		if age < 0:
 			raise ValueError
 		agent.update(status="일하는 중" if age <= 600 else "쉬는 중",
-			task="최근 대화 파일 수정 시각 기준", last_seen=datetime.fromtimestamp(modified).astimezone().isoformat(timespec="seconds"))
+			task="대화 중" if age <= 600 else "최근 대화 없음", last_seen=datetime.fromtimestamp(modified).astimezone().isoformat(timespec="seconds"))
 	except (OSError, ValueError):
 		agent.update(unavailable("대화 파일의 수정 시각을 확인할 수 없습니다"), task="수정 시각 확인 불가")
 	return agent
@@ -146,7 +147,7 @@ def ollama(active: dict) -> dict:
 			item = active["items"][0]
 			agent.update(status="집중 중", task=f'{item["project"]} · {item["position"]}/{item["total"]}건째 · 예약 {len(active["items"])}건')
 		else:
-			agent.update(status="대기 중", task="로컬 호출 예약 없음")
+			agent.update(status="대기 중", task="맡은 요약 없음")
 		agent["models"] = models
 		agent["result"] = ", ".join(models) if models else "올라온 모델 없음"
 	except (OSError, URLError, HTTPException):
@@ -162,7 +163,7 @@ def blog() -> dict:
 		result = subprocess.run(["pgrep", "-f", r"(^|[ /])blogops[.]daemon([ \t]|$)"], capture_output=True, text=True, timeout=2)
 		if result.returncode not in (0, 1):
 			raise ValueError
-		agent.update(status="일하는 중" if result.returncode == 0 else "꺼짐", task="블로그 상주 프로세스 확인")
+		agent.update(status="일하는 중" if result.returncode == 0 else "꺼짐", task="데몬 실행 중" if result.returncode == 0 else "데몬 꺼짐")
 	except (OSError, ValueError, subprocess.TimeoutExpired):
 		agent.update(unavailable("블로그 프로세스를 조회할 수 없습니다"), task="프로세스 확인 불가")
 	return agent

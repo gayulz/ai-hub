@@ -1,6 +1,6 @@
 """Gemini CLI와 AGY 대화 읽기.
 
-- Gemini CLI: ~/.gemini/tmp/<이름>/chats/session-*.json (본문 있음)
+- Gemini CLI: ~/.gemini/tmp/<이름>/chats/session-*.json·jsonl (본문 있음)
 - AGY: conversation_summaries.db의 제목·미리보기만 쓴다. 대화 본문은 protobuf
   블롭이라 C1에서는 다루지 않는다(C3 이후 과제).
 """
@@ -31,18 +31,43 @@ def _gemini_names() -> dict[str, str]:
 	return names
 
 
+def _gemini_data(path: Path, text: str) -> dict:
+	"""JSONL을 기존 JSON의 메타데이터·메시지 배열 형태로 읽는다."""
+	if path.suffix != ".jsonl":
+		return json.loads(text)
+	data: dict = {"messages": []}
+	for line in text.splitlines():
+		try:
+			row = json.loads(line)
+		except json.JSONDecodeError:
+			continue  # 쓰는 중인 줄이 깨져도 나머지는 읽는다
+		if not isinstance(row, dict):
+			continue
+		if "type" not in row and "startTime" in row:
+			data.update(row)
+		elif isinstance(row.get("$set"), dict):
+			if "lastUpdated" in row["$set"]:
+				data["lastUpdated"] = row["$set"]["lastUpdated"]
+		elif row.get("type") in ("user", "gemini"):
+			if isinstance(row.get("content"), list):
+				row["content"] = "\n".join(part["text"] for part in row["content"]
+					if isinstance(part, dict) and isinstance(part.get("text"), str))
+			data["messages"].append(row)
+	return data
+
+
 def read_gemini(since: datetime) -> list[Session]:
 	root = GEMINI_HOME / "tmp"
 	if not root.exists():
 		return []
 	names = _gemini_names()
 	since_ts = (since - timedelta(days=1)).timestamp()
-	out: list[Session] = []
-	for path in sorted(root.glob("*/chats/session-*.json")):
+	out: dict[str, Session] = {}
+	for path in sorted([*root.glob("*/chats/session-*.json"), *root.glob("*/chats/session-*.jsonl")]):
 		if path.stat().st_mtime < since_ts:
 			continue
 		try:
-			data = json.loads(path.read_text(encoding="utf-8"))
+			data = _gemini_data(path, path.read_text(encoding="utf-8"))
 		except (OSError, json.JSONDecodeError):
 			continue
 		if data.get("kind") == "subagent":
@@ -62,8 +87,10 @@ def read_gemini(since: datetime) -> list[Session]:
 			elif msg.get("type") == "gemini":
 				sess.turns.append(Turn("assistant", text))
 		if sess.user_count > 0:
-			out.append(sess)
-	return out
+			old = out.get(sess.sid)
+			if old is None or sess.last > old.last:
+				out[sess.sid] = sess
+	return list(out.values())
 
 
 def _agy_cwd(uris: str) -> str | None:

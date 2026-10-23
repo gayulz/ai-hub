@@ -45,7 +45,7 @@ def read(path: Path, tool: str, names: dict[str, str]) -> list[Session]:
 				if line.strip().startswith("{")]
 			result.last = max([result.last] + [s for s in stamps if s])
 		return [result] if result else []
-	data = json.loads(text)
+	data = sessions_other._gemini_data(original, text)
 	if data.get("kind") == "subagent":
 		return []
 	started, last = parse_time(data.get("startTime")), parse_time(data.get("lastUpdated"))

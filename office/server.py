@@ -59,5 +59,5 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond(404, "페이지가 없습니다".encode())
 
 
-def create_server(port: int = 8765) -> ThreadingHTTPServer:
+def create_server(port: int = 8790) -> ThreadingHTTPServer:
 	return ThreadingHTTPServer(("127.0.0.1", port), Handler)

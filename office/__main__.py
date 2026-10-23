@@ -1,4 +1,4 @@
-"""사용법: python3 -m office [--port 8765]"""
+"""사용법: python3 -m office [--port 8790]"""
 
 import argparse
 
@@ -7,7 +7,7 @@ from .server import create_server
 
 def main(argv=None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument("--port", type=int, default=8765, help="로컬 서버 포트")
+	parser.add_argument("--port", type=int, default=8790, help="로컬 서버 포트")
 	args = parser.parse_args(argv)
 	if not 1 <= args.port <= 65535:
 		parser.error("포트는 1~65535여야 합니다")

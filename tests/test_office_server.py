@@ -15,7 +15,7 @@ from test_office import OfficeCase
 class OfficeServerTest(OfficeCase):
 	def setUp(self):
 		super().setUp()
-		self.httpd = SimpleNamespace(server_port=8765)
+		self.httpd = SimpleNamespace(server_port=8790)
 
 	def raw_request(self, raw, method="GET"):
 		class MemorySocket:
@@ -37,8 +37,8 @@ class OfficeServerTest(OfficeCase):
 
 	def test_serves_only_screen_script_state_and_binds_only_ipv4_loopback(self):
 		with mock.patch.object(server, "ThreadingHTTPServer") as constructor:
-			server.create_server(8765)
-		constructor.assert_called_once_with(("127.0.0.1", 8765), server.Handler)
+			server.create_server(8790)
+		constructor.assert_called_once_with(("127.0.0.1", 8790), server.Handler)
 		status, headers, body = self.request()
 		self.assertEqual(status, 200)
 		self.assertIn("text/html", headers["Content-Type"])

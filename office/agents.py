@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 from urllib.error import URLError
 
-from .common import identifier, normal, regular, stamp, unavailable
+from collector.config import ConfigError, classify
+from . import signals
+from .common import identifier, normal, regular, stamp, text, unavailable
 
 # "예산 소진"은 10-22 이전 실행 기록의 옛 상태 이름이다.
 RUN_STATUSES = {"예산 소진", "작업 중", "승인 필요", "완료", "실패", "시간 초과", "호출 한도 소진", "사용자 입력 필요", "취소"}
@@ -36,7 +38,11 @@ def held_lock(folder: Path, root: Path) -> bool:
 
 
 def read_runs(root: Path) -> dict:
-	items, activity = [], []
+	items, activity, failures = [], [], []
+	try:
+		sources = signals.sources(root)
+	except (OSError, ValueError, TypeError, KeyError, ConfigError):
+		sources = None
 	try:
 		folder = root / "runs"
 		if folder.is_symlink():
@@ -47,15 +53,24 @@ def read_runs(root: Path) -> dict:
 	for folder in folders:
 		if not re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{3}", folder.name):
 			continue
+		active = False
 		try:
+			active = held_lock(folder, root)
 			with regular(folder / "run.json", root).open(encoding="utf-8") as source:
 				data = json.load(source)
 			status = data["status"]
 			if status not in RUN_STATUSES:
 				raise ValueError
-			item = {"id": folder.name, "status": status, "active": held_lock(folder, root)}
-		except (OSError, ValueError, TypeError, KeyError):
-			items.append(unavailable("실행 상태·잠금을 읽을 수 없습니다", id=folder.name, active=False))
+			role = data.get("role", "backend")
+			if role not in ("plan", "backend", "frontend", "design"):
+				raise ValueError
+			rule = classify(data.get("repo"), sources.rules) if sources else None
+			item = {"id": folder.name, "status": status, "active": active, "role": role,
+				"public": rule is not None and rule.cls in ("personal", "study", "career"), "at": stamp(data["started"]) if data.get("started") else None}
+			if item["public"]:
+				item["text"] = text(data.get("handoff", {}).get("summary", ""))
+		except (OSError, ValueError, TypeError, KeyError, AttributeError):
+			items.append(unavailable("실행 상태·잠금을 읽을 수 없습니다", id=folder.name, active=active, role="backend"))
 			continue
 		last_call = None
 		try:
@@ -69,17 +84,32 @@ def read_runs(root: Path) -> dict:
 						continue
 					at = stamp(event["at"])
 					activity.append({"at": at, "text": f"{folder.name} · {EVENTS[name]}", "source": "run"})
+					item["at"] = at
+					if name == "call_failed":
+						failures.append({"at": at, "plan": identifier(event["plan"])})
+						last_call = None
+					if name in ("implemented", "reviewed", "verified", "finish"):
+						last_call = None
 					if name == "call":
 						if event["role"] not in ("implement", "review"):
 							raise ValueError
-						last_call = {"role": event["role"], "plan": identifier(event["plan"])}
+						last_call = {"role": event["role"], "plan": identifier(event["plan"]), "at": at}
+			if "calls" in data:
+				pending = [call for call in data["calls"] if call.get("ok") is None]
+				if pending:
+					call = pending[-1]
+					if call["role"] not in ("implement", "review"):
+						raise ValueError
+					last_call = {"role": call["role"], "plan": identifier(call["plan"]), "at": stamp(call["started"])}
+				else:
+					last_call = None
 			item["events"] = normal()
 		except (OSError, ValueError, TypeError, KeyError, AttributeError):
 			item["events"] = unavailable("실행 사건 파일이 없거나 형식이 잘못됐습니다")
 			last_call = None
 		item["call"] = last_call
 		items.append(item)
-	return normal(items=items, activity=activity)
+	return normal(items=items, activity=activity, failures=failures)
 
 
 def orchestration(runs: dict, plans: dict) -> list[dict]:

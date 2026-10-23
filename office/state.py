@@ -8,10 +8,11 @@ from urllib.parse import urlsplit
 
 from collector.config import home
 
-from . import agents
+from . import agents, roles
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_ledger
+from .schedule import build_schedule
 
 
 def read_plans(root: Path) -> dict:
@@ -67,7 +68,7 @@ def read_decisions(root: Path, today: date) -> dict:
 			broken = True
 	schedule.sort(key=lambda row: (row["due"], row["id"]))
 	group = unavailable("일부 결정 항목의 형식을 확인할 수 없습니다") if broken else normal()
-	return {"decisions": {**group, "items": decisions}, "schedule": {**group, "items": schedule[:3]}}
+	return {"decisions": {**group, "items": decisions}, "schedule": {**group, "items": schedule}}
 
 
 def dashboard(root: Path) -> dict:
@@ -114,9 +115,20 @@ def build_state(now: datetime | None = None) -> dict:
 	activity = runs["activity"] + [{"at": item["log"]["at"], "text": item["name"] + " · " + item["log"]["last_line"],
 		"source": item["id"]} for item in jobs if item["log"]["at"]]
 	activity.sort(key=lambda item: datetime.fromisoformat(item["at"]), reverse=True)
+	role_people = roles.build_people(root, user_home, now, runs, plans, ledger, jobs)
+	engines = roles.build_engines(user_home, now, runs, plans, jobs, people[-2])
+	usage = {"c4": ledger["usage"], "limit": plans["limit"], "plans": ledger["calls"],
+		"notebooklm": {"status": "미측정", "count": None}}
+	schedule = build_schedule(root, decisions["schedule"], jobs, ledger["followups"])
+	board_items = ledger["records"]["items"] + [{"kind": "meeting", "title": item["id"],
+		"text": item.get("text") or "오케스트레이션 · " + item["status"], "at": item["at"]}
+		for item in runs["items"] if item.get("public") and item.get("at")]
+	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs,
+		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "decisions": decisions["decisions"]},
-		"board": {"progress": ledger["progress"], "usage": {"c4": ledger["usage"], "limit": plans["limit"], "plans": ledger["calls"]},
-			"schedule": {"decisions": decisions["schedule"], "jobs": [{"id": item["id"], "title": item["name"],
+		"board": {"items": board_items[:20], "status": "확인 불가" if runs["status"] == "확인 불가" else ledger["records"]["status"],
+			"progress": ledger["progress"], "usage": usage,
+			"schedule": {"decisions": {**decisions["schedule"], "items": decisions["schedule"]["items"][:3]}, "jobs": [{"id": item["id"], "title": item["name"],
 				**item["schedule"]} for item in jobs if item["schedule"]["next_run"] is None
 				or datetime.fromisoformat(item["schedule"]["next_run"]).date() == now.date()]}}, "activity": activity[:20]}

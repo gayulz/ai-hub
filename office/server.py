@@ -9,7 +9,7 @@ from pathlib import Path
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
-CSP = ("default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; "
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
 	"font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
@@ -52,8 +52,10 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond(503, '{"status":"확인 불가","reason":"화면 자료를 만들지 못했습니다"}'.encode(), "application/json; charset=utf-8")
 				return
 			self.respond(200, payload, "application/json; charset=utf-8")
-		elif target in ("/", "/office.js"):
-			name, kind = ("index.html", "text/html") if target == "/" else ("office.js", "text/javascript")
+		elif target in ("/", "/office.js", "/pixel-art.js", "/office.css", "/scene.json"):
+			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
+				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/office.css": ("office.css", "text/css"),
+				"/scene.json": ("scene.json", "application/json")}[target]
 			self.respond(200, (STATIC / name).read_bytes(), kind + "; charset=utf-8")
 		else:
 			self.respond(404, "페이지가 없습니다".encode())

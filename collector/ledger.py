@@ -36,6 +36,14 @@ create table if not exists claims (
 	key text primary key,
 	owner text not null
 );
+create table if not exists followups (
+	key text primary key, session_key text not null, cls text not null,
+	project text not null, sentence text not null, due text not null, created text not null
+);
+create table if not exists work_records (
+	key text primary key, cls text not null, project text not null,
+	decision text not null, created text not null
+);
 """
 
 
@@ -48,6 +56,17 @@ class Ledger:
 
 	def close(self) -> None:
 		self.conn.close()
+
+	def replace_work(self, key, cls, project, followups, decision, created) -> None:
+		with self.conn:
+			self.conn.execute("delete from followups where session_key=?", (key,))
+			self.conn.executemany("insert into followups values (?,?,?,?,?,?,?)",
+				[(f"{key}:{i}", key, cls, project, sentence, due, created)
+					for i, (sentence, due) in enumerate(followups)])
+			self.conn.execute("delete from work_records where key=?", (key,))
+			if decision:
+				self.conn.execute("insert into work_records values (?,?,?,?,?)",
+					(key, cls, project, decision, created))
 
 	def get(self, key: str) -> sqlite3.Row | None:
 		return self.conn.execute("select * from sessions where key = ?", (key,)).fetchone()

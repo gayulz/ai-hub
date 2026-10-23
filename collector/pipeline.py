@@ -107,6 +107,8 @@ class Pipeline:
 		self.counts[f"seen:{session.tool}:{rule.cls}"] += 1
 		digest_now = digest(session)
 		if row is not None and row["hash"] == digest_now and row["status"] == "recorded":
+			if not self.dry_run:
+				work_records.save(self.ledger, session, self.sources, rule.cls)
 			self.counts["same"] += 1
 			self.acknowledge(session)
 			return
@@ -124,7 +126,8 @@ class Pipeline:
 				self.counts["same"] += 1
 				self.acknowledge(session)
 				return
-			summary, plan_id, reason = self.summarize(session, rule.cls)
+			with work_records.processing(session, self.sources, rule.cls):
+				summary, plan_id, reason = self.summarize(session, rule.cls)
 			body = render.session_body(redacted(session), summary, plan_id, reason)
 			day = session.last.date()
 			vault.upsert_block(vault.daily_path(self.sources.vault, rule.cls, day),
@@ -134,6 +137,7 @@ class Pipeline:
 				and (row["note"] or "").startswith(f"중간 기록:{self.today}"))
 			note = f"중간 기록:{self.today} {reason}" if interim else reason or None
 			self.ledger.put(session.key, session.tool, session.sid, rule.cls, digest_now, status, plan_id, note)
+			work_records.save(self.ledger, session, self.sources, rule.cls)
 			self.acknowledge(session)
 			self.counts[status] += 1
 		finally:

@@ -5,14 +5,15 @@ from __future__ import annotations
 import sqlite3
 import shutil
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from collector.backfill_store import Store
 from collector.config import ConfigError
 
-from .common import identifier, normal, regular, unavailable
+from .common import identifier, normal, regular, stamp, text, unavailable
 
-PARTS = ("progress", "batches", "active", "usage", "calls")
+PARTS = ("progress", "batches", "active", "usage", "calls", "followups", "records")
 
 
 def read_ledger(root: Path, day: str) -> dict:
@@ -40,7 +41,8 @@ def read_ledger(root: Path, day: str) -> dict:
 	try:
 		result = {}
 		for key, reader in (("progress", progress), ("batches", batches), ("active", active),
-				("usage", lambda conn: usage(conn, day)), ("calls", lambda conn: calls(conn, day))):
+				("usage", lambda conn: usage(conn, day)), ("calls", lambda conn: calls(conn, day)),
+				("followups", followups), ("records", records)):
 			try:
 				result[key] = normal(**reader(store.conn))
 			except (sqlite3.Error, ValueError, TypeError):
@@ -100,3 +102,25 @@ def calls(conn, day: str) -> dict:
 			raise ValueError("호출 수 오류")
 		items.append({"plan": identifier(row["plan"]), "count": row["n"]})
 	return {"items": items}
+
+
+def followups(conn) -> dict:
+	items = []
+	# 회사 문장 열은 조회하지 않는다. 일정에는 프로젝트별 건수와 기한만 보낸다.
+	for row in conn.execute("select project,due,count(*) as n from followups where cls='company' group by project,due"):
+		project = identifier(row["project"]) if row["project"] else "미지정"
+		items.append({"project": project, "title": f"{project} · 후속 {row['n']}건", "due": row["due"], "source": "회사", "kind": "followup"})
+	for row in conn.execute("select project,sentence,due from followups where cls in ('personal','study','career') order by created"):
+		items.append({"project": identifier(row["project"]) if row["project"] else "", "title": text(row["sentence"]),
+			"due": row["due"], "source": "개인", "kind": "followup"})
+	for item in items:
+		if item["due"]:
+			date.fromisoformat(item["due"])
+	items.sort(key=lambda item: (item["due"] or "9999", item["project"], item["title"]))
+	return {"items": items}
+
+
+def records(conn) -> dict:
+	rows = conn.execute("select project,decision,created from work_records where cls in ('personal','study','career') order by created desc limit 10")
+	return {"items": [{"kind": "chat", "title": "작업 기록" + (" · " + identifier(r["project"]) if r["project"] else ""),
+		"text": text(r["decision"]), "at": stamp(r["created"])} for r in rows]}

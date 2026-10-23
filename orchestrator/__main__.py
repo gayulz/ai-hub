@@ -6,7 +6,8 @@
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
 
-요청서는 [request] goal·done·owned_paths·forbidden·details·test_command·commit_message·kind, [budget] calls·minutes·fixes.
+요청서는 [request] goal·done·owned_paths·forbidden·details·test_command·commit_message·kind·role, [budget] calls·minutes·fixes.
+role은 plan·backend·frontend·design 중 하나이며 생략하면 backend다.
 역할 담당은 ~/.ai-hub/plans.toml 의 [orchestration] implementer·reviewer 목록을 따른다.
 """
 
@@ -97,6 +98,8 @@ def cmd_run(request_path: str) -> int:
 	with open(request_path, "rb") as fh:
 		data = tomllib.load(fh)
 	request = data["request"]
+	if request.get("role", "backend") not in ("plan", "backend", "frontend", "design"):
+		raise ValueError("role은 plan·backend·frontend·design 중 하나여야 합니다")
 	if not request.get("goal") or not request.get("done"):
 		raise ValueError("요청서에 goal 과 done 이 필요합니다")
 	kind = request.get("kind", "code")

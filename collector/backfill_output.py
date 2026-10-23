@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from . import vault
+from . import vault, work_records
 from .backfill_common import child, clean, locked, now, private_write, sha
 from .config import ConfigError, Repo, Sources, home
 
@@ -140,6 +140,8 @@ def apply_batch(store, bid: str, sources: Sources, repo: Repo) -> None:
 			if sha(vault.block_body(path, prepared["block"])) != prepared["hash"]:
 				raise ConfigError("볼트 재읽기 해시가 다릅니다")
 			if task["type"] == "session":
+				from .backfill_sessions import load
+				work_records.save(store, load(task), sources, repo.cls)
 				store.put(task["key"], task["tool"], task["sid"], repo.cls, task["hash"], "recorded",
 					",".join(prepared.get("plans", [])) or None, prepared["target"])
 			store.save(bid, task, "applied")

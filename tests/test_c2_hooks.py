@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -65,7 +66,7 @@ class = "company"
 					path = self.hub / f"run/presence/{tool}.json"
 					data = json.loads(path.read_text())
 					self.assertEqual(data, {"status": status, "at": self.now.isoformat(),
-						"session_hash": hooks.session_hash(f"{tool}:s01"), "cls": "company", "project_id": "p01"})
+						"since": self.now.isoformat(), "session_hash": hooks.session_hash(f"{tool}:s01"), "cls": "company", "project_id": "p01"})
 					self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 					markers = hooks.read_pending()
 					marker = markers.get(hooks.session_hash(f"{tool}:s01"))
@@ -85,6 +86,16 @@ class = "company"
 		hooks.receive("codex", self.data("PreToolUse", "a"), self.now + timedelta(minutes=3))
 		self.assertEqual(set(hooks.read_pending()), {hooks.session_hash("codex:b")})
 		self.assertFalse(self.log.exists())
+
+	def test_duration_continues_only_while_same_status_project_is_recent(self):
+		path = self.hub / "run/presence/claude.json"
+		hooks.receive("claude", self.data("UserPromptSubmit"), self.now)
+		hooks.receive("claude", self.data("UserPromptSubmit"), self.now + timedelta(minutes=3))
+		self.assertEqual(json.loads(path.read_text())["since"], self.now.isoformat())
+		hooks.receive("claude", self.data("UserPromptSubmit"), self.now + timedelta(minutes=14))
+		self.assertEqual(json.loads(path.read_text())["since"], (self.now + timedelta(minutes=14)).isoformat())
+		hooks.receive("claude", self.data("Stop"), self.now + timedelta(minutes=15))
+		self.assertEqual(json.loads(path.read_text())["since"], (self.now + timedelta(minutes=15)).isoformat())
 
 	def test_kickstart_is_throttled_and_uses_gui_domain_without_restart(self):
 		for minute in (0, 9, 10):
@@ -141,20 +152,41 @@ class = "company"
 				self.assertLess(time.monotonic() - started, 0.2)
 			self.assertEqual((output.getvalue(), errors.getvalue()), ("", ""))
 
+	def test_stdin_deadline_is_armed_before_read_and_restored(self):
+		previous = signal.getsignal(signal.SIGALRM)
+		observed = []
+		def read(_limit):
+			observed.append(signal.getitimer(signal.ITIMER_REAL)[0])
+			if signal.getsignal(signal.SIGALRM) is hooks._timeout:
+				signal.raise_signal(signal.SIGALRM)
+			return ""
+		with mock.patch("sys.stdin") as stream:
+			stream.read.side_effect = read
+			self.assertEqual(hooks.main(["codex"]), 0)
+		self.assertEqual(len(observed), 1)
+		self.assertGreater(observed[0], 0)
+		self.assertLess(observed[0], 0.2)
+		self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0, 0))
+		self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+
 	def test_slow_or_unclosed_stdin_and_slow_launchctl_have_deadlines(self):
-		proc = subprocess.Popen([sys.executable, "-m", "collector", "hook", "codex"],
-			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		self.addCleanup(lambda: proc.kill() if proc.poll() is None else None)
-		started = time.monotonic()
-		self.assertEqual(proc.wait(timeout=0.2), 0)
-		self.assertLess(time.monotonic() - started, 0.2)
-		self.assertEqual(proc.communicate(), (b"", b""))
-		launchctl = self.bin / "launchctl"
-		launchctl.write_text("#!" + sys.executable + "\nimport time\ntime.sleep(1)\n")
-		started = time.monotonic()
-		result = self.command("claude", json.dumps(self.data("SessionEnd")))
-		self.assertLess(time.monotonic() - started, 0.2)
-		self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+		# 입력 전의 0.2초 미만 타이머는 별도로 검사하고, CLI에는 Python 시작 여유를 준다.
+		with subprocess.Popen([sys.executable, "-m", "collector", "hook", "codex"],
+				stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+			try:
+				self.assertEqual(proc.wait(timeout=2), 0)
+			finally:
+				if proc.poll() is None:
+					proc.kill()
+				output = proc.communicate()
+			self.assertEqual(output, (b"", b""))
+		# 느린 launchctl은 실행 시간 대신 자식 종료를 기다리는 호출이 없는지 검사한다.
+		with mock.patch("collector.hooks.subprocess.Popen") as launch:
+			hooks.receive("claude", self.data("SessionEnd"), self.now)
+		launch.assert_called_once()
+		launch.return_value.wait.assert_not_called()
+		launch.return_value.communicate.assert_not_called()
+		launch.return_value.__enter__.assert_not_called()
 		self.assertEqual(len(hooks.read_pending()), 1)
 
 	def test_sources_missing_and_symlink_targets_never_expose_input(self):

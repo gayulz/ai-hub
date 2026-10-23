@@ -65,6 +65,12 @@ class Run:
 	elapsed: float = 0.0
 	started: str = field(default_factory=now)
 	end_reason: str = ""
+	role: str = "backend"
+
+	def __post_init__(self):
+		self.role = self.request.get("role", self.role)
+		if self.role not in ("plan", "backend", "frontend", "design"):
+			raise ValueError("role은 plan·backend·frontend·design 중 하나여야 합니다")
 
 	@property
 	def folder(self) -> Path:

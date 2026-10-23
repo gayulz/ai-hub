@@ -115,8 +115,18 @@ def receive(tool: str, data: dict, now: datetime) -> None:
 	stem = f"{tool}-{digest}"
 	with locked("hook:" + stem):
 		presence = child(home(), f"run/presence/{tool}.json")
+		since = now.isoformat()
+		try:
+			previous = json.loads(presence.read_text(encoding="utf-8"))
+			if all(previous.get(k) == v for k, v in (("status", status), ("cls", cls), ("project_id", project_id))):
+				value = datetime.fromisoformat(previous.get("since", previous["at"]))
+				last = datetime.fromisoformat(previous["at"])
+				if value.tzinfo and last.tzinfo and value <= last <= now and now - last <= timedelta(minutes=10):
+					since = value.isoformat()
+		except (OSError, ValueError, TypeError, KeyError, AttributeError):
+			pass
 		private_write(presence, json.dumps({"status": status, "at": now.isoformat(),
-			"session_hash": digest, "cls": cls, "project_id": project_id}, ensure_ascii=False))
+			"since": since, "session_hash": digest, "cls": cls, "project_id": project_id}, ensure_ascii=False))
 		pending = child(home(), f"run/pending/{stem}.json")
 		if delay is not None:
 			private_write(pending, json.dumps({"tool": tool, "session_hash": digest,

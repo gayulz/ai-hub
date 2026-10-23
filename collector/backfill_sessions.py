@@ -16,6 +16,8 @@ from .backfill_common import child, clean, files, safe, sha
 from .config import Repo, Sources, classify, home
 from .sessions import Session, Turn, parse_time
 
+DUMP_LINE = re.compile(r"^\s*(?:diff --git|@@ |\{\s*$|import \w|def \w)")
+
 
 def read_text(path: Path) -> str:
 	if path.name.endswith(".zst"):
@@ -97,8 +99,13 @@ def prompts(session: Session) -> tuple[list[str], str]:
 	lines = []
 	for turn in selected:
 		text = re.sub(r"```.*?(?:```|\Z)", "", turn.text, flags=re.S).strip()
-		if text.count("\n") > 60 or re.search(r"(?m)^\s*(?:diff --git|@@ |\{\s*$|import \w|def \w)", text):
-			return [], "파일 본문 또는 큰 붙여넣기 여부 확인 필요"
+		# 파일 본문·큰 붙여넣기는 대화 전체를 보류하지 않고 그 부분만 AI 입력에서 뺀다.
+		# 질문은 앞 설명 20줄만 남기고, 마지막 답은 길어도 본문이라 코드 같은 줄만 뺀다.
+		kept = [line for line in text.splitlines() if not DUMP_LINE.match(line)]
+		if turn.role == "user" and (text.count("\n") > 60 or len(kept) < text.count("\n") + 1):
+			text = "\n".join(kept[:20]).strip() + "\n(긴 붙여넣기·파일 본문 생략)"
+		elif turn.role != "user":
+			text = "\n".join(kept).strip()
 		if text:
 			lines.append(("[사용자 질문] " if turn.role == "user" else "[AI 마지막 완료 답] ") + clean(text))
 	if not lines or not lines[-1].startswith("[AI 마지막 완료 답]"):

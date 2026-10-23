@@ -94,12 +94,17 @@ class BackfillSessionSourcesTest(BackfillCase):
 		for text in ("옛 최종 답", "비공개 생각", "도구 덤프"):
 			self.assertNotIn(text, prompt)
 
-	def test_incomplete_session_and_large_file_dump_are_held(self):
+	def test_incomplete_session_is_held_and_large_paste_is_trimmed(self):
 		self.codex(sid="unfinished", answer=None)
-		self.codex(sid="dump", question="\n".join("파일 원문" for _ in range(100)))
+		self.codex(sid="dump", question="\n".join(f"파일 원문 {i}" for i in range(100)) + "\nimport acme")
 		self.prepare()
-		self.ai.assert_not_called()
-		self.assertTrue(all(t["state"] == "held" for t in self.batch()[1]))
+		self.assertEqual([t["state"] for t in self.batch()[1]].count("held"), 1)
+		self.assertEqual(self.ai.call_count, 1)
+		prompt = self.ai.call_args.args[1]
+		self.assertIn("(긴 붙여넣기·파일 본문 생략)", prompt)
+		self.assertIn("파일 원문 19", prompt)
+		self.assertNotIn("파일 원문 20", prompt)
+		self.assertNotIn("import acme", prompt)
 
 	def test_long_prose_is_split_without_omission_and_resumes_parts(self):
 		question = "가나다라마바사 " * 1500

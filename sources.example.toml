@@ -19,10 +19,14 @@ class = "exclude"
 # 등록 저장소: 커밋(git config user.email 기준)과 문서 변경
 # doc_dirs: "." 최상위 문서만, "" 폴더 전체, 그 밖의 값은 하위 폴더(하위 포함)
 [[repo]]
+id = "p01"              # C4 --project에서 사용하는 안정적인 원천 ID
 path = "/path/to/work/company-a"
 class = "company"
 name = "company-a"
 doc_dirs = ["docs"]
+# 문서 색인은 md·txt가 기본. HTML은 include에 명시한 경우만 허용한다.
+doc_include = ["docs/*.md", "docs/*.txt", "docs/design/*.html"]
+doc_exclude = ["docs/generated/*"]
 
 [ignore]
 repos = ["/path/to/vault"]

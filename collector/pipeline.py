@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections import Counter
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from . import render, repos, summarize, vault
 from .config import ConfigError, Plans, Rule, Sources, classify, home, load_plans, load_sources
@@ -59,6 +61,7 @@ class Pipeline:
 		self.failed_plans: set[str] = set()
 		self.now = datetime.now().astimezone()
 		self.today = self.now.date()
+		self.owner = f"run:{os.getpid()}:" + uuid4().hex
 
 	def run(self, since: date) -> None:
 		if not self.dry_run:
@@ -91,13 +94,23 @@ class Pipeline:
 		if self.dry_run:
 			self.counts["would_record"] += 1
 			return
-		summary, plan_id, reason = self.summarize(session, rule.cls)
-		body = render.session_body(redacted(session), summary, plan_id, reason)
-		vault.upsert_block(vault.daily_path(self.sources.vault, rule.cls, session.started.date()),
-			session.key, body, _heading(rule), session.started.date(), rule.cls)
-		status = "recorded" if summary else "minimal"
-		self.ledger.put(session.key, session.tool, session.sid, rule.cls, digest_now, status, plan_id, reason or None)
-		self.counts[status] += 1
+		if not self.ledger.claim(session.key, self.owner):
+			self.counts["claimed"] += 1
+			return
+		try:
+			row = self.ledger.get(session.key)
+			if row is not None and row["hash"] == digest_now and row["status"] == "recorded":
+				self.counts["same"] += 1
+				return
+			summary, plan_id, reason = self.summarize(session, rule.cls)
+			body = render.session_body(redacted(session), summary, plan_id, reason)
+			vault.upsert_block(vault.daily_path(self.sources.vault, rule.cls, session.started.date()),
+				session.key, body, _heading(rule), session.started.date(), rule.cls)
+			status = "recorded" if summary else "minimal"
+			self.ledger.put(session.key, session.tool, session.sid, rule.cls, digest_now, status, plan_id, reason or None)
+			self.counts[status] += 1
+		finally:
+			self.ledger.release(session.key, self.owner)
 
 	def summarize(self, session: Session, cls: str) -> tuple[str | None, str | None, str]:
 		"""routing 순서대로 부르고, 실패하면(한도 초과 등) 다음 요금제로 넘어간다.
@@ -108,7 +121,8 @@ class Pipeline:
 		prompt = summarize.build_prompt(redacted(session))
 		reason = "사용 가능한 요금제 없음"
 		for plan in summarize.usable_plans(cls, self.plans, self.ledger, today, self.failed_plans):
-			self.ledger.bump_call(plan.id, today)
+			if not self.ledger.reserve_call(plan.id, today, plan.daily_limit):
+				continue
 			try:
 				return summarize.call(plan, prompt), plan.id, ""
 			except summarize.SummarizeError as exc:

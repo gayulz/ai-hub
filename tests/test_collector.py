@@ -33,7 +33,7 @@ class RedactTest(unittest.TestCase):
 		self.assertNotIn("Bearer abc", out)
 
 	def test_plain_text_is_unchanged(self):
-		text = "회사 이름 NEWPOC 와 메모리 설계 결정은 남긴다"
+		text = "회사 이름 acme 와 메모리 설계 결정은 남긴다"
 		self.assertEqual(redact.redact(text), text)
 
 	def test_token_prefixes(self):
@@ -65,6 +65,9 @@ class VaultTest(unittest.TestCase):
 	def setUp(self):
 		self.tmp = tempfile.TemporaryDirectory()
 		self.vault = Path(self.tmp.name)
+		self.env = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.vault / "hub")})
+		self.env.start()
+		self.addCleanup(self.env.stop)
 		(self.vault / "📥 Inbox/AI").mkdir(parents=True)
 		self.day = date(2026, 10, 22)
 		self.path = vault.daily_path(self.vault, "personal", self.day)

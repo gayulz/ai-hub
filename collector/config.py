@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
+import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 CLASSES = ("company", "personal", "study", "career", "exclude")
@@ -48,6 +50,9 @@ class Repo:
 	cls: str
 	name: str
 	doc_dirs: tuple[str, ...]
+	id: str = ""
+	doc_include: tuple[str, ...] = ()
+	doc_exclude: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,9 @@ class Plan:
 class Plans:
 	plans: dict[str, Plan]
 	routing: dict[str, tuple[str, ...]]
+	backfill_daily_limit: int = 20
+	backfill_batch_size: int = 10
+	backfill_routing: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def _load_toml(path: Path) -> dict:
@@ -105,12 +113,19 @@ def load_sources(path: Path | None = None) -> Sources:
 		rules.append(Rule(_expand(pattern) if "path" in item else pattern,
 			cls, item.get("name", ""), "glob" in item))
 	repos = []
+	ids = set()
 	for item in data.get("repo", []):
 		cls = item.get("class")
 		if cls not in CLASSES or cls == "exclude":
 			raise ConfigError(f"저장소 분류가 잘못됐습니다: {item.get('path')}")
-		repos.append(Repo(_expand(item["path"]), cls, item.get("name", Path(item["path"]).name),
-			tuple(item.get("doc_dirs", []))))
+		location = _expand(item["path"])
+		pid = item.get("id", "p-" + hashlib.sha256(location.encode()).hexdigest()[:12])
+		if not isinstance(pid, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", pid) or ("id" in item and pid in ids):
+			raise ConfigError("repo의 원천 id가 잘못됐거나 중복됩니다")
+		ids.add(pid)
+		repos.append(Repo(location, cls, item.get("name", Path(item["path"]).name),
+			tuple(item.get("doc_dirs", [])), pid, tuple(item.get("doc_include", [])),
+			tuple(item.get("doc_exclude", []))))
 	ignore = tuple(_expand(p) for p in data.get("ignore", {}).get("repos", []))
 	return Sources(Path(_expand(data["vault"])), tuple(rules), tuple(repos), ignore)
 
@@ -140,7 +155,18 @@ def load_plans(path: Path | None = None) -> Plans:
 		if missing:
 			raise ConfigError(f"routing이 없는 요금제를 가리킵니다: {missing}")
 		routing[cls] = tuple(ids)
-	return Plans(plans, routing)
+	c4 = data.get("backfill", {})
+	limit, size = c4.get("daily_limit_calls", 20), c4.get("batch_size", 10)
+	if any(type(n) is not int or n < 1 for n in (limit, size)):
+		raise ConfigError("backfill 호출 상한과 묶음 크기는 양의 정수여야 합니다")
+	c4routing = {}
+	for cls, ids in c4.get("routing", {}).items():
+		if cls not in CLASSES[:-1] or any(pid not in plans for pid in ids):
+			raise ConfigError("backfill.routing의 분류 또는 요금제가 잘못됐습니다")
+		if cls == "company" and not set(ids).issubset(routing.get(cls, ())):
+			raise ConfigError("backfill 회사 routing은 기존 회사 routing을 넓힐 수 없습니다")
+		c4routing[cls] = tuple(ids)
+	return Plans(plans, routing, limit, size, c4routing)
 
 
 def classify(cwd: str | None, rules: tuple[Rule, ...]) -> Rule | None:

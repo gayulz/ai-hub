@@ -11,6 +11,8 @@ import re
 from datetime import date
 from pathlib import Path
 
+from .backfill_common import locked, sha
+
 END = "<!-- /ai-hub -->"
 LANDING = {
 	"personal": "📥 Inbox/AI",
@@ -62,11 +64,31 @@ def _insert_under(text: str, heading: str, block: str) -> str:
 	return "\n".join(new)
 
 
-def upsert_block(path: Path, key: str, body: str, heading: str, day: date, cls: str) -> bool:
+def block_body(path: Path, key: str) -> str:
+	text = path.read_text(encoding="utf-8") if path.exists() else ""
+	pattern = re.compile(re.escape(_start(key)) + r"\n(.*?)\n" + re.escape(END), re.S)
+	blocks = pattern.findall(text)
+	if len(blocks) > 1:
+		raise ValueError("같은 키의 기록 블록이 여러 개입니다")
+	return blocks[0] if blocks else ""
+
+
+def upsert_block(path: Path, key: str, body: str, heading: str, day: date, cls: str,
+		*, expected_hash: str | None = None, initial: str | None = None) -> bool:
 	"""덩어리를 쓰거나 바꾼다. 내용이 같으면 파일을 건드리지 않고 False를 돌려준다."""
+	with locked("vault:" + str(path.absolute())):
+		if expected_hash is not None:
+			current = block_body(path, key)
+			if sha(current) != expected_hash and current != body:
+				raise ValueError("준비 이후 기존 기록 블록이 변경됐습니다")
+		return _upsert_block(path, key, body, heading, day, cls, initial)
+
+
+def _upsert_block(path: Path, key: str, body: str, heading: str, day: date, cls: str,
+		initial: str | None) -> bool:
 	if not path.parent.is_dir():
 		raise FileNotFoundError(f"볼트 착지점이 없습니다: {path.parent}")
-	old = path.read_text(encoding="utf-8") if path.exists() else _new_file(day, cls)
+	old = path.read_text(encoding="utf-8") if path.exists() else initial or _new_file(day, cls)
 	block = f"{_start(key)}\n{body}\n{END}"
 	pattern = re.compile(re.escape(_start(key)) + r"\n.*?\n" + re.escape(END), re.S)
 	if pattern.search(old):

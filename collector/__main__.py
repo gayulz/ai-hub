@@ -1,6 +1,8 @@
 """사용법: python3 -m collector run [--dry-run] [--since 오늘|YYYY-MM-DD]
         python3 -m collector check [--since 오늘|YYYY-MM-DD]
         python3 -m collector archive
+        python3 -m collector backfill --project ID --kind repos|sessions [--since YYYY-MM-DD] [--dry-run]
+        python3 -m collector backfill --resume ID | --apply ID
 """
 
 from __future__ import annotations
@@ -91,8 +93,26 @@ def main(argv: list[str] | None = None) -> int:
 	check = sub.add_parser("check", help="누락 점검")
 	check.add_argument("--since", help="점검 시작일(오늘 또는 YYYY-MM-DD)")
 	sub.add_parser("archive", help="대화 원문을 로컬 압축 사본으로 보관")
+	backfill = sub.add_parser("backfill", help="프로젝트 소급 결과 준비·재개·승인 반영")
+	backfill.add_argument("--project", help="sources.toml에 등록한 원천 ID")
+	backfill.add_argument("--kind", choices=("repos", "sessions"))
+	backfill.add_argument("--since", type=date.fromisoformat, help="대화 시작일, 기본 2026-07-22")
+	backfill.add_argument("--dry-run", action="store_true", help="원장까지 읽기 전용으로 미리보기")
+	mode = backfill.add_mutually_exclusive_group()
+	mode.add_argument("--resume", help="같은 묶음의 결과 준비를 이어 간다")
+	mode.add_argument("--apply", help="확인·승인한 묶음의 캐시만 볼트에 쓴다")
 	args = parser.parse_args(argv)
+	if args.command == "backfill":
+		if args.resume or args.apply:
+			if args.project or args.kind or args.since:
+				parser.error("--resume/--apply와 프로젝트·종류·기간을 함께 지정할 수 없습니다")
+		elif not args.project or not args.kind:
+			parser.error("backfill에는 --project와 --kind가 필요합니다")
 	try:
+		if args.command == "backfill":
+			from .backfill import execute
+			return execute(project_id=args.project, kind=args.kind, since=args.since,
+				dry_run=args.dry_run, resume=args.resume, apply=args.apply)
 		if args.command == "archive":
 			return cmd_archive()
 		return cmd_run(args) if args.command == "run" else cmd_check(args)

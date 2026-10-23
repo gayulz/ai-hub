@@ -2,23 +2,29 @@
 # allow에 없는 분류의 자료는 그 요금제로 보내지 않는다. 회사 자료는 회사 정책이 허용할 때만 연다.
 
 [[plans]]
-id = "claude-personal"
+id = "p01"
 tool = "claude"          # claude | codex | agy (C1 지원 도구)
-plan = "Pro"             # 자유 입력
+plan = "구독"            # 자유 입력
 owner = "personal"       # personal | company
 allow = ["personal", "study", "career"]
-model = "haiku"          # 비우면 CLI 기본 모델
+model = ""               # 비우면 CLI 기본 모델, 실제 값은 로컬 설정에만 둔다
 daily_limit_calls = 30   # 비우면 상한 없음
 
 [[plans]]
-id = "codex-personal"
+id = "p02"
 tool = "codex"
-plan = "Pro 100"
+plan = "구독"
 owner = "personal"
 allow = ["personal", "study", "career"]
 
 [routing]
-personal = ["claude-personal", "codex-personal"]
-study = ["claude-personal", "codex-personal"]
-career = ["claude-personal", "codex-personal"]
-company = []             # 비우면 회사 대화는 최소 기록만 남는다
+personal = ["p01", "p02"]
+study = ["p01", "p02"]
+career = ["p01", "p02"]
+company = []             # C1은 최소 기록, C4는 정제 보류(완료로 세지 않음)
+
+[backfill]
+daily_limit_calls = 20   # C4 구독 호출 합산, 실패·시간 초과·대체 호출 포함
+batch_size = 10          # 한 묶음의 대화 결과 수
+# [backfill.routing]을 생략하면 기존 routing을 따른다.
+# 회사용 재정의는 기존 routing.company에 있는 요금제만 허용한다.

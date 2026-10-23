@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +31,10 @@ create table if not exists runs (
 	finished text,
 	exit_code integer,
 	summary text
+);
+create table if not exists claims (
+	key text primary key,
+	owner text not null
 );
 """
 
@@ -70,6 +75,38 @@ class Ledger:
 			(day, plan),
 		)
 		self.conn.commit()
+
+	def reserve_call(self, plan: str, day: str, limit: int | None) -> bool:
+		with self.conn:
+			self.conn.execute("begin immediate")
+			if limit is not None and self.calls_today(plan, day) >= limit:
+				return False
+			self.conn.execute("insert into calls values (?, ?, 1) "
+				"on conflict(day, plan) do update set n=n+1", (day, plan))
+		return True
+
+	def claim(self, key: str, owner: str) -> bool:
+		with self.conn:
+			self.conn.execute("begin immediate")
+			row = self.conn.execute("select owner from claims where key=?", (key,)).fetchone()
+			if row and row[0] != owner:
+				parts = row[0].split(":")
+				if len(parts) != 3 or parts[0] != "run" or not parts[1].isdigit():
+					return False
+				try:
+					os.kill(int(parts[1]), 0)
+				except ProcessLookupError:
+					self.conn.execute("delete from claims where key=?", (key,))
+				except PermissionError:
+					return False
+				else:
+					return False
+			self.conn.execute("insert or ignore into claims values (?, ?)", (key, owner))
+		return True
+
+	def release(self, key: str, owner: str) -> None:
+		with self.conn:
+			self.conn.execute("delete from claims where key=? and owner=?", (key, owner))
 
 	def start_run(self) -> int:
 		cur = self.conn.execute(

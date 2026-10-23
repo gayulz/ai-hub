@@ -24,6 +24,9 @@ SKIP_CODEX_THREADS = ("subagent", "guardian_review")
 class Turn:
 	role: str  # "user" | "assistant"
 	text: str
+	channel: str | None = None
+	message_id: str | None = None
+	complete: bool = True
 
 
 @dataclass
@@ -36,6 +39,7 @@ class Session:
 	turns: list[Turn] = field(default_factory=list)
 	partial: bool = False  # 본문 없이 제목·미리보기만 있는 원천(AGY)
 	title: str = ""
+	cwds: list[str] = field(default_factory=list)
 
 	@property
 	def key(self) -> str:
@@ -64,11 +68,11 @@ def _text_of(content) -> str:
 	return ""
 
 
-def _claude_file(path: Path, since_ts: float) -> list[Session]:
-	if path.stat().st_mtime < since_ts:
+def _claude_file(path: Path, since_ts: float, text: str | None = None) -> list[Session]:
+	if text is None and path.stat().st_mtime < since_ts:
 		return []
 	groups: dict[str, Session] = {}
-	for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+	for line in (text if text is not None else path.read_text(encoding="utf-8", errors="replace")).splitlines():
 		try:
 			rec = json.loads(line)
 		except json.JSONDecodeError:
@@ -88,6 +92,8 @@ def _claude_file(path: Path, since_ts: float) -> list[Session]:
 			sess = groups[sid] = Session("claude", sid, rec.get("cwd"), when, when)
 		sess.started = min(sess.started, when)
 		sess.last = max(sess.last, when)
+		if rec.get("cwd") and rec["cwd"] not in sess.cwds:
+			sess.cwds.append(rec["cwd"])
 		content = (rec.get("message") or {}).get("content")
 		if kind == "user":
 			text = _text_of(content)  # tool_result만 있는 줄은 빈 문자열이 된다
@@ -96,7 +102,11 @@ def _claude_file(path: Path, since_ts: float) -> list[Session]:
 		else:
 			text = _text_of(content)
 			if text:
-				sess.turns.append(Turn("assistant", text))
+				message = rec.get("message") or {}
+				complete = message.get("stop_reason") in (None, "end_turn", "stop_sequence")
+				if isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_use" for c in content):
+					complete = False
+				sess.turns.append(Turn("assistant", text, message_id=message.get("id"), complete=complete))
 	return [s for s in groups.values() if s.user_count > 0]
 
 
@@ -110,10 +120,10 @@ def read_claude(since: datetime) -> list[Session]:
 	return out
 
 
-def _codex_file(path: Path) -> Session | None:
+def _codex_file(path: Path, text: str | None = None) -> Session | None:
 	meta: dict = {}
 	sess: Session | None = None
-	for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+	for line in (text if text is not None else path.read_text(encoding="utf-8", errors="replace")).splitlines():
 		try:
 			rec = json.loads(line)
 		except json.JSONDecodeError:
@@ -127,7 +137,11 @@ def _codex_file(path: Path) -> Session | None:
 			if when is None:
 				return None
 			sess = Session("codex", meta.get("id") or path.stem, meta.get("cwd"), when, when)
+			if meta.get("cwd"):
+				sess.cwds.append(meta["cwd"])
 			continue
+		if sess is not None and payload.get("cwd") and payload["cwd"] not in sess.cwds:
+			sess.cwds.append(payload["cwd"])
 		if sess is None or rec.get("type") != "response_item" or payload.get("type") != "message":
 			continue
 		when = parse_time(rec.get("timestamp"))
@@ -142,7 +156,9 @@ def _codex_file(path: Path) -> Session | None:
 		if role == "user" and not CODEX_INJECTED.match(text):
 			sess.turns.append(Turn("user", text))
 		elif role == "assistant":
-			sess.turns.append(Turn("assistant", text))
+			channel = payload.get("channel") or payload.get("phase")
+			sess.turns.append(Turn("assistant", text, "final" if channel == "final_answer" else channel,
+				payload.get("id"), payload.get("status") != "incomplete"))
 	if sess is None or sess.user_count == 0:
 		return None
 	return sess

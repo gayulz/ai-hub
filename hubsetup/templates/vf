@@ -1,0 +1,4 @@
+#!/bin/bash
+# git 필터 래퍼: git 은 저장소 루트에서 실행하므로 모듈 경로를 고정한다
+${hub_export}export PYTHONPATH="$repo"
+exec $python -m vaultfilter "$$@"

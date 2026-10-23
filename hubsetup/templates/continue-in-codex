@@ -1,0 +1,4 @@
+#!/bin/bash
+# Claude 한도가 찼을 때: ai-hub 저장소에서 Codex 를 열고 인계 문서부터 이어서 진행한다.
+cd "$repo" || exit 1
+exec codex "$handoff 를 먼저 읽고 '다음 할 일'의 첫 미완료 단계부터 이어서 진행해. 금지 사항을 지키고, 끝난 단계는 그 문서의 상태 표에 반영해."

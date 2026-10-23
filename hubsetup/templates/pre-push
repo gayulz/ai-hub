@@ -1,0 +1,10 @@
+#!/bin/bash
+# 전송할 각 ref의 새 이력을 검사한다. HEAD나 마지막 트리만 검사하지 않는다.
+while read -r local_ref local_sha remote_ref remote_sha; do
+	[ "$$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+	range="$$local_sha"
+	[ "$$remote_sha" != "0000000000000000000000000000000000000000" ] && range="$$remote_sha..$$local_sha"
+	"$hub_home/tools/vf" verify encrypted "$$range" || { echo "push 거부: 암호화되지 않은 파일 또는 경로·작성자 누출" >&2; exit 1; }
+	"$hub_home/tools/vf" verify messages "$$range" || { echo "push 거부: 커밋 메시지 문제" >&2; exit 1; }
+done
+exit 0

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>$user_home</string>
+$hub_environment		<key>PATH</key>
+		<string>$path</string>
+	</dict>
+	<key>Label</key>
+	<string>$label_prefix.ai-hub-collector</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$python</string>
+		<string>-m</string>
+		<string>collector</string>
+		<string>run</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>$hub_home/logs/collector.err.log</string>
+	<key>StandardOutPath</key>
+	<string>$hub_home/logs/collector.out.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Minute</key>
+		<integer>10</integer>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>$repo</string>
+</dict>
+</plist>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
@@ -35,8 +36,15 @@ def project(sources, pid):
 
 
 def policy(sources, plans, repo) -> str:
+	settings = asdict(plans) if plans else None
+	if settings:
+		# 기존 구독 전용 묶음의 설정 지문을 유지한다.
+		for plan in settings["plans"].values():
+			if plan["tool"] != "ollama":
+				plan.pop("url")
+				plan.pop("timeout")
 	return sha(packed({"project": asdict(repo), "rules": [asdict(r) for r in sources.rules],
-		"vault": str(sources.vault), "plans": asdict(plans) if plans else None}))
+		"vault": str(sources.vault), "plans": settings}))
 
 
 def inventory(repo, sources, kind, since, until) -> dict:
@@ -117,16 +125,18 @@ def prepare_repo(store, bid, task, scope, sources, repo):
 	return output.result(sources, task, rel, body, "commits")
 
 
-def summarize_session(store, bid, task, session, plans, failed):
+def summarize_session(store, bid, task, session, plans, failed, *, local=None, prompts=None):
 	if plans is None:
 		return None, "사용 가능한 요금제 없음"
-	prompts, reason = sessions.prompts(session)
-	if reason:
-		return None, reason
+	if prompts is None:
+		prompts, reason = sessions.prompts(session)
+		if reason:
+			return None, reason
 	results = []
 	for part, prompt in enumerate(prompts):
 		calls = store.work_calls(bid, task)
-		current = [c for c in calls if c["part"] == part]
+		current = [c for c in calls if c["part"] == part and
+			(local is None or bool(c.get("local", 0)) == local)]
 		if any(c["state"] == "reserved" for c in current):
 			return None, "호출 결과 불명: 사용량은 유지하며 자동 재호출하지 않음"
 		ready = [c for c in current if c["state"] == "success"]
@@ -138,31 +148,54 @@ def summarize_session(store, bid, task, session, plans, failed):
 		reason = "사용 가능한 요금제 없음 또는 이전 호출 실패로 보류"
 		for pid in routing:
 			plan = plans.plans[pid]
+			if local is not None and (plan.tool == "ollama") != local:
+				continue
 			if pid in failed or pid in attempted or task["cls"] not in plan.allow:
 				continue
 			cid = store.reserve(bid, task, part, plan, plans.backfill_daily_limit)
 			if cid is None:
 				reason = "C4 구독 또는 요금제의 당일 호출 상한 도달"
 				continue
-			started = now()
+			started = time.monotonic()
 			try:
-				text = summarize.call(plan, prompt)
+				metadata = {}
+				text = (summarize.call(plan, prompt, metadata=metadata) if local is not None
+					else summarize.call(plan, prompt))
+				if local is not None:
+					from .backfill_compare_report import checks
+					checked = checks(prompt, text)
 				text = clean(re.sub(r"```.*?(?:```|\Z)", "", text, flags=re.S).strip())
 				if not text:
 					raise summarize.SummarizeError("빈 정제 결과")
 			except (summarize.SummarizeError, OSError, subprocess.TimeoutExpired) as exc:
 				failed.add(pid)
 				reason = "호출 실패: " + type(exc).__name__
-				store.finish_call(cid, "failed", {"reason": reason})
+				if local is True:
+					reason += " · Ollama 실행·모델·timeout을 확인하고 `ollama serve`와 `ollama list`를 실행하세요"
+				elif local is False:
+					reason += " · CLI 상태를 확인하세요. 모델 식별에 실패하면 plans.toml에 model을 지정하세요"
+				store.finish_call(cid, "failed", {"reason": reason, "plan": clean(pid),
+					"model": clean(plan.model or "미확인(CLI 기본값)"), "seconds": time.monotonic() - started})
 				continue
-			result = {"summary": text, "plan": pid, "model": plan.model or "미확인(CLI 기본값)",
-				"seconds": (now() - started).total_seconds()}
+			result = {"summary": text, "plan": clean(pid), "model": clean(metadata.get("model") or plan.model or "미확인(CLI 기본값)"),
+				"seconds": time.monotonic() - started}
+			if local is not None:
+				result["checks"] = checked
 			store.finish_call(cid, "success", result)
 			results.append(result)
 			break
 		else:
 			return None, reason
 	return results, ""
+
+
+def cached_session(store, task, bid=""):
+	for cached in store.rows("c4_items", "key=? and hash=? and batch!=? order by rowid desc", (task["key"], task["hash"], bid)):
+		data = json.loads(cached["data"])
+		ready = data.get("result")
+		if ready and ready["method"] != "existing" and data.get("material") == task["material"] and data.get("cls") == task["cls"]:
+			return ready
+	return None
 
 
 def prepare_session(store, bid, task, sources, repo, plans, until, failed):
@@ -174,12 +207,10 @@ def prepare_session(store, bid, task, sources, repo, plans, until, failed):
 	previous = vault.block_body(path, task["key"])
 	if row and row["hash"] == task["hash"] and row["status"] == "recorded" and previous:
 		return output.result(sources, task, rel, previous, "existing"), ""
-	for cached in store.rows("c4_items", "key=? and hash=? and batch!=? order by rowid desc", (task["key"], task["hash"], bid)):
-		data = json.loads(cached["data"])
-		ready = data.get("result")
-		if ready and ready["method"] != "existing" and data.get("material") == task["material"] and data.get("cls") == repo.cls:
-			return output.result(sources, task, rel, ready["body"], "cached-ai", plans=ready.get("plans", []),
-				models=ready.get("models", []), source=ready.get("source", "기존 준비 결과")), ""
+	ready = cached_session(store, dict(task, cls=repo.cls), bid)
+	if ready:
+		return output.result(sources, task, rel, ready["body"], "cached-ai", plans=ready.get("plans", []),
+			models=ready.get("models", []), source=ready.get("source", "기존 준비 결과")), ""
 	matched = session_summaries.match_summary(session, until)
 	if matched:
 		summary, method, used, models = matched["summary"], "codex-summary", [], ["기존 요약, 모델 미확인"]
@@ -284,12 +315,20 @@ def supersede(store, pid, kind):
 				store.release(item["key"], "backfill:" + batch["id"])
 
 
-def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=None, apply=None) -> int:
+def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=None, apply=None,
+		compare=None, count=20) -> int:
+	if compare:
+		from .backfill_compare import execute as compare_execute
+		return compare_execute(compare, count, dry_run=dry_run)
 	sources = load_sources()
 	plans = load_plans() if (home() / "plans.toml").exists() else None
 	with_store = Store(home() / "ledger.db", readonly=dry_run)
 	try:
 		if dry_run:
+			if (resume or apply) and with_store.scope(with_store.batch(resume or apply)["scope"])["kind"] == "compare":
+				from .backfill_compare_report import report
+				report(with_store, resume or apply, write=False)
+				return 0
 			return preview(with_store, sources, plans, project_id, kind, since, resume or apply)
 		with locked("backfill"):
 			store = with_store
@@ -302,6 +341,11 @@ def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=Non
 				repo = project(sources, scope["project"])
 				if scope["policy"] != policy(sources, plans, repo):
 					raise ConfigError("묶음 작성 뒤 설정이 변경됐습니다. 새 프로젝트 명령으로 준비하세요")
+				if scope["kind"] == "compare":
+					if apply:
+						raise ConfigError("비교 묶음은 볼트에 반영할 수 없습니다. report.md에서 사람이 판정하세요")
+					from .backfill_compare import prepare as compare_prepare
+					return compare_prepare(store, bid, sources, repo, plans)
 				if apply:
 					for item in store.items(bid):
 						if item["state"] not in ("prepared", "existing"):

@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import math
 import os
 import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CLASSES = ("company", "personal", "study", "career", "exclude")
 PLAN_OWNERS = ("personal", "company")
-SUPPORTED_TOOLS = ("claude", "codex", "agy")
+SUPPORTED_TOOLS = ("claude", "codex", "agy", "ollama")
 
 
 class ConfigError(Exception):
@@ -72,6 +74,8 @@ class Plan:
 	allow: tuple[str, ...]
 	model: str | None
 	daily_limit: int | None
+	url: str = "http://localhost:11434"
+	timeout: float = 300
 
 
 @dataclass(frozen=True)
@@ -138,15 +142,31 @@ def load_plans(path: Path | None = None) -> Plans:
 		pid = item.get("id")
 		if not pid or pid in plans:
 			raise ConfigError(f"plans.toml의 id가 없거나 중복됩니다: {pid}")
-		if item.get("tool") not in SUPPORTED_TOOLS:
-			raise ConfigError(f"{pid}: 지원하지 않는 도구(C1은 claude·codex·agy만): {item.get('tool')}")
+		tool = item.get("type", item.get("tool"))
+		if tool not in SUPPORTED_TOOLS or ("type" in item and "tool" in item and item["tool"] != tool):
+			raise ConfigError(f"{pid}: 지원하지 않거나 충돌하는 도구 설정")
 		if item.get("owner") not in PLAN_OWNERS:
 			raise ConfigError(f"{pid}: owner는 personal 또는 company")
 		allow = tuple(item.get("allow", []))
 		if any(c not in CLASSES[:-1] for c in allow):
 			raise ConfigError(f"{pid}: allow에 알 수 없는 분류가 있습니다")
-		plans[pid] = Plan(pid, item["tool"], item.get("plan", ""), item["owner"], allow,
-			item.get("model") or None, item.get("daily_limit_calls"))
+		url, timeout = item.get("url", "http://localhost:11434"), item.get("timeout", 300)
+		if tool == "ollama":
+			if not isinstance(item.get("model"), str) or not item["model"].strip():
+				raise ConfigError(f"{pid}: Ollama model을 지정하세요")
+			if not isinstance(url, str):
+				raise ConfigError(f"{pid}: Ollama url은 HTTP 주소여야 합니다")
+			try:
+				address = urlsplit(url)
+				valid = address.scheme in ("http", "https") and address.hostname and address.port != 0
+			except ValueError:
+				valid = False
+			if not valid or address.username or address.password or address.query or address.fragment:
+				raise ConfigError(f"{pid}: 인증정보 없는 Ollama HTTP url을 지정하세요")
+			if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+				raise ConfigError(f"{pid}: Ollama timeout은 양의 초 단위 숫자여야 합니다")
+		plans[pid] = Plan(pid, tool, item.get("plan", ""), item["owner"], allow,
+			item.get("model") or None, item.get("daily_limit_calls"), url, timeout)
 	routing: dict[str, tuple[str, ...]] = {}
 	for cls, ids in data.get("routing", {}).items():
 		if cls not in CLASSES:

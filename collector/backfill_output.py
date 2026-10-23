@@ -52,8 +52,10 @@ def report(store, bid: str, sources: Sources, *, write: bool = True) -> str:
 	counts = Counter(item["state"] for item in items)
 	methods = Counter(i["data"].get("result", {}).get("method", "보류") for i in items)
 	calls = store.rows("c4_calls", "batch=?", (bid,))
+	local = sum(bool(c.get("local", 0)) for c in calls)
 	call_states = Counter(c["state"] for c in calls)
 	today = store.rows("c4_calls", "day=?", (now().date().isoformat(),))
+	subs_today = sum(not c.get("local", 0) for c in today)
 	used = {row["key"] for row in store.conn.execute(
 		"select i.key from c4_items i join c4_batches b on i.batch=b.id where b.scope=?", (scope["id"],))}
 	left = sum(t.get("parts", 0) for t in scope["data"]["tasks"] if t["key"] not in used)
@@ -63,8 +65,8 @@ def report(store, bid: str, sources: Sources, *, write: bool = True) -> str:
 		f"준비 {counts['prepared']} · 기존 기록 {counts['existing']} · 반영 {counts['applied']} · "
 		f"보류 {counts['held']} · 최소 기록 0 · 미분류 {scope['data'].get('unclassified', 0)}\n\n"
 		f"정제 방식별: {dict(methods)}\n\n호출 성공 {call_states['success']} · 실패 {call_states['failed']} · "
-		f"결과 불명 {call_states['reserved']}\n\n이번 구독 호출 {len(calls)}회 (실패·불명 포함) · "
-		f"당일 C4 구독 누계 {len(today)}회 · 로컬 호출 0회 · 다음 묶음 예상 최소 호출 {left}회\n\n"
+		f"결과 불명 {call_states['reserved']}\n\n이번 구독 호출 {len(calls) - local}회 (실패·불명 포함) · "
+		f"당일 C4 구독 누계 {subs_today}회 · 로컬 호출 {local}회 · 다음 묶음 예상 최소 호출 {left}회\n\n"
 		f"AGY 전부 보류: {scope['data'].get('agy_count', 0)}개, 별도 보고서 backfill/agy-report.md\n\n"
 		f"승인 회신 문구: `C4 {bid} 반영해`\n\n실행 명령: `python3 -m collector backfill --apply {bid}`\n")
 	for warning in scope["data"].get("warnings", []):
@@ -94,7 +96,8 @@ def report(store, bid: str, sources: Sources, *, write: bool = True) -> str:
 		private_write(path, clean(text))
 	print(f"묶음 {bid} · 프로젝트 {scope['project']} · {scope['kind']} · {scope['since']} ~ {scope['until']} · 대상 {len(items)}건")
 	print(f"준비 {counts['prepared']} · 기존 {counts['existing']} · 보류 {counts['held']} · "
-		f"반영 {counts['applied']} · 구독 호출 {len(calls)}회 / 당일 {len(today)}회 · 남은 예상 {left}회")
+		f"반영 {counts['applied']} · 구독 호출 {len(calls) - local}회 / 당일 {subs_today}회 · "
+		f"로컬 호출 {local}회 · 남은 예상 {left}회")
 	print(f"준비 결과: {path}")
 	print(f"승인 회신: C4 {bid} 반영해")
 	return str(path)

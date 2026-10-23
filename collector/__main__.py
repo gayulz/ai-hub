@@ -3,6 +3,7 @@
         python3 -m collector archive
         python3 -m collector backfill --project ID --kind repos|sessions [--since YYYY-MM-DD] [--dry-run]
         python3 -m collector backfill --resume ID | --apply ID
+        python3 -m collector backfill --compare ID [--count 20]
 """
 
 from __future__ import annotations
@@ -101,9 +102,18 @@ def main(argv: list[str] | None = None) -> int:
 	mode = backfill.add_mutually_exclusive_group()
 	mode.add_argument("--resume", help="같은 묶음의 결과 준비를 이어 간다")
 	mode.add_argument("--apply", help="확인·승인한 묶음의 캐시만 볼트에 쓴다")
+	mode.add_argument("--compare", help="개인·공부·커리어 원천 ID의 로컬·구독 정제 비교")
+	backfill.add_argument("--count", type=int, help="비교할 대화 수, 기본 20(최대 20)")
 	args = parser.parse_args(argv)
 	if args.command == "backfill":
-		if args.resume or args.apply:
+		if args.count is not None and not args.compare:
+			parser.error("--count는 --compare와 함께 지정하세요")
+		if args.compare:
+			if args.project or args.kind or args.since:
+				parser.error("--compare와 프로젝트·종류·기간을 함께 지정할 수 없습니다")
+			if args.count is not None and not 1 <= args.count <= 20:
+				parser.error("--count는 1~20 사이 정수여야 합니다")
+		elif args.resume or args.apply:
 			if args.project or args.kind or args.since:
 				parser.error("--resume/--apply와 프로젝트·종류·기간을 함께 지정할 수 없습니다")
 		elif not args.project or not args.kind:
@@ -112,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
 		if args.command == "backfill":
 			from .backfill import execute
 			return execute(project_id=args.project, kind=args.kind, since=args.since,
-				dry_run=args.dry_run, resume=args.resume, apply=args.apply)
+				dry_run=args.dry_run, resume=args.resume, apply=args.apply,
+				compare=args.compare, count=args.count if args.count is not None else 20)
 		if args.command == "archive":
 			return cmd_archive()
 		return cmd_run(args) if args.command == "run" else cmd_check(args)

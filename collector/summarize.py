@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 from collections.abc import Iterator
 
@@ -86,8 +88,19 @@ def _argv(plan: Plan, prompt: str) -> tuple[list[str], bool]:
 	raise SummarizeError(f"지원하지 않는 도구: {plan.tool}")
 
 
-def call(plan: Plan, prompt: str) -> str:
+def call(plan: Plan, prompt: str, *, metadata=None) -> str:
+	if plan.tool == "ollama":
+		from . import ollama
+		try:
+			return ollama.call(plan, prompt, metadata=metadata)
+		except ollama.OllamaError as exc:
+			raise SummarizeError(str(exc)) from exc
 	argv, use_stdin = _argv(plan, prompt)
+	if metadata is not None:
+		if plan.tool == "agy" and plan.model:
+			argv += ["--model", plan.model]
+		if not plan.model and plan.tool in ("claude", "agy"):
+			argv += ["--output-format", "json"]
 	run_dir().mkdir(parents=True, exist_ok=True)
 	try:
 		result = subprocess.run(argv, input=prompt if use_stdin else None, cwd=run_dir(),
@@ -97,6 +110,25 @@ def call(plan: Plan, prompt: str) -> str:
 	if result.returncode != 0:
 		raise SummarizeError(f"{plan.id} 종료 코드 {result.returncode}")
 	text = result.stdout.strip()
-	if not text:
+	if metadata is not None:
+		if plan.model:
+			metadata["model"] = plan.model
+		elif plan.tool == "codex":
+			match = re.search(r"(?m)^model:\s*([^\s]+)", result.stderr)
+			if match:
+				metadata["model"] = match[1]
+		else:
+			try:
+				data = json.loads(text)
+				text = data.get("result", data.get("response", ""))
+				models = data.get("modelUsage") or data.get("stats", {}).get("models", {})
+				model = data.get("model") or (", ".join(models) if isinstance(models, dict) else None)
+				if isinstance(model, str) and model:
+					metadata["model"] = model
+			except (ValueError, AttributeError, TypeError):
+				raise SummarizeError(f"{plan.id} 모델 식별용 JSON 응답 형식 오류") from None
+		if not metadata.get("model"):
+			raise SummarizeError(f"{plan.id} 모델 미확인. plans.toml에 model을 지정하세요")
+	if not isinstance(text, str) or not text:
 		raise SummarizeError(f"{plan.id} 빈 응답")
 	return text

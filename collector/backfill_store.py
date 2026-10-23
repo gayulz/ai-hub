@@ -27,7 +27,7 @@ create table if not exists c4_items (
 );
 create table if not exists c4_calls (
 	id integer primary key, batch text, key text, part integer, plan text,
-	day text, state text, result text,
+	day text, state text, result text, local integer not null default 0,
 	unique(batch, key, part, plan)
 );
 create table if not exists c4_indexes (
@@ -64,6 +64,9 @@ class Store(Ledger):
 			super().__init__(path)
 			path.chmod(0o600)
 			self.conn.executescript(C4_SCHEMA)
+			if "local" not in {r[1] for r in self.conn.execute("pragma table_info(c4_calls)")}:
+				self.conn.execute("alter table c4_calls add column local integer not null default 0")
+				self.conn.commit()
 
 	def close(self) -> None:
 		super().close()
@@ -121,16 +124,17 @@ class Store(Ledger):
 		with self.conn:
 			self.conn.execute("begin immediate")
 			day = now().date().isoformat()
-			used = self.conn.execute("select count(*) from c4_calls where day=?", (day,)).fetchone()[0]
-			if used >= total_limit or (plan.daily_limit is not None and
+			local = plan.tool == "ollama"
+			used = self.conn.execute("select count(*) from c4_calls where day=? and local=0", (day,)).fetchone()[0]
+			if (not local and used >= total_limit) or (plan.daily_limit is not None and
 					self.calls_today(plan.id, day) >= plan.daily_limit):
 				return None
 			if any(c["part"] == part and c["plan"] == plan.id for c in self.work_calls(bid, task)):
 				return None
 			self.conn.execute("insert into calls values (?, ?, 1) "
 				"on conflict(day, plan) do update set n=n+1", (day, plan.id))
-			cur = self.conn.execute("insert into c4_calls(batch,key,part,plan,day,state) "
-				"values (?, ?, ?, ?, ?, 'reserved')", (bid, task["key"], part, plan.id, day))
+			cur = self.conn.execute("insert into c4_calls(batch,key,part,plan,day,state,local) "
+				"values (?, ?, ?, ?, ?, 'reserved', ?)", (bid, task["key"], part, plan.id, day, local))
 		return cur.lastrowid
 
 	def finish_call(self, cid: int, state: str, result: dict) -> None:
@@ -146,7 +150,11 @@ class Store(Ledger):
 			data = json.loads(row["data"])
 			if data.get("material") == task.get("material") and data.get("cls") == task.get("cls"):
 				batches.add(row["batch"])
-		return [row for batch in sorted(batches) for row in self.calls(batch, task["key"])]
+		scopes = {r["id"] for r in self.rows("c4_scopes", "kind='compare'")}
+		comparisons = {r["id"] for r in self.rows("c4_batches") if r["scope"] in scopes}
+		# 비교 로컬 결과는 채택 전 일반 소급에 재사용하지 않는다. 구독 결과만 공유한다.
+		return [row for batch in sorted(batches) for row in self.calls(batch, task["key"])
+			if bid in comparisons or batch not in comparisons or not row.get("local", 0)]
 
 	def state(self, bid: str, state: str) -> None:
 		with self.conn:

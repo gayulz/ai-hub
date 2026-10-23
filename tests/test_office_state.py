@@ -27,8 +27,8 @@ class OfficeStateTest(OfficeCase):
 		self.assertEqual(people["codex"]["status"], "구현 중")
 		self.assertEqual(people["codex"]["calls"], 3)
 		self.assertEqual(people["agy"]["status"], "대기 중")
-		self.assertEqual(people["claude"]["status"], "상태 미확인")
-		self.assertEqual(people["gemini"]["status"], "일하는 중")
+		self.assertEqual(people["claude"]["status"], "대기")
+		self.assertEqual(people["gemini"]["status"], "대기")
 		self.assertEqual(people["gemma"]["status"], "꺼짐")
 		self.assertEqual(people["blog"]["status"], "일하는 중")
 		self.assertEqual(people["blog"]["dashboard"]["url"], "http://127.0.0.1:9000/dashboard")
@@ -50,7 +50,7 @@ class OfficeStateTest(OfficeCase):
 		self.assertTrue(all((line[0] == "launchctl" and line[1] == "print") or line[0] == "pgrep" for line in commands))
 
 	def test_lock_not_just_file_presence_and_plan_selects_reviewer(self):
-		self.assertEqual(self.people(self.state())["codex"]["status"], "대기 중")
+		self.assertEqual(self.people(self.state())["codex"]["status"], "대기")
 		self.run_record("2026-10-23-006", "작업 중", "review", "acme-agy")
 		lock = self.hold()
 		people = self.people(self.state())
@@ -116,22 +116,22 @@ class OfficeStateTest(OfficeCase):
 		broken = self.run_record("2026-10-22-001", "완료")
 		(broken / "run.json").write_text("[]")
 		people = self.people(self.state())
-		self.assertEqual(people["codex"]["status"], "대기 중")
+		self.assertEqual(people["codex"]["status"], "대기")
 		self.assertEqual(people["agy"]["status"], "대기 중")
 
-	def test_gemini_uses_only_mtime_and_excludes_protected_names(self):
+	def test_gemini_without_hook_does_not_infer_work_from_transcripts(self):
 		original = Path.open
 		def guard(path, *args, **kwargs):
 			if "chats" in path.parts:
 				self.fail("대화 내용을 읽었습니다")
 			return original(path, *args, **kwargs)
 		with mock.patch.object(Path, "open", guard):
-			self.assertEqual(self.people(self.state())["gemini"]["status"], "일하는 중")
+			self.assertEqual(self.people(self.state())["gemini"]["status"], "대기")
 		path = self.user / ".gemini/tmp/xyz/chats/acme.json"
 		os.utime(path, (self.now.timestamp() - 601,) * 2)
-		self.assertEqual(self.people(self.state())["gemini"]["status"], "쉬는 중")
+		self.assertEqual(self.people(self.state())["gemini"]["status"], "대기")
 		(path.parent / "🔐xyz.json").write_text("읽기 금지 합성 자료")
-		self.assertEqual(self.people(self.state())["gemini"]["status"], "쉬는 중")
+		self.assertEqual(self.people(self.state())["gemini"]["status"], "대기")
 
 	def test_decisions_keep_good_items_and_only_three_future_schedules(self):
 		path = self.hub / "decisions.toml"

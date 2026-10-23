@@ -110,13 +110,14 @@ def _claude_file(path: Path, since_ts: float, text: str | None = None) -> list[S
 	return [s for s in groups.values() if s.user_count > 0]
 
 
-def read_claude(since: datetime) -> list[Session]:
+def read_claude(since: datetime, pending: set[str] = frozenset()) -> list[Session]:
+	from .hooks import session_hash
 	if not CLAUDE_ROOT.exists():
 		return []
 	since_ts = (since - timedelta(days=1)).timestamp()
 	out: list[Session] = []
 	for path in sorted(CLAUDE_ROOT.glob("*/*.jsonl")):
-		out.extend(_claude_file(path, since_ts))
+		out.extend(_claude_file(path, 0 if session_hash("claude:" + path.stem) in pending else since_ts))
 	return out
 
 
@@ -164,7 +165,8 @@ def _codex_file(path: Path, text: str | None = None) -> Session | None:
 	return sess
 
 
-def read_codex(since: datetime) -> list[Session]:
+def read_codex(since: datetime, pending: set[str] = frozenset()) -> list[Session]:
+	from .hooks import session_hash
 	if not CODEX_ROOT.exists():
 		return []
 	cutoff = (since - timedelta(days=1)).date()
@@ -174,8 +176,17 @@ def read_codex(since: datetime) -> list[Session]:
 			day = datetime(*(int(p) for p in path.parts[-4:-1])).date()
 		except ValueError:
 			continue
-		if day < cutoff:
-			continue  # 폴더 날짜(YYYY/MM/DD)로 먼저 거른다. 7GB 전체를 읽지 않게
+		if day < cutoff and path.stat().st_mtime < since.timestamp():
+			if not pending:
+				continue
+			# 오래된 세션은 메타데이터 한 줄로 훅 대상인지 먼저 확인한다.
+			try:
+				with path.open(encoding="utf-8") as source:
+					meta = json.loads(source.readline()).get("payload", {})
+				if session_hash("codex:" + (meta.get("id") or path.stem)) not in pending:
+					continue
+			except (OSError, ValueError, TypeError, AttributeError):
+				continue
 		sess = _codex_file(path)
 		if sess:
 			out.append(sess)

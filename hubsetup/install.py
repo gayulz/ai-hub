@@ -36,7 +36,8 @@ def install(ctx: Context, apply: bool = False, author_name: str | None = None,
 		changes.append(item)
 		print(f"변경: {item.path}")
 		if before != item.text:
-			print("".join(difflib.unified_diff(before.splitlines(keepends=True), item.text.splitlines(keepends=True),
+			old, new = item.preview if item.preview is not None else (before, item.text)
+			print("".join(difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
 				fromfile="현재", tofile="템플릿", n=3)), end="")
 		if mode != item.mode:
 			print(f"권한: {'없음' if mode is None else oct(mode)} → {oct(item.mode)}")

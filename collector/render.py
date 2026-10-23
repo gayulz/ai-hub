@@ -7,6 +7,7 @@ from datetime import datetime
 from .redact import redact
 from .repos import Commit
 from .sessions import Session
+from .work_records import PLAN
 
 TOOL_LABEL = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini", "agy": "AGY"}
 FIRST_LINE_LIMIT = 80
@@ -27,6 +28,8 @@ def first_question(session: Session) -> str:
 def session_body(session: Session, summary: str | None, plan_id: str | None, reason: str = "") -> str:
 	label = TOOL_LABEL.get(session.tool, session.tool)
 	span = f"{_hm(session.started)}–{_hm(session.last)}"
+	if summary and plan_id == PLAN:
+		return f"- **{span} · {label}** · 사용자 메시지 {session.user_count}개 _(기록: {PLAN})_\n\n{summary}"
 	if summary:
 		bullets = "\n".join(f"  {line.strip()}" if line.strip().startswith("-") else f"  - {line.strip()}"
 			for line in redact(summary).splitlines() if line.strip())

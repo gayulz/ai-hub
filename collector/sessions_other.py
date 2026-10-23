@@ -56,7 +56,8 @@ def _gemini_data(path: Path, text: str) -> dict:
 	return data
 
 
-def read_gemini(since: datetime) -> list[Session]:
+def read_gemini(since: datetime, pending: set[str] = frozenset()) -> list[Session]:
+	from .hooks import session_hash
 	root = GEMINI_HOME / "tmp"
 	if not root.exists():
 		return []
@@ -64,7 +65,8 @@ def read_gemini(since: datetime) -> list[Session]:
 	since_ts = (since - timedelta(days=1)).timestamp()
 	out: dict[str, Session] = {}
 	for path in sorted([*root.glob("*/chats/session-*.json"), *root.glob("*/chats/session-*.jsonl")]):
-		if path.stat().st_mtime < since_ts:
+		old = path.stat().st_mtime < since_ts
+		if old and not pending:
 			continue
 		try:
 			data = _gemini_data(path, path.read_text(encoding="utf-8"))
@@ -72,6 +74,8 @@ def read_gemini(since: datetime) -> list[Session]:
 			continue
 		if data.get("kind") == "subagent":
 			continue  # 하위 에이전트는 제외
+		if old and session_hash("gemini:" + (data.get("sessionId") or path.stem)) not in pending:
+			continue
 		started = parse_time(data.get("startTime"))
 		last = parse_time(data.get("lastUpdated")) or started
 		if started is None or last is None:

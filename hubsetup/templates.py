@@ -22,6 +22,7 @@ class Item:
 	text: str
 	mode: int
 	label: str | None = None
+	preview: tuple[str, str] | None = None
 
 
 def shell(value: str) -> str:
@@ -36,7 +37,7 @@ def shell_path(path: Path, user_home: Path) -> str:
 	return "$HOME" + ("/" + shell(str(relative)) if str(relative) != "." else "")
 
 
-def render(ctx: Context) -> list[Item]:
+def render(ctx: Context, include_records: bool = True) -> list[Item]:
 	custom_home = ctx.hub_home != ctx.user_home / ".ai-hub"
 	handoff = str(ctx.hub_home / "handoff.md")
 	if ctx.hub_home.is_relative_to(ctx.user_home):
@@ -61,6 +62,9 @@ def render(ctx: Context) -> list[Item]:
 		data = plistlib.loads(text.encode("utf-8"))
 		label = data["Label"]
 		items.append(Item(ctx.user_home / "Library/LaunchAgents" / (label + ".plist"), text, 0o644, label))
+	if include_records:
+		from .records import TARGETS, render_record
+		items.extend(render_record(ctx, tool, kind) for tool, kind in TARGETS)
 	return items
 
 

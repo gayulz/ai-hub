@@ -151,7 +151,7 @@ class HubSetupInstallTest(HubSetupCase):
 	def test_render_has_no_remaining_placeholders_and_schedules_are_preserved(self):
 		ctx = config.context("com.acme")
 		items = templates.render(ctx)
-		self.assertEqual(len(items), 8)
+		self.assertEqual(len(items), 14)
 		for item in items:
 			self.assertIsNone(re.search(r"\$(?:user_home|hub_home|repo|python|path|label_prefix|handoff|hub_export|hub_environment)\b", item.text))
 		jobs = {item.label: plistlib.loads(item.text.encode()) for item in items if item.label}
@@ -184,14 +184,14 @@ class HubSetupInstallTest(HubSetupCase):
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertIn("--- 현재", result.stdout)
 		self.assertIn("+++ 템플릿", result.stdout)
-		self.assertIn("변경 파일 8개", result.stdout)
+		self.assertIn("변경 파일 14개", result.stdout)
 		self.assertEqual(before, self.snapshot())
 		self.assertEqual(self.calls(), [])
 		self.assertNotIn("xyz@example.invalid", result.stdout)
 
 	def test_apply_is_idempotent_and_uses_expected_launchctl_arguments(self):
 		first = self.apply()
-		self.assertIn("변경 파일 8개", first.stdout)
+		self.assertIn("변경 파일 14개", first.stdout)
 		self.assertEqual(self.git("config", "--local", "user.name"), "acme")
 		self.assertEqual(self.git("config", "--local", "user.email"), "xyz@example.invalid")
 		domain = f"gui/{os.getuid()}"

@@ -53,10 +53,19 @@ def _insert_under(text: str, heading: str, block: str) -> str:
 	"""`## heading` 절 끝(다음 `## ` 직전)에 덩어리를 넣는다. 절이 없으면 파일 끝에 만든다."""
 	marker = f"## {heading}"
 	lines = text.split("\n")
-	start = next((i for i, line in enumerate(lines) if line.strip() == marker), None)
+	# 작업 기록 안의 제목은 프로젝트 절의 경계가 아니다.
+	headings, inside = [], False
+	for i, line in enumerate(lines):
+		if line.startswith("<!-- ai-hub:"):
+			inside = True
+		elif line == END:
+			inside = False
+		elif not inside and line.startswith("## "):
+			headings.append(i)
+	start = next((i for i in headings if lines[i].strip() == marker), None)
 	if start is None:
 		return text.rstrip("\n") + f"\n\n{marker}\n\n{block}\n"
-	end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+	end = next((i for i in headings if i > start), len(lines))
 	cut = end
 	while cut > start + 1 and lines[cut - 1].strip() == "":
 		cut -= 1

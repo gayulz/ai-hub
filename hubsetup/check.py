@@ -16,6 +16,7 @@ from hubbackup import backup, state, targets
 
 from .config import Context, SetupError, command, context, git, read_config
 from .templates import MODULES, matches, render
+from .records import PATHS, TARGETS, render_record, valid_hooks
 
 
 def config_paths(data, location: str = ""):
@@ -105,12 +106,20 @@ def check(label_prefix: str | None = None) -> int:
 		ok = ctx is not None and bool(git(ctx.vault, "config", "--local", "--get", key).stdout.strip())
 		add(f"볼트 작성자: {key}", ok, "로컬 설정 있음" if ok else "로컬 설정 없음 (값 생략)")
 	if ctx is not None:
-		for item in render(ctx):
+		for item in render(ctx, include_records=False):
 			try:
 				ok = matches(item)
 			except (OSError, UnicodeError, SetupError):
 				ok = False
 			add(f"설치물: {item.path.name}", ok, "내용·권한 일치" if ok else "내용·권한·경로 확인 필요")
+		for tool, kind in TARGETS:
+			try:
+				item = render_record(ctx, tool, kind)
+				ok = matches(item) and (kind != "hooks" or valid_hooks(ctx, tool, item.text))
+			except (OSError, UnicodeError, ValueError, TypeError, KeyError, SetupError):
+				ok = False
+			name = PATHS[tool][0 if kind == "hooks" else 1]
+			add(f"작업 기록: {name}", ok, "ai-hub 항목 확인" if ok else "ai-hub 항목·형식·경로 확인 필요")
 		for module in MODULES:
 			label = f"{ctx.label_prefix}.ai-hub-{module}"
 			ok = command(["launchctl", "print", f"{ctx.domain}/{label}"]).returncode == 0

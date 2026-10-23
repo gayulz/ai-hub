@@ -91,8 +91,12 @@ def build_state(now: datetime | None = None) -> dict:
 	runs = agents.read_runs(root)
 	decisions = read_decisions(root, now.date())
 	jobs = read_jobs(root, user_home, now)
-	people = agents.orchestration(runs, plans) + [agents.gemini(user_home, now), agents.ollama(ledger["active"]), agents.blog()]
+	people = agents.orchestration(runs, plans) + [{"id": "gemini", "result": "대화 내용은 읽지 않음"},
+		agents.ollama(ledger["active"]), agents.blog()]
 	for person in people:
+		if (person["id"] in ("claude", "codex", "gemini") and "run_id" not in person
+				and person.get("status") != "확인 불가"):
+			person.update(agents.presence(root, person["id"], now))
 		aid, status = person["id"], person["status"]
 		person["name"] = agents.NAMES[aid]
 		person["room"] = "검토실" if status == "검토 중" else "집중 업무 존" if status == "집중 중" else (

@@ -8,8 +8,14 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
+
+# 훅은 수집기·보관함을 불러오기 전에 끝내 시작 비용을 제한한다.
+if __name__ == "__main__" and sys.argv[1:2] == ["hook"]:
+	from .hooks import main as hook_main
+	sys.exit(hook_main(sys.argv[2:]))
+
+import argparse
 import traceback
 from datetime import date
 
@@ -94,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
 	check = sub.add_parser("check", help="누락 점검")
 	check.add_argument("--since", help="점검 시작일(오늘 또는 YYYY-MM-DD)")
 	sub.add_parser("archive", help="대화 원문을 로컬 압축 사본으로 보관")
+	hook = sub.add_parser("hook", help="대화 상태·끝 신호 접수")
+	hook.add_argument("tool", choices=("claude", "codex", "gemini"))
 	backfill = sub.add_parser("backfill", help="프로젝트 소급 결과 준비·재개·승인 반영")
 	backfill.add_argument("--project", help="sources.toml에 등록한 원천 ID")
 	backfill.add_argument("--kind", choices=("repos", "sessions"))
@@ -119,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
 		elif not args.project or not args.kind:
 			parser.error("backfill에는 --project와 --kind가 필요합니다")
 	try:
+		if args.command == "hook":
+			from .hooks import main as hook_main
+			return hook_main([args.tool])
 		if args.command == "backfill":
 			from .backfill import execute
 			return execute(project_id=args.project, kind=args.kind, since=args.since,

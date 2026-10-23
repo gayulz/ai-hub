@@ -110,23 +110,18 @@ def orchestration(runs: dict, plans: dict) -> list[dict]:
 	return result
 
 
-def gemini(user_home: Path, now: datetime) -> dict:
-	agent = {"id": "gemini", "result": "대화 내용은 읽지 않음"}
+def presence(root: Path, aid: str, now: datetime) -> dict:
 	try:
-		root = user_home / ".gemini/tmp"
-		if root.is_symlink() or root.parent.is_symlink() or not root.is_dir():
+		with regular(root / f"run/presence/{aid}.json", root).open(encoding="utf-8") as source:
+			data = json.load(source)
+		at = datetime.fromisoformat(data["at"])
+		if not at.tzinfo or data["status"] not in ("일하는 중", "대기", "끝남"):
 			raise ValueError
-		times = [regular(path, user_home).stat().st_mtime for path in root.glob("*/chats/*")
-			if not path.is_dir() and not any(part.startswith("🔐") for part in path.relative_to(root).parts)]
-		modified = max(times)
-		age = now.timestamp() - modified
-		if age < 0:
-			raise ValueError
-		agent.update(status="일하는 중" if age <= 600 else "쉬는 중",
-			task="대화 중" if age <= 600 else "최근 대화 없음", last_seen=datetime.fromtimestamp(modified).astimezone().isoformat(timespec="seconds"))
-	except (OSError, ValueError):
-		agent.update(unavailable("대화 파일의 수정 시각을 확인할 수 없습니다"), task="수정 시각 확인 불가")
-	return agent
+		active = data["status"] == "일하는 중" and 0 <= (now - at).total_seconds() <= 600
+		return {"status": "일하는 중" if active else "대기", "task": "직접 대화 중" if active else "다음 대화 대기",
+			"last_seen": at.astimezone().isoformat(timespec="seconds")}
+	except (OSError, ValueError, TypeError, KeyError):
+		return {"status": "대기", "task": "훅 신호 없음"}
 
 
 class NoRedirect(HTTPRedirectHandler):

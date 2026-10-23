@@ -89,6 +89,11 @@ class = "company"
 	def test_kickstart_is_throttled_and_uses_gui_domain_without_restart(self):
 		for minute in (0, 9, 10):
 			hooks.receive("claude", self.data("SessionEnd", str(minute)), self.now + timedelta(minutes=minute))
+		# kickstart 는 기다리지 않고 띄우므로 가짜 launchctl 기록이 끝날 때까지 잠깐 기다린다.
+		deadline = time.monotonic() + 3
+		while time.monotonic() < deadline and len(self.log.read_text().splitlines() if self.log.exists() else []) < 2:
+			time.sleep(0.05)
+		time.sleep(0.2)
 		calls = self.log.read_text().splitlines()
 		self.assertEqual(calls, [f"kickstart gui/{os.getuid()}/com.acme.ai-hub-collector"] * 2)
 		self.assertEqual(len(hooks.read_pending()), 3)

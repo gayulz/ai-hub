@@ -85,9 +85,10 @@ def kickstart(now: datetime) -> None:
 		label = os.environ.get("AI_HUB_COLLECTOR_LABEL", f"com.{getpass.getuser()}.ai-hub-collector")
 		if not re.fullmatch(r"[a-zA-Z0-9_.-]+", label):
 			return
+		# 기다리지 않고 띄운다. 훅 시간 예산 안에 끊기면 수집기가 깨지 않기 때문이다.
+		subprocess.Popen(["launchctl", "kickstart", f"gui/{os.getuid()}/{label}"],
+			stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 		private_write(path, json.dumps({"at": now.isoformat()}))
-		subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{label}"],
-			stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.05)
 
 
 def receive(tool: str, data: dict, now: datetime) -> None:

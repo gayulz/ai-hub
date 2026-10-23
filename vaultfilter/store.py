@@ -47,6 +47,3 @@ class Dictionary:
 		token = f"⟦{kind}-{number}⟧"
 		self.entries.append({"value": value, "kind": kind, "token": token})
 		return token
-
-	def by_token(self) -> dict[str, str]:
-		return {e["token"]: e["value"] for e in self.entries}

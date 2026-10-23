@@ -11,9 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 from collector import redact_pii
-from vaultfilter.__main__ import cmd_filter
 from vaultfilter.store import Dictionary
-from vaultfilter.verify import _find_leaks, check_encrypted, check_tree
+from vaultfilter.verify import CRYPT_HEADER, _find_leaks, check_encrypted
 
 
 class VerifyTest(unittest.TestCase):
@@ -42,32 +41,32 @@ class VerifyTest(unittest.TestCase):
 		return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, check=True).stdout
 
 	def commit(self, name, text):
-		(self.repo / name).write_text(text, encoding="utf-8")
+		data = text if isinstance(text, bytes) else text.encode("utf-8")
+		(self.repo / name).write_bytes(data)
 		self.git("add", "--", name)
 		self.git("commit", "-q", "-m", "합성 자료")
 
 	def check(self, revs="HEAD"):
 		output = io.StringIO()
 		with mock.patch("vaultfilter.verify._git", side_effect=self.git), contextlib.redirect_stdout(output):
-			count = check_tree(revs)
+			count = check_encrypted(revs)
 		return count, output.getvalue()
 
-	def test_path_and_non_markdown_content_are_checked_without_printing_values(self):
-		self.commit("Acme-notes.md", "무해한 본문")
-		self.commit("settings.json", '{"name": "Acme"}')
+	def test_path_is_checked_without_printing_values(self):
+		self.commit("Acme-notes.md", CRYPT_HEADER + b"\x01")
 		count, output = self.check()
-		self.assertGreaterEqual(count, 2)
+		self.assertEqual(count, 1)
+		self.assertIn("경로 누출 의심", output)
 		self.assertNotIn("Acme", output)
 
-	def test_secret_in_ancestor_is_rejected_even_after_deletion(self):
-		fake = "ghp_" + "a" * 36
-		self.commit("note.md", fake)
+	def test_plain_file_in_ancestor_is_rejected_even_after_encryption(self):
+		self.commit("note.md", "평문 노트")
 		first = self.git("rev-parse", "HEAD").decode().strip()
-		self.commit("note.md", "[보안값]")
+		self.commit("note.md", CRYPT_HEADER + b"\x02")
 		self.assertEqual(self.check(first + "..HEAD")[0], 0)
 		count, output = self.check()
 		self.assertEqual(count, 1)
-		self.assertNotIn(fake, output)
+		self.assertIn("암호화되지 않은 파일", output)
 
 	def test_protected_note_is_rejected_without_reading_its_blob(self):
 		self.commit("🔐private.md", "읽지 않아야 하는 합성 자료")
@@ -76,15 +75,13 @@ class VerifyTest(unittest.TestCase):
 			calls.append(args)
 			return self.git(*args)
 		with mock.patch("vaultfilter.verify._git", side_effect=git), contextlib.redirect_stdout(io.StringIO()):
-			self.assertEqual(check_tree(), 1)
+			self.assertEqual(check_encrypted(), 1)
 		self.assertFalse(any(args[0] == "cat-file" for args in calls))
 
-	def test_missing_dictionary_blocks_clean_and_verification(self):
+	def test_missing_dictionary_blocks_verification(self):
 		self.dic.path.unlink()
 		with self.assertRaises(ValueError):
-			cmd_filter("clean")
-		with self.assertRaises(ValueError):
-			check_tree()
+			check_encrypted()
 
 	def test_strong_secrets_are_rejected_and_long_css_data_is_safe_to_scan(self):
 		fake = "ghp_" + "b" * 36
@@ -95,26 +92,20 @@ class VerifyTest(unittest.TestCase):
 
 	def test_author_metadata_is_checked(self):
 		self.git("config", "user.name", "Acme")
-		self.commit("note.md", "무해한 본문")
+		self.commit("note.md", CRYPT_HEADER + b"\x03")
 		count, output = self.check()
 		self.assertEqual(count, 1)
 		self.assertNotIn("Acme", output)
-
-	def check_enc(self, revs="HEAD"):
-		output = io.StringIO()
-		with mock.patch("vaultfilter.verify._git", side_effect=self.git), contextlib.redirect_stdout(output):
-			count = check_encrypted(revs)
-		return count, output.getvalue()
 
 	def test_encrypted_mode_needs_crypt_header_rule_and_clean_paths(self):
 		self.commit(".gitattributes", "* filter=git-crypt diff=git-crypt\n.gitattributes !filter !diff\n")
 		(self.repo / "note.md").write_bytes(b"\x00GITCRYPT\x00" + b"\x01\x02Acme")
 		self.git("add", "--", "note.md")
 		self.git("commit", "-q", "-m", "합성 암호문")
-		self.assertEqual(self.check_enc(), (0, ""))
+		self.assertEqual(self.check(), (0, ""))
 		self.commit("plain.md", "평문 노트")
 		self.commit("Acme.md", "\x00GITCRYPT\x00")
-		count, output = self.check_enc()
+		count, output = self.check()
 		self.assertEqual(count, 2)  # 평문 1건, 경로 누출 1건
 		self.assertIn("암호화되지 않은 파일", output)
 		self.assertNotIn("Acme", output)
@@ -124,7 +115,7 @@ class VerifyTest(unittest.TestCase):
 		subprocess.run(["git-crypt", "init"], cwd=self.repo, capture_output=True, check=True)
 		self.commit(".gitattributes", "* filter=git-crypt diff=git-crypt\n.gitattributes !filter !diff\n")
 		self.commit("note.md", "암호화될 본문 Acme")
-		self.assertEqual(self.check_enc()[0], 0)
+		self.assertEqual(self.check()[0], 0)
 		blob = self.git("cat-file", "blob", "HEAD:note.md")
 		self.assertNotIn("암호화될 본문".encode(), blob)
 

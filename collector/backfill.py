@@ -282,12 +282,25 @@ def prepare(store, bid, sources, repo, plans):
 	output.report(store, bid, sources)
 
 
+def recorded(store, task) -> bool:
+	row = store.get(task["key"])
+	return row is not None and row["hash"] == task.get("hash") and row["status"] == "recorded"
+
+
 def choose_tasks(store, scope, size):
 	used = {r[0] for r in store.conn.execute("select i.key from c4_items i "
 		"join c4_batches b on i.batch=b.id where b.scope=?", (scope["id"],))}
 	remaining = [t for t in scope["data"]["tasks"] if t["key"] not in used]
 	if scope["kind"] == "sessions":
-		return remaining[:size]
+		# 이미 같은 내용으로 기록된 대화는 묶음에 넣되(기존 기록으로 표시) 묶음 크기에는 세지 않는다.
+		# 활동 중인 원천 때문에 목록이 새로 만들어지면 앞쪽의 처리된 대화만 계속 다시 잡히던 문제를 막는다.
+		chosen, fresh = [], 0
+		for task in remaining:
+			if fresh >= size:
+				break
+			chosen.append(task)
+			fresh += not recorded(store, task)
+		return chosen
 	docs = [t for t in remaining if t["type"] != "commits"]
 	return docs + [t for t in remaining if t["type"] == "commits"][:10]
 

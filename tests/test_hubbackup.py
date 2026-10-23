@@ -194,13 +194,27 @@ class HubBackupTest(HubBackupCase):
 		self.assertEqual(self.run_restore().restored, 2)
 		self.assertEqual((self.restored / "ai-hub/archive/acme.txt").read_bytes(), b"acme retained")
 
-	def test_missing_local_state_reuploads_without_reading_copies(self):
+	def test_missing_local_state_inherits_index_and_reuploads(self):
+		removed = self.write("ai-hub", "archive/acme.txt", b"acme retained")
 		self.write("ai-hub", "sources.toml")
 		self.run_backup()
+		removed.unlink()
 		self.record.unlink()
-		with mock.patch.object(crypto, "decrypt", side_effect=AssertionError("사본을 읽으면 안 됩니다")):
-			result = self.run_backup()
-		self.assertEqual((result.new, result.unchanged, result.failed), (1, 0, 0))
+		result = self.run_backup()
+		self.assertEqual((result.new, result.updated, result.failed), (0, 1, 0))
+		self.assertIn("ai-hub/archive/acme.txt", self.index())
+
+	def test_missing_local_state_refuses_index_from_other_key(self):
+		self.write("ai-hub", "sources.toml")
+		self.run_backup()
+		before = (self.destination / "index.json.age").read_bytes()
+		self.record.unlink()
+		self.key.unlink()
+		subprocess.run(["age-keygen", "-o", str(self.key)], capture_output=True)
+		for _ in range(2):
+			with self.assertRaises(crypto.BackupError):
+				self.run_backup()
+		self.assertEqual(before, (self.destination / "index.json.age").read_bytes())
 
 	def test_excluded_credentials_keys_caches_links_and_unselected_files(self):
 		for tool, folder in [("ai-hub", "archive"), ("claude", "skills"), ("codex", "hooks"), ("gemini", "rules")]:

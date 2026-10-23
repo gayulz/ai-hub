@@ -44,7 +44,7 @@ def load(path: Path) -> dict:
 		with path.open(encoding="utf-8") as incoming:
 			state = json.load(incoming)
 	except FileNotFoundError:
-		# shortcut: 기록 소실 시 삭제된 원천의 목록은 알 수 없어, 기존 사본 복원 후 백업을 재개한다.
+		# 빈 기록에서 시작한다. 이전 목록은 backup.inherited 가 사본 목록에서 이어받는다.
 		return {"files": {}, "sources": {}, "last_backup": None, "last_failed": 0}
 	if not isinstance(state, dict) or not isinstance(state.get("files"), dict) or not isinstance(state.get("sources"), dict):
 		raise BackupError("로컬 백업 기록 형식이 잘못되었습니다.")

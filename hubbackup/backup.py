@@ -76,12 +76,30 @@ def write_index(entries: dict, destination: Path, public: str) -> int:
 		return crypto.encrypt(incoming, destination / "index.json.age", public)
 
 
+def inherited(destination: Path, key: Path) -> dict:
+	# 로컬 기록이 없을 때(새 PC 등) 이전 목록을 이어받아, 지워진 원천의 항목이 목록에서 빠지지 않게 한다.
+	index = destination / "index.json.age"
+	if not index.is_file():
+		return {}
+	try:
+		with tempfile.TemporaryFile() as incoming:
+			crypto.decrypt(index, incoming, key)
+			files = json.load(incoming)["files"]
+		for relative, entry in files.items():
+			state.validate_entry(relative, entry)
+	except Exception:
+		raise crypto.BackupError("기존 사본 목록을 이 키로 풀 수 없습니다. 예전 비밀키를 keys/backup.agekey에 두고 다시 실행하세요.") from None
+	return files
+
+
 def _run(source_roots: dict[str, Path], destination: Path, record: Path, key: Path) -> BackupStats:
 	public = crypto.recipient(key)
 	previous = state.load(record)
-	entries, versions = previous["files"].copy(), previous["sources"].copy()
 	if destination.is_symlink():
 		raise crypto.BackupError("사본 폴더로 심볼릭 링크를 쓸 수 없습니다.")
+	if previous["last_backup"] is None:
+		previous["files"] = inherited(destination, key)
+	entries, versions = previous["files"].copy(), previous["sources"].copy()
 	destination.mkdir(mode=0o700, parents=True, exist_ok=True)
 	destination.chmod(0o700)
 	stats = BackupStats()

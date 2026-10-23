@@ -13,7 +13,7 @@ from xml.sax.saxutils import escape
 from .config import Context, SetupError
 
 TEMPLATES = Path(__file__).with_name("templates")
-MODULES = ("collector", "vaultsync", "backup")
+MODULES = ("collector", "vaultsync", "backup", "office")
 
 
 @dataclass(frozen=True)

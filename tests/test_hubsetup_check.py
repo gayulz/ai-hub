@@ -139,7 +139,7 @@ class HubSetupCheckTest(HubSetupCase):
 		(self.root / "loaded.json").write_text("[]")
 		result = self.command("check")
 		self.assertEqual(result.returncode, 1)
-		for module in ("collector", "vaultsync", "backup"):
+		for module in ("collector", "vaultsync", "backup", "office"):
 			self.assertIn(f"| 예약 등록: {module} | 실패 |", result.stdout)
 		before = self.snapshot()
 		result = self.apply()

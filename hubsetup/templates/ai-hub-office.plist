@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>$user_home</string>
+$hub_environment		<key>PATH</key>
+		<string>$path</string>
+	</dict>
+	<key>Label</key>
+	<string>$label_prefix.ai-hub-office</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$python</string>
+		<string>-m</string>
+		<string>office</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>$hub_home/logs/office.log</string>
+	<key>StandardOutPath</key>
+	<string>$hub_home/logs/office.log</string>
+	<key>WorkingDirectory</key>
+	<string>$repo</string>
+</dict>
+</plist>

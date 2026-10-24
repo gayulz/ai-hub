@@ -61,7 +61,8 @@ def folder(path: Path) -> str:
 def note_type(path: Path) -> str | None:
 	name = folder(path)
 	if name == "Company":
-		return "troubleshoot" if re.search("오류|에러|장애|이슈|해결", path.name) else "reference"
+		# macOS 파일 이름은 자모가 분리된 NFD일 수 있어 NFC로 맞춘 뒤 비교한다
+		return "troubleshoot" if re.search("오류|에러|장애|이슈|해결", unicodedata.normalize("NFC", path.name)) else "reference"
 	return TYPES.get(name)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -18,9 +19,12 @@ def save(plan: dict) -> None:
 	private_write(rules.base() / "r1-plan.json", json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 
 
-def dictionary() -> list[tuple[int, str]]:
+COMPANY_KINDS = ("회사명", "서비스명", "호스트")
+
+
+def dictionary(kinds: tuple[str, ...] | None = None) -> list[tuple[int, str]]:
 	return [(index, entry["value"]) for index, entry in enumerate(Dictionary().entries, 1)
-		if isinstance(entry.get("value"), str) and len(entry["value"]) >= 2]
+		if isinstance(entry.get("value"), str) and len(entry["value"]) >= 2 and (kinds is None or entry.get("kind") in kinds)]
 
 
 def mask(text: str, values: list[tuple[int, str]]) -> str:
@@ -33,7 +37,7 @@ def inline(value: str) -> str:
 	return "`" + str(value).replace("\r", "\\r").replace("\n", "\\n").replace("`", "&#96;").replace("|", "\\|") + "`"
 
 
-def plan_note(path: Path, vault: Path, dates, overrides, mapping, values) -> dict:
+def plan_note(path: Path, vault: Path, dates, overrides, mapping, names) -> dict:
 	rel = path.relative_to(vault)
 	item = {"path": rel.as_posix(), "folder": rules.folder(rel), "status": "failed",
 		"reason": "", "created_source": "없음", "possible_move_day": False}
@@ -50,8 +54,10 @@ def plan_note(path: Path, vault: Path, dates, overrides, mapping, values) -> dic
 		chosen.update(override)
 		additions = {name: chosen[name] for name in frontmatter.KEYS if name not in existing and chosen[name] is not None}
 		after, changes, unsupported = frontmatter.render(data, additions, mapping)
-		text = (item["path"] + "\n" + header.body.decode("utf-8")).casefold()
-		matches = [index for index, value in values if value.casefold() in text] if item["folder"] != "Company" else []
+		# 결정 2 A의 확인 목록: 이번에 sensitivity를 새로 넣는 비회사 노트만, 회사·서비스·호스트 이름으로 찾는다
+		text = unicodedata.normalize("NFC", item["path"] + "\n" + header.body.decode("utf-8")).casefold()
+		matches = [index for index, value in names if unicodedata.normalize("NFC", value).casefold() in text] \
+			if item["folder"] != "Company" and "sensitivity" in additions else []
 		item.update(before=digest, after=sha(after), body_hash=sha(header.body), additions=additions,
 			created_source=source, created_rule_date=day, created_overridden="created" in override,
 			needs_type="type" not in existing and not chosen["type"],
@@ -118,7 +124,8 @@ def report() -> Path:
 		vault = rules.vault_root(load_sources().vault)
 		dates, overrides, mapping, values = rules.old_dates(), rules.overrides(), rules.tags_map(), dictionary()
 		counts = {"protected": 0, "excluded": 0, "symlink": 0}
-		notes = [plan_note(path, vault, dates, overrides, mapping, values) for path in rules.inventory(vault, counts)]
+		names = dictionary(COMPANY_KINDS)
+		notes = [plan_note(path, vault, dates, overrides, mapping, names) for path in rules.inventory(vault, counts)]
 		move_days(notes)
 		path = numbered(rules.base(), "r1-report")
 		plan = {"version": 1, "vault": str(vault), "made": now().isoformat(), "report": str(path),

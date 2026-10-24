@@ -2,6 +2,7 @@
 
 import json
 import stat
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -120,6 +121,30 @@ class ReportTest(ReorgCase):
 		self.assertEqual(notes["📖 Study/261024-p01.md"]["additions"]["sensitivity"], "personal")
 		self.assertIn("사전 항목 1, 3", self.report_text())
 		self.assertNotIn("본문 ACME", self.report_text())
+
+	def test_company_list_counts_company_kinds_only_for_notes_getting_sensitivity(self):
+		(self.hub / "redaction/dictionary.json").write_text(json.dumps({"entries": [
+			{"value": "acme", "kind": "회사명", "token": "t1"},
+			{"value": "010-1234-5678", "kind": "전화번호", "token": "t2"},
+			{"value": "가나다", "kind": "서비스명", "token": "t3"}]}), encoding="utf-8")
+		self.write("📖 Study/261024-a.md", "acme 010-1234-5678")
+		self.write("📖 Study/261024-b.md", "010-1234-5678 만")
+		self.write("📖 Study/261024-c.md", "---\nsensitivity: personal\n---\nacme")
+		nfd = unicodedata.normalize("NFD", "📖 Study/261024-가나다.md")
+		self.write(nfd, "x")
+		self.assertEqual(self.command("report"), 0)
+		notes = self.notes()
+		self.assertEqual(notes["📖 Study/261024-a.md"]["company_entries"], [1])
+		self.assertEqual(notes["📖 Study/261024-b.md"]["company_entries"], [])
+		self.assertEqual(notes["📖 Study/261024-c.md"]["company_entries"], [])
+		nfd_note = next(note for path, note in notes.items() if unicodedata.normalize("NFC", path).endswith("261024-가나다.md"))
+		self.assertEqual(nfd_note["company_entries"], [3])
+
+	def test_company_file_name_keyword_matches_decomposed_hangul(self):
+		self.write(unicodedata.normalize("NFD", "🏢 Company/261024-오류.md"))
+		self.assertEqual(self.command("report"), 0)
+		note = next(iter(self.notes().values()))
+		self.assertEqual(note["additions"]["type"], "troubleshoot")
 
 	def test_created_evidence_precedence_and_real_calendar_dates(self):
 		paths = ["📖 Study/261024-path.md", "📖 Study/261024-hash.md", "📖 Study/240229-file.md",

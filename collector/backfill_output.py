@@ -146,6 +146,11 @@ def apply_batch(store, bid: str, sources: Sources, repo: Repo) -> None:
 					",".join(prepared.get("plans", [])) or None, prepared["target"])
 			store.save(bid, task, "applied")
 			store.release(task["key"], "backfill:" + bid)
-	states = {i["state"] for i in store.items(bid)}
+	rows = store.items(bid)
+	for item in rows:
+		if item["state"] not in ("applied", "existing"):
+			# 이 묶음이 쓰지 않는 대화(보류 등)는 선점을 풀어 매시 수집이 기록하게 한다
+			store.release(item["key"], "backfill:" + bid)
+	states = {i["state"] for i in rows}
 	store.state(bid, "applied" if states <= {"applied", "existing"} else "partial")
 	report(store, bid, sources)

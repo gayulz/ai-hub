@@ -59,6 +59,16 @@ name = "acme"
 	def path(self, day=None):
 		return vault.daily_path(self.vault, "company", day or self.session.last.date())
 
+	def test_marker_without_session_is_dropped_after_a_day_but_not_in_dry_run(self):
+		self.signal("codex", "Stop", now=self.now - timedelta(days=2))
+		self.signal("codex", "Stop", now=self.now)  # 같은 대화의 새 신호는 남는다
+		self.assertEqual(len(hooks.read_pending()), 1)
+		with mock.patch.object(pipeline, "collect", return_value=([], [])):
+			self.runner(dry_run=True).run(self.now.date())
+			self.assertEqual(len(hooks.read_pending()), 1)
+			self.runner(now=self.now + timedelta(days=2)).run(self.now.date())
+		self.assertEqual(hooks.read_pending(), {})
+
 	def test_immediate_pending_records_active_session_and_updates_same_block(self):
 		self.signal()
 		with mock.patch("collector.summarize.call") as call:

@@ -122,10 +122,15 @@ class BackfillFlowTest(BackfillCase):
 		batch, items = self.batch()
 		self.assertEqual(items[0]["state"], "held")
 		self.ai.assert_not_called()
+		store = Store(self.hub / "ledger.db", readonly=True)
+		self.assertEqual(store.conn.execute("select count(*) from claims").fetchone()[0], 1)
+		store.close()
 		self.command("--apply", batch["id"])
 		self.assertEqual(self.snapshot(self.vault), {})
 		store = Store(self.hub / "ledger.db", readonly=True)
 		self.assertIsNone(store.get("codex:s01"))
+		# 보류 대화의 선점이 풀려 매시 수집이 기록할 수 있다
+		self.assertEqual(store.conn.execute("select count(*) from claims").fetchone()[0], 0)
 		store.close()
 
 	def test_company_failure_does_not_fall_back_outside_company_route(self):

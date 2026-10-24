@@ -20,6 +20,7 @@ from .sessions_other import read_agy, read_gemini
 
 LOOKBACK_DAYS = 2
 ACTIVE_MINUTES = 15
+STALE_MARKER = timedelta(days=1)
 
 
 def collect(since: date, pending: set[str] = frozenset()) -> tuple[list[Session], list[str]]:
@@ -89,8 +90,18 @@ class Pipeline:
 		self.excluded_titles = excluded
 		for session in sorted(sessions, key=lambda s: hooks.session_hash(s.key) not in self.pending):
 			self.handle_session(session)
+		self.drop_stale_markers()
 		self.handle_repos(since)
 		self.write_check(since)
+
+	def drop_stale_markers(self) -> None:
+		# 대화 파일이 남지 않는 세션(Codex 내부 스레드 등)의 끝 신호는 짝이 없어 지워지지 않는다.
+		# 하루 지난 표시는 버린다. 그런 대화가 있으면 원래 규칙(ACTIVE_MINUTES 쉼)으로 계속 기록된다.
+		if self.dry_run:
+			return
+		for marker in self.pending.values():
+			if self.now - marker.due > STALE_MARKER:
+				hooks.acknowledge(marker)
 
 	def handle_session(self, session: Session) -> None:
 		rule = classify(session.cwd, self.sources.rules)

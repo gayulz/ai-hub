@@ -17,7 +17,7 @@ from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator import targets
 
-from . import drafts
+from . import drafts, meetings
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -116,20 +116,27 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(payload, dict):
 			raise ValueError
 		action = payload.get("action")
-		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS):
+		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
 			keys.update(("target", "origin"))
+		if action in meetings.ACTIONS:
+			keys = meetings.KEYS[action]
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
 		if "text" in keys:
 			drafts.string(payload["text"], "사용자 글", 2000)
-		if action == "dev_draft":
+		if action in ("dev_draft", "meeting_analyze"):
 			if type(payload["origin"]) is not int or not any(person["id"] == payload["origin"] for person in scene()["people"]):
 				raise ValueError
+		if action == "dev_draft":
 			targets.target(payload["target"])
+		if action in meetings.ACTIONS:
+			meetings.validate(payload)
+	except meetings.Invalid as exc:
+		return 400, result(False, str(exc))
 	except (ValueError, TypeError, ConfigError):
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
 	root = home()
@@ -142,6 +149,9 @@ def apply(payload) -> tuple[int, dict]:
 			if action in drafts.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
 					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO, payload.get("target", "ai-hub"), payload.get("origin"))
+			if action in meetings.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return meetings.execute(root, payload, audit, REPO)
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

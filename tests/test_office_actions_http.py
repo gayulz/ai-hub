@@ -56,6 +56,28 @@ class OfficeActionHTTPTest(ActionCase):
 		self.assertEqual(json.loads(body), {"token": self.httpd.office_token})
 		self.assertEqual(before, self.snapshot())
 
+	def test_meeting_actions_share_http_security_and_body_limit(self):
+		from test_office_meetings import CID, MID
+		folder = self.hub / "redaction"
+		folder.mkdir()
+		(folder / "dictionary.json").write_text(json.dumps({"entries": [{"value": "acme", "kind": "회사명", "token": "company01"}]}))
+		payloads = [{"action": "meeting_analyze", "id": "ai-hub", "origin": 4, "text": "가" * 2000},
+			{"action": "meeting_start", "id": MID, "participants": ["backend", "qa"]},
+			{"action": "meeting_answer", "id": MID, "card": CID, "answers": [{"question_id": "scope", "kind": "text", "value": "합성 답"}]},
+			{"action": "meeting_confirm", "id": MID, "card": CID}]
+		with mock.patch.object(actions.meetings, "execute", return_value=(200, actions.result(True, "합성 회의 요청"))) as execute:
+			for payload in payloads:
+				with self.subTest(action=payload["action"]):
+					self.assertEqual(self.request(payload)[0], 200)
+					self.assertEqual(execute.call_args.args[1], payload)
+					before = execute.call_count
+					for expected, headers in ((403, {"Origin": "http://acme.invalid"}), (403, {"X-Office-Token": "xyz"}),
+							(403, {"Host": "acme.invalid"}), (415, {"Content-Type": "text/plain"})):
+						self.assertEqual(self.request(payload, headers=headers)[0], expected)
+					self.assertEqual(self.request(payload, body=b" " * 16385)[0], 413)
+					self.assertEqual(self.request({**payload, "extra": "xyz"})[0], 400)
+					self.assertEqual(execute.call_count, before)
+
 	def test_origin_token_json_size_and_host_guards_never_run_commands(self):
 		cases = [(403, {"Origin": None}), (403, {"Origin": "http://acme.invalid"}), (403, {"Origin": "null"}),
 			(403, {"Origin": "https://127.0.0.1:8790"}), (403, {"Origin": "http://localhost:8791"}),

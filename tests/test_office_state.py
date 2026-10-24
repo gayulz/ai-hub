@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from collector.backfill_store import Store
-from office import agents, ledger, telegram_bridge
+from office import agents, ledger, meetings, telegram_bridge
 from orchestrator import targets
 from office.common import text
 from test_office import OfficeCase
@@ -21,6 +21,35 @@ class OfficeStateTest(OfficeCase):
 		patch = mock.patch("socket.create_connection", side_effect=OSError("합성 연결 거부"))
 		patch.start()
 		self.addCleanup(patch.stop)
+
+	def test_meeting_state_and_question_approval_count_are_exposed_without_writes(self):
+		from test_office_meetings import meeting_state, write_meeting
+		folder = self.hub / "redaction"
+		folder.mkdir()
+		(folder / "dictionary.json").write_text(json.dumps({"entries": [{"value": "acme", "kind": "회사명", "token": "company01"}]}))
+		write_meeting(self.hub, meeting_state())
+		before = self.snapshot()
+		with mock.patch.object(meetings, "candidates", return_value=[{"key": "qa", "name": "QA"}]):
+			state = self.state()
+		self.assertEqual(state["meetings"]["status"], "정상")
+		self.assertEqual(len(state["meetings"]["items"]), 1)
+		self.assertEqual(len(state["questions"]["items"]), 1)
+		self.assertEqual(state["meeting_roles"], [{"key": "qa", "name": "QA"}])
+		self.assertEqual(state["approvals"]["questions"], {"status": "정상", "count": 1})
+		self.assertEqual(before, self.snapshot())
+
+	def test_unreadable_meetings_do_not_hide_healthy_existing_state_sections(self):
+		folder = self.hub / "meetings" / ("m-" + "a" * 32)
+		folder.mkdir(parents=True)
+		for content in ("{", "[" * 1500, "{}"):
+			(folder / "meeting.json").write_text(content)
+			state = self.state()
+			for key in ("meetings", "questions"):
+				self.assertEqual(state[key], {"status": "확인 불가", "reason": "일부 회의 기록을 확인할 수 없습니다", "items": []})
+			self.assertEqual(state["approvals"]["questions"], {"status": "확인 불가", "count": 0})
+			for key in ("c4", "runs", "drafts", "decisions"):
+				self.assertEqual(state["approvals"][key]["status"], "정상")
+			self.assertTrue(state["activity"])
 
 	def test_telegram_state_exposes_only_status_and_last_poll_without_writing(self):
 		before = self.snapshot()

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collector.config import home
 
-from . import actions, drafts, meetings
+from . import actions, drafts, meetings, remote
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
@@ -54,8 +54,15 @@ class Handler(BaseHTTPRequestHandler):
 			return False
 		port = self.server.server_port
 		hosts = self.headers.get_all("Host", [])
-		if len(hosts) != 1 or hosts[0] not in (f"127.0.0.1:{port}", f"localhost:{port}"):
-			self.respond(403, "로컬 Host만 허용합니다".encode())
+		self.remote_host = None
+		if len(hosts) == 1 and hosts[0] in (f"127.0.0.1:{port}", f"localhost:{port}"):
+			pass
+		elif len(hosts) == 1 and self.client_address[0] == "127.0.0.1" and remote.allowed(
+				hosts[0], self.headers.get("Tailscale-User-Login")):
+			# `tailscale serve` 가 127.0.0.1 로 전달한 요청이며 Host·로그인이 모두 허용 설정에 있다
+			self.remote_host = hosts[0]
+		else:
+			self.respond(403, "허용된 Host만 받습니다".encode())
 			return False
 		if self.command != "GET" and not (self.command == "POST" and self.target() == "/api/action"):
 			self.respond(405, "허용하지 않는 메서드입니다".encode())
@@ -67,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond_json(code, actions.result(False, message))
 		port = self.server.server_port
 		origins = self.headers.get_all("Origin", [])
-		if len(origins) != 1 or origins[0] not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+		allowed_origins = (f"http://127.0.0.1:{port}", f"http://localhost:{port}") + ((f"https://{self.remote_host}",) if self.remote_host else ())
+		if len(origins) != 1 or origins[0] not in allowed_origins:
 			reject(403, "같은 출처의 화면에서만 반영할 수 있습니다.")
 			return
 		kinds = self.headers.get_all("Content-Type", [])

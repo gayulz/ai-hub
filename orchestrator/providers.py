@@ -153,3 +153,82 @@ def call(plan: Plan, writer: bool, prompt: str, cwd: Path, schema: dict, timeout
 			raise ProviderError("exit", f"{plan.id} 종료 코드 {result.returncode}")
 		data, usage = _unwrap(plan.tool, result.stdout, last_file)
 		return Reply(data, seconds, usage)
+
+
+@dataclass
+class ChatReply:
+	data: dict
+	seconds: float
+	usage: dict | str
+	session: str | None
+
+
+def _chat_session(tool: str, stdout: str) -> str | None:
+	key = {"codex": "thread_id", "claude": "session_id", "agy": "conversation_id"}[tool]
+	for line in stdout.splitlines() if tool == "codex" else [stdout]:
+		try:
+			event = json.loads(line)
+		except (ValueError, RecursionError):
+			continue
+		value = event.get(key) if isinstance(event, dict) else None
+		if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,199}", value):
+			return value
+	return None
+
+
+def chat_call(plan: Plan, prompt: str, cwd: Path, schema: dict, timeout: float, session: str | None) -> ChatReply:
+	"""읽기 전용 대화 1회. 원문·사용량·세션 파일 경로를 로그에 쓰지 않는다."""
+	if session is not None and (not isinstance(session, str)
+			or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,199}", session)):
+		raise ProviderError("json", "대화 세션 ID 형식이 잘못됐습니다")
+	with tempfile.TemporaryDirectory(prefix="orch-chat-") as tmp:
+		schema_file, last_file = Path(tmp) / "schema.json", Path(tmp) / "last.json"
+		schema_file.write_text(json.dumps(schema), encoding="utf-8")
+		if plan.tool == "codex":
+			if session is None:
+				argv = ["codex", "exec", "-C", str(cwd), "-s", "read-only", "--json"]
+			else:
+				argv = ["codex", "exec", "resume", session, "--json", "-c", 'sandbox_mode="read-only"']
+			argv += ["--output-schema", str(schema_file), "-o", str(last_file)]
+			if plan.model:
+				argv += ["-m", plan.model]
+			try:
+				inside = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"], capture_output=True)
+			except OSError:
+				raise ProviderError("missing", "저장소 확인 도구를 실행하지 못했습니다") from None
+			if inside.returncode != 0:
+				argv += ["--skip-git-repo-check"]
+			argv += ["-"]
+		elif plan.tool == "claude":
+			argv = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+				"--allowedTools", READ_ONLY_TOOLS, "--disallowedTools", WRITE_BLOCKED_TOOLS, "--strict-mcp-config"]
+			if plan.model:
+				argv += ["--model", plan.model]
+			if session is not None:
+				argv += ["--resume", session]
+		elif plan.tool == "agy":
+			argv = ["agy", "-p", prompt, "--output-format", "json", "--json-schema", json.dumps(schema), "--mode", "plan"]
+			if plan.model:
+				argv += ["--model", plan.model]
+			if session is not None:
+				argv += ["--conversation", session]
+		else:
+			raise ProviderError("missing", "대화에 허용되지 않은 도구입니다")
+		started = time.monotonic()
+		try:
+			result = subprocess.run(argv, input=None if plan.tool == "agy" else prompt, cwd=cwd,
+				capture_output=True, text=True, timeout=timeout)
+		except subprocess.TimeoutExpired:
+			raise ProviderError("timeout", "대화 호출 시간이 초과됐습니다") from None
+		except OSError:
+			raise ProviderError("missing", "대화 도구를 실행하지 못했습니다") from None
+		except UnicodeError:
+			raise ProviderError("json", "대화 응답을 읽지 못했습니다") from None
+		seconds = time.monotonic() - started
+		if result.returncode != 0:
+			raise ProviderError("exit", "대화 도구 호출이 실패했습니다")
+		try:
+			data, usage = _unwrap(plan.tool, result.stdout, last_file)
+		except (OSError, ValueError, RecursionError):
+			raise ProviderError("json", "대화 응답 JSON을 읽지 못했습니다") from None
+		return ChatReply(data, seconds, usage, _chat_session(plan.tool, result.stdout))

@@ -84,6 +84,16 @@ class OfficeStateTest(OfficeCase):
 		self.opener.open.side_effect = lambda *args, **kwargs: io.BytesIO(b'[]')
 		self.assertEqual(self.people(self.state())["gemma"]["status"], "확인 불가")
 
+	def test_engine_uses_local_agent_id_when_agent_positions_change(self):
+		for local, expected in (({"id": "gemma", "status": "대기 중", "models": ["acme"]}, "가동 중"),
+				({"id": "gemma", "status": "확인 불가"}, "확인 불가"), ({"id": "gemma", "status": "꺼짐"}, "꺼짐")):
+			with self.subTest(status=expected), \
+					mock.patch.object(agents, "ollama", return_value={"id": "blog", "status": "일하는 중"}), \
+					mock.patch.object(agents, "blog", return_value=local):
+				state = self.state()
+				self.assertEqual(next(engine for engine in state["engines"] if engine["id"] == "ollama")["status"], expected)
+				self.assertIn("dashboard", self.people(state)["blog"])
+
 	def test_missing_and_broken_sources_do_not_hide_healthy_sections(self):
 		for name in ("plans.toml", "decisions.toml", "ledger.db"):
 			with self.subTest(name=name):

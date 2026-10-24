@@ -55,6 +55,20 @@ class FollowupsTest(unittest.TestCase):
 		self.assertEqual(work_records.due_hint("내일", date(2026, 12, 31)), "2027-01-01")
 		self.assertEqual(work_records.due_hint("다음 월요일", date(2026, 10, 26)), "2026-11-02")
 
+	def test_iso_dates_preserve_explicit_year_and_validate_calendar_dates(self):
+		for sentence, expected in (("2026-11-05 확인", "2026-11-05"),
+				("기한은 2026-01-02", "2026-01-02"), ("2027-01-02까지 확인", "2027-01-02"),
+				("2028-02-29 확인", "2028-02-29"), ("2026-02-29 확인", ""),
+				("2026-11-31 확인", ""), ("2026-00-05 확인", ""),
+				("12026-11-05 확인", ""), ("2026-11-051 확인", "")):
+			with self.subTest(sentence=sentence):
+				self.assertEqual(work_records.due_hint(sentence, self.now.date()), expected)
+
+	def test_iso_due_is_saved_to_the_followup_ledger(self):
+		self.session.turns.append(Turn("assistant", record("2026-11-05 확인"), "final"))
+		work_records.save(self.ledger, self.session, self.sources, "personal")
+		self.assertEqual([(row["sentence"], row["due"]) for row in self.rows()], [("2026-11-05 확인", "2026-11-05")])
+
 	def test_only_last_complete_record_fields_and_no_empty_or_fenced_tasks(self):
 		self.session.turns += [Turn("assistant", record("오늘 확인", "(있으면)", "", "없음", "오늘 확인", "기한 없이 확인")
 			+ "\n```text\n- 남은 일: 코드 예제\n```", "final"),

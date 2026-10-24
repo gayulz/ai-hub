@@ -107,7 +107,8 @@ def build_state(now: datetime | None = None) -> dict:
 			person["calls"] = sum(row["count"] for row in ledger["calls"]["items"] if plans["tools"].get(row["plan"]) == tool)
 		else:
 			person["calls"] = None
-	people[-1]["dashboard"] = dashboard(root)
+	by_id = {person["id"]: person for person in people}
+	by_id["blog"]["dashboard"] = dashboard(root)
 	approvals = [{"id": item["id"], "status": item["status"], "reply": f'python3 -m orchestrator apply {item["id"]}'}
 		for item in runs["items"] if item["status"] == "승인 필요"]
 	run_errors = runs["status"] == "확인 불가" or any(item["status"] == "확인 불가" for item in runs["items"])
@@ -116,7 +117,7 @@ def build_state(now: datetime | None = None) -> dict:
 		"source": item["id"]} for item in jobs if item["log"]["at"]]
 	activity.sort(key=lambda item: datetime.fromisoformat(item["at"]), reverse=True)
 	role_people = roles.build_people(root, user_home, now, runs, plans, ledger, jobs)
-	engines = roles.build_engines(user_home, now, runs, plans, jobs, people[-2])
+	engines = roles.build_engines(user_home, now, runs, plans, jobs, by_id["gemma"])
 	usage = {"c4": ledger["usage"], "limit": plans["limit"], "plans": ledger["calls"],
 		"notebooklm": {"status": "미측정", "count": None}}
 	schedule = build_schedule(root, decisions["schedule"], jobs, ledger["followups"])

@@ -92,6 +92,7 @@ class OfficeStaticTest(unittest.TestCase):
 		self.assertIn("@media(max-width:900px)", css)
 		self.assertIn("touch-action:none", css)
 		self.assertIn("prefers-reduced-motion:reduce", css)
+		self.assertIn('id="approval-count">?</span>', html)
 		for word in ("이 안 선택", "시안", "예시", 'id="choose"', 'id="copy-dialog"'):
 			self.assertNotIn(word, html)
 

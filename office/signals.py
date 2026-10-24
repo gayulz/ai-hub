@@ -130,36 +130,40 @@ def shorts(user_home: Path, now: datetime) -> dict:
 		if not safe(root):
 			raise ValueError
 		projects = user_home / ".codex/.chatgpt-projects"
-		main, children, known = [], [], set()
-		for path in files(root):
-			if path.suffix != ".jsonl":
-				continue
-			fresh = recent(path.stat().st_mtime, now)
-			# 대화 본문은 읽지 않고 첫 줄의 작업 폴더·스레드 종류만 읽는다.
-			try:
-				with regular(path, root).open(encoding="utf-8") as source:
-					line = source.readline(65537)
-				if len(line) > 65536:
-					raise ValueError
-				meta = json.loads(line)
-				if not isinstance(meta, dict) or not isinstance(meta.get("payload"), dict):
-					raise ValueError
-			except (OSError, ValueError):
-				if fresh:
-					raise
-				continue
-			payload = meta.get("payload", {})
-			cwd = Path(payload.get("cwd", "/"))
-			if meta.get("type") != "session_meta" or not cwd.is_relative_to(projects) or any(p.startswith("🔐") for p in cwd.parts):
-				continue
-			kind = payload.get("source")
-			if isinstance(kind, str):
-				known.add(cwd)
-			if fresh:
-				at = datetime.fromtimestamp(path.stat().st_mtime, now.tzinfo).isoformat(timespec="seconds")
-				(main if isinstance(kind, str) else children if isinstance(kind, dict) else []).append((cwd, at))
-		aux = [at for cwd, at in children if cwd in known]
-		return normal(main=max((at for _, at in main), default=None), auxiliary=max(aux, default=None))
+		main, auxiliary = [], []
+		folders = [root] if root.is_dir() else []
+		while folders:
+			with os.scandir(folders.pop()) as entries:
+				for entry in entries:
+					if entry.name.startswith("🔐") or entry.is_symlink():
+						continue
+					if entry.is_dir(follow_symlinks=False):
+						folders.append(entry.path)
+						continue
+					if not entry.name.endswith(".jsonl") or not entry.is_file(follow_symlinks=False):
+						continue
+					modified = entry.stat(follow_symlinks=False).st_mtime
+					if not recent(modified, now):
+						continue
+					# 대화 본문은 읽지 않고 첫 줄의 작업 폴더·스레드 종류만 읽는다.
+					with Path(entry.path).open(encoding="utf-8") as source:
+						line = source.readline(65537)
+					if len(line) > 65536:
+						raise ValueError
+					meta = json.loads(line)
+					if not isinstance(meta, dict) or not isinstance(meta.get("payload"), dict):
+						raise ValueError
+					payload = meta["payload"]
+					cwd = Path(payload.get("cwd", "/"))
+					if meta.get("type") != "session_meta" or not cwd.is_relative_to(projects) or any(p.startswith("🔐") for p in cwd.parts):
+						continue
+					kind = payload.get("source")
+					at = datetime.fromtimestamp(modified, now.tzinfo).isoformat(timespec="seconds")
+					if isinstance(kind, str):
+						main.append(at)
+					elif isinstance(kind, dict):
+						auxiliary.append(at)
+		return normal(main=max(main, default=None), auxiliary=max(auxiliary, default=None))
 	except (OSError, ValueError, TypeError, AttributeError):
 		return unavailable("영상 프로젝트의 대화 메타데이터를 읽을 수 없습니다")
 

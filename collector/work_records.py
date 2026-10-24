@@ -64,7 +64,8 @@ def fields(session: Session, name: str) -> list[str]:
 
 
 def due_hint(sentence: str, base: date) -> str:
-	match = re.search(r"(?:(\d{4})[./-])?(\d{1,2})/(\d{1,2})(?!\d)|(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일|오늘|내일|(?:다음\s*)?[월화수목금토일]요일", sentence)
+	match = re.search(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)|(?:(\d{4})[./-])?(\d{1,2})/(\d{1,2})(?!\d)|"
+		r"(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일|오늘|내일|(?:다음\s*)?[월화수목금토일]요일", sentence)
 	if not match:
 		return ""
 	value = match[0]
@@ -74,6 +75,8 @@ def due_hint(sentence: str, base: date) -> str:
 		elif "요일" in value:
 			offset = ("월화수목금토일".index(value[-3]) - base.weekday()) % 7
 			day = base + timedelta(days=offset or (7 if value.startswith("다음") else 0))
+		elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+			day = date.fromisoformat(value)
 		else:
 			year, month, day = match.group(1, 2, 3) if match[2] else match.group(4, 5, 6)
 			day = date(int(year or base.year), int(month), int(day))

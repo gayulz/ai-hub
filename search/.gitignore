@@ -1,0 +1,6 @@
+.gradle/
+build/
+# Wrapper 는 공개 저장소 검사가 바이너리(gradle-wrapper.jar)를 거부해 넣지 않는다
+/gradlew
+/gradlew.bat
+/gradle/

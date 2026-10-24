@@ -195,3 +195,26 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .blog-head a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .blog-body{flex:1;min-height:0;overflow:auto}
 .blog-body iframe{display:block;width:100%;height:100%;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.meeting-popover{position:fixed;z-index:9;width:min(340px,calc(100vw - 24px));max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:16px;background:var(--paper);overflow-wrap:anywhere}
+.meeting-popover .side-head h2{font-size:18px}
+.meeting-popover-body{padding:16px}
+.meeting-popover-body h3{font-size:14px;margin:18px 0 8px}
+.meeting-recent{width:100%;text-align:left;display:block}
+.meeting-recent span,.meeting-recent small{display:block}
+.meeting-dialog{scroll-padding:16px}
+#meeting-status{margin-top:16px;font-weight:650;white-space:pre-wrap}
+.meeting-question{min-width:0;margin:18px 0 0;padding:16px 0;border:0;border-top:1px solid var(--line)}
+.meeting-question legend{font-weight:650;padding:0 0 8px;max-width:100%;white-space:pre-wrap}
+.meeting-options{display:grid;gap:8px;margin-bottom:12px}
+.meeting-option{width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--paper);overflow-wrap:anywhere}
+.meeting-option small{display:block;color:var(--muted);white-space:pre-wrap}
+.meeting-option[aria-pressed=true],.meeting-chip[aria-pressed=true]{border-color:var(--accent);background:var(--soft);outline:1px solid var(--accent)}
+.meeting-option .state{margin-left:8px;font-weight:650;color:var(--accent)}
+.meeting-text[data-selected=true]{border-color:var(--accent)}
+.meeting-chips{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.meeting-chip{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:24px;max-width:100%;overflow-wrap:anywhere}
+.meeting-chip canvas{width:36px;height:56px;image-rendering:pixelated;flex:none}
+.meeting-initial{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--soft);flex:none}
+.meeting-reasons p:not(.meeting-summary){margin:6px 0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meeting-summary{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){.meeting-dialog{padding:18px}.meeting-chips{gap:8px}.meeting-chip{padding:6px 10px}}

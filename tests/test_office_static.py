@@ -44,7 +44,7 @@ class Element{
 }
 const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id)},
 	createElement:tag=>new Element('',tag.toUpperCase()),querySelectorAll:()=>[],visibilityState:'visible',
-	addEventListener:(name,fn)=>events.set(name,fn),documentElement:new Element(),
+	addEventListener:(name,fn)=>events.set(name,fn),dispatchEvent:event=>{events.get(event.type)?.(event);return true},documentElement:new Element(),
 	body:{classList:{add:value=>classes.add(value),remove:value=>classes.delete(value),contains:value=>classes.has(value)}}};
 let state={updated:'2026-10-24T12:00:00+09:00',blog_dashboard:'켜짐',dev_targets:[{id:'ai-hub',label:'ai-hub'},{id:'blog-x',label:'blog-x'},{id:'xyz',label:'xyz'}],dev_plans:{implementer:'p01',reviewer:'p02'},people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
 	approvals:{c4:{status:'정상',items:[{id:'c4-'+'a'.repeat(16),prepared:3,held:1,reply:'C4 합성 반영해'}]},
@@ -55,7 +55,7 @@ let state={updated:'2026-10-24T12:00:00+09:00',blog_dashboard:'켜짐',dev_targe
 	activity:[],board:{status:'정상',items:[{kind:'chat',title:'결정',text:'합성 결정',at:'2026-10-24T12:00:00+09:00'}],progress:{items:[]}},engines:[]};
 let draftView={id:'d-20261024-120000-abcdef01',target:'blog-x',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
 const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,target:value.target,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
-const sandbox={document,window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},matchMedia:query=>({get matches(){return query.includes('reduce')?reducedMode:mobileMode&&query.includes('900px')}}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
+const sandbox={document,Event,CustomEvent:class extends Event{constructor(name,options){super(name,options);this.detail=options?.detail}},window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},matchMedia:query=>({get matches(){return query.includes('reduce')?reducedMode:mobileMode&&query.includes('900px')}}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
 	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{constructor(fn){resize=fn}observe(){}},AbortController,
 	console,setTimeout:()=>1,clearTimeout(){},setInterval:(fn,ms)=>{interval=fn;assert.equal(ms,10000)},
 	fetch:async(url,options)=>{
@@ -81,6 +81,10 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	if(bubbleMode)state.people=state.people.map(p=>({...p,status:p.id===1?'오류':[0,5,8,9,10,11,12,15].includes(p.id)?'작업 중':p.id===3?'쉬는 중':p.id===4?'확인 불가':'대기',
 		task:p.id===0?longTask:p.id===1?shortTask:p.id===5?'':'숨길 합성 작업 '+p.id}));
 	await vm.runInContext(fs.readFileSync(root+'/office.js','utf8'),sandbox);
+	assert.deepEqual(Object.keys(sandbox.window.officeBridge).sort(),['esc','openPanel','people','refresh','state','toast','token']);
+	assert.equal(sandbox.window.officeBridge.state().updated,state.updated);
+	assert.equal(sandbox.window.officeBridge.token(),sessionOK?'xyz-session':null);
+	assert.deepEqual(sandbox.window.officeBridge.people(),scene.people);
 	assert.deepEqual(requests,['/scene.json','/api/session','/api/state']);
 	if(bubbleMode){
 		const cut=limit=>Array.from(longTask).slice(0,limit-1).join('')+'…';

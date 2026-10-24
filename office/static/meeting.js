@@ -6,7 +6,7 @@
 		const statuses={participants_pending:'참석자 확인 대기',questions_pending:'질문 답변 대기',answers_pending:'답변 확인 대기',running:'진행 중',completed:'완료',failed:'실패',budget_exhausted:'예산 소진',questions_exhausted:'질문 한도 소진',record_pending:'기록 대기'};
 		const items=group=>Array.isArray(group?.items)?group.items:[],proposals=new Map();
 		let phase='',busy=false,stale=false,focus=null,popoverFocus=null,point={x:12,y:12},card=null,meeting=null,answers=new Map(),selected=new Set(),avatarArt;
-		const state=()=>bridge.state(),meetings=()=>items(state()?.meetings),cards=()=>items(state()?.questions);
+		const state=()=>bridge.state(),meetings=()=>items(state()?.meetings),cards=()=>items(state()?.questions).filter(c=>c.kind!=='chat');
 		function unavailable(){
 			if(!bridge.token())return '반영 세션을 읽지 못했습니다. 화면을 다시 열어 주세요.';
 			if(!state()?.meetings||state().meetings.status==='확인 불가')return state()?.meetings?.reason||'회의 상태를 확인할 수 없습니다.';
@@ -189,7 +189,7 @@
 			const b=e.target.closest('button');if(!b||b.disabled)return;
 			if(b.dataset.room==='meeting'){
 				e.preventDefault();e.stopImmediatePropagation();openPopover(b);
-			}else if(b.dataset.questionCard){
+			}else if(b.dataset.questionCard&&b.dataset.questionMeeting){
 				e.preventDefault();e.stopImmediatePropagation();if(otherDialog()||unavailable())return;
 				const value=cards().find(c=>c.card===b.dataset.questionCard&&c.meeting===b.dataset.questionMeeting);
 				if(value)showQuestions(value);else bridge.refresh();

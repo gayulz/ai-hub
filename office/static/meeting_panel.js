@@ -90,6 +90,7 @@
 				$('meeting-dock-calls').textContent='호출 0/14';$('meeting-progress-bar').style.width='0%';
 			}
 			current=id;opened=true;expanded=true;$('meeting-popover').hidden=true;
+			document.dispatchEvent(new CustomEvent('office-dock-open',{detail:'meeting'}));
 			$('meeting-dock-notice').textContent='회의 기록 조회 중';
 			$('meeting-dock-title').textContent='회의';$('meeting-dock-state').textContent='조회 중';
 			render();visibility();syncTimer();$('meeting-toggle').focus({preventScroll:true});
@@ -118,6 +119,7 @@
 		};
 		dock.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();close()}});
 		document.addEventListener('office-state',stateChanged);
+		document.addEventListener('office-dock-open',e=>{if(e.detail!=='meeting'){opened=false;visibility();syncTimer()}});
 		if(typeof MutationObserver!=='undefined')new MutationObserver(visibility).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open','hidden']});
 		window.officeMeetingPanel={open,close,devText};stateChanged();
 	}

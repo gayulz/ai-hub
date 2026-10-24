@@ -70,6 +70,15 @@ class OfficeServerTest(OfficeCase):
 	def test_localhost_with_exact_port_is_also_allowed(self):
 		self.assertEqual(self.request(host=f"localhost:{self.httpd.server_port}")[0], 200)
 
+	def test_chat_scripts_are_allowed_with_javascript_type_and_no_socket(self):
+		for name in ("chat.js", "chat_dock.js"):
+			with self.subTest(name=name):
+				status, headers, body = self.request("/" + name)
+				self.assertEqual(status, 200)
+				self.assertEqual(headers["Content-Type"].split(";")[0], "text/javascript")
+				self.assertEqual(body, (server.STATIC / name).read_bytes())
+				self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
 	def test_csp_only_adds_two_blog_frame_origins_and_keeps_security_headers(self):
 		expected = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
 			"font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "

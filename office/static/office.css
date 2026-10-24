@@ -237,3 +237,41 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .meeting-dock button:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
 @media(min-width:901px) and (max-width:1100px){.meeting-dock{right:324px}}
 @media(max-width:900px){.meeting-dock{left:8px;right:8px;bottom:max(89px,calc(80px + env(safe-area-inset-bottom)));max-height:70vh;max-height:70dvh;border-radius:16px 16px 8px 8px;z-index:8}.meeting-dock[data-expanded=true]{height:auto}.meeting-logs{max-height:28vh}.meeting-dock-head{padding:8px}.meeting-dock-heading h2{font-size:13px}}
+.chat-recent{display:block;width:100%;text-align:left;overflow-wrap:anywhere}
+.chat-recent span,.chat-recent small{display:block}
+.chat-dialog{scroll-padding:16px;padding-bottom:max(24px,env(safe-area-inset-bottom))}
+.chat-status{margin-top:16px;font-weight:650;white-space:pre-wrap}
+.chat-summary{white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-question{min-width:0;margin:18px 0 0;padding:16px 0;border:0;border-top:1px solid var(--line)}
+.chat-question legend{font-weight:650;padding:0 0 8px;max-width:100%;white-space:pre-wrap}
+.chat-options{display:grid;gap:8px;margin-bottom:12px}
+.chat-option{width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--paper);overflow-wrap:anywhere}
+.chat-option small{display:block;color:var(--ink);white-space:pre-wrap}
+.chat-option[aria-pressed=true]{border-color:var(--accent);background:var(--soft);outline:1px solid var(--accent)}
+.chat-dock{position:fixed;z-index:6;left:16px;right:344px;bottom:104px;border:1px solid var(--line);border-radius:16px;background:var(--paper);color:var(--ink);overflow:hidden;max-height:60vh;max-height:60dvh;display:flex;flex-direction:column;overflow-wrap:anywhere}
+.chat-dock[hidden],body:has(dialog[open]) .chat-dock,body:has(.meeting-popover:not([hidden])) .chat-dock{display:none}
+.chat-dock[data-expanded=true]{height:60vh;height:60dvh}
+.chat-dock-head{display:flex;align-items:center;gap:8px;min-height:72px;padding:8px 12px;flex:none}
+.chat-dock-heading{min-width:0;flex:1}
+.chat-dock-heading h2{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-dock-heading p{font-size:12px;margin:3px 0}
+.chat-dock-head button{min-width:44px;min-height:44px;padding:0 8px;border:1px solid var(--line);border-radius:8px;flex:none}
+.chat-dock-content{display:flex;flex-direction:column;min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;border-top:1px solid var(--line);padding:8px 12px max(12px,env(safe-area-inset-bottom));gap:8px}
+.chat-notice{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-notice:empty{display:none}
+.chat-log{flex:1;min-height:44px;overflow:auto;overscroll-behavior:contain;scroll-padding:12px;display:flex;flex-direction:column;gap:10px;padding:4px}
+.chat-message{flex:none;max-width:90%;min-width:0;align-self:flex-start;padding:10px 12px;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:12px;font-size:14px;overflow-wrap:anywhere}
+.chat-message p{white-space:pre-wrap}
+.chat-message strong,.chat-message small{display:block;font-size:12px}
+.chat-user{align-self:flex-end;background:var(--soft)}
+.chat-dock-actions{display:flex;flex-wrap:wrap;gap:6px;flex:none}
+.chat-dock-actions button{font-size:12px;padding:6px 10px;min-height:44px}
+.chat-dock-actions .outline-button{width:auto;margin:0}
+.chat-composer{display:grid;gap:4px;flex:none;min-width:0;position:sticky;bottom:0;background:var(--paper)}
+.chat-composer label,.chat-composer p,.chat-compose-actions span{font-size:12px}
+.chat-composer textarea{width:100%;min-width:0;max-width:100%;min-height:60px;max-height:18dvh;resize:vertical;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px}
+.chat-compose-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.chat-dock button:focus-visible,.chat-log:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+@media(min-width:901px) and (max-width:1100px){.chat-dock{right:324px}}
+@media(max-width:900px){.chat-dock{left:8px;right:8px;bottom:max(89px,calc(80px + env(safe-area-inset-bottom)));max-height:70vh;max-height:70dvh;border-radius:16px 16px 8px 8px;z-index:8}.chat-dock[data-expanded=true]{height:70vh;height:70dvh}.chat-dock-head{padding:8px}.chat-dock-heading h2{font-size:13px}}
+@media(max-width:600px){.chat-dialog{padding:18px;padding-bottom:max(18px,env(safe-area-inset-bottom))}}

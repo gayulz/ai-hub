@@ -74,7 +74,7 @@ function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTi
 let currentPanel=()=>overview(),refreshing=false,state=null;
 let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
 let devBusy=false,devDraft=null,devFocus=null,devOrigin=null;
-const filterHelp={all:'아래는 모두 사용자의 승인이나 답을 기다리는 일입니다.',c4:'지난 AI 대화를 정리한 노트를 볼트에 써도 되는지 승인합니다.',apply:'AI가 만들고 검토까지 마친 코드 변경을 저장소에 반영해도 되는지 승인합니다.',r1:'볼트 노트의 머리말(종류·공개 범위·날짜) 정리를 폴더 단위로 승인합니다.',draft:'기획 AI가 쓴 개발 지시 초안을 보고 실행할지 확인합니다.',decision:'계획 문서에서 사용자의 선택을 기다리는 결정입니다.',question:'회의 AI가 정보가 모자라 묻는 질문입니다. 텔레그램에서도 답할 수 있습니다.'},actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
+const filterHelp={all:'아래는 모두 사용자의 승인이나 답을 기다리는 일입니다.',c4:'지난 AI 대화를 정리한 노트를 볼트에 써도 되는지 승인합니다.',apply:'AI가 만들고 검토까지 마친 코드 변경을 저장소에 반영해도 되는지 승인합니다.',r1:'볼트 노트의 머리말(종류·공개 범위·날짜) 정리를 폴더 단위로 승인합니다.',draft:'기획 AI가 쓴 개발 지시 초안을 보고 실행할지 확인합니다.',decision:'계획 문서에서 사용자의 선택을 기다리는 결정입니다.',question:'회의와 대화의 AI가 정보가 모자라 묻는 질문입니다. 텔레그램에서도 답할 수 있습니다.'},actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
 function panel(title,html,view='status'){selected=null;previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
 function closePanel(){selected=null;world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
 
@@ -85,7 +85,7 @@ const when=value=>value?new Date(value).toLocaleString('ko-KR',{month:'numeric',
 const stat=(label,value)=>'<div class="stat"><span>'+esc(label)+'</span><b>'+esc(value??'확인 불가')+'</b></div>';
 function approvals(){
 	return [['c4','대화 기록 정리',state?.approvals?.c4],['apply','AI 작업 결과',state?.approvals?.runs],['r1','볼트 노트 정리',state?.approvals?.r1],['draft','개발 지시 확인',state?.approvals?.drafts],['decision','결정할 일',state?.approvals?.decisions]]
-		.flatMap(([kind,label,group])=>items(group).map(row=>({...row,kind,label,title:row.title||row.goal||[row.project,row.id].filter(Boolean).join(' · ')}))).concat(window.officeMeeting?.approvals()||[]);
+		.flatMap(([kind,label,group])=>items(group).map(row=>({...row,kind,label,title:row.title||row.goal||[row.project,row.id].filter(Boolean).join(' · ')}))).concat(window.officeMeeting?.approvals()||[],window.officeChat?.approvals()||[]);
 }
 const activityHTML=()=>state?'<ol class="timeline">'+(state.activity||[]).map(row=>'<li>'+esc(row.text)+'<time>'+esc(when(row.at))+'</time></li>').join('')+'</ol>':empty('활동 자료 조회 중');
 function meter(label,value,max){
@@ -129,7 +129,7 @@ function showApprovals(filter='all'){
 	const list=approvals().filter(row=>filter==='all'||row.kind===filter);
 	panel('확인이 필요한 일','<p class="intro">'+(state?approvals().length+'건':'확인 불가')+' · '+(applying?'반영 중':'반영 전에 변경 내용을 확인합니다.')+'</p><div class="subtabs">'+[['all','전체'],['c4','기록 정리'],['apply','작업 결과'],['r1','노트 정리'],['draft','개발 지시'],['decision','결정'],['question','AI 질문']].map(([id,label])=>'<button data-filter="'+id+'" aria-pressed="'+(id===filter)+'">'+label+'</button>').join('')+'</div>'
 		+'<p class="intro">'+esc(filterHelp[filter]||'')+'</p>'+(!officeToken?empty('반영 세션을 읽지 못했습니다. 화면을 다시 열어 주세요.'):'' )
-		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+(row.kind==='c4'?' · 볼트에 쓸 노트 '+esc(row.prepared)+'건 · 보류 '+esc(row.held)+'건':row.kind==='r1'?' · 노트 '+esc(row.pending)+'개':row.kind==='draft'?' · '+esc(devRoles[row.role])+' · 대상 저장소 '+esc(row.target)+' · 완료 조건 '+esc(row.done)+'개 · '+esc(when(row.created)):'')+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+(row.kind==='draft'?'<code>'+esc(row.owned_paths.join(', '))+'</code><small>'+esc(devPlanText())+'</small>':'')+'</div>'+(row.kind==='question'?window.officeMeeting.button(row):actionFor[row.kind]?'<button class="apply-button" '+(row.kind==='draft'?'data-draft="'+esc(row.id):'data-action="'+row.kind)+'" data-id="'+esc(row.id)+'"'+(applying||devBusy||!officeToken?' disabled':'')+'>'+ (applying?'반영 중':row.kind==='draft'?'초안 보기':'반영')+'</button>':'<span class="state">대기</span>')+'</div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
+		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+(row.kind==='c4'?' · 볼트에 쓸 노트 '+esc(row.prepared)+'건 · 보류 '+esc(row.held)+'건':row.kind==='r1'?' · 노트 '+esc(row.pending)+'개':row.kind==='draft'?' · '+esc(devRoles[row.role])+' · 대상 저장소 '+esc(row.target)+' · 완료 조건 '+esc(row.done)+'개 · '+esc(when(row.created)):'')+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+(row.kind==='draft'?'<code>'+esc(row.owned_paths.join(', '))+'</code><small>'+esc(devPlanText())+'</small>':'')+'</div>'+(row.kind==='question'?(row.chat?window.officeChat.button(row):window.officeMeeting.button(row)):actionFor[row.kind]?'<button class="apply-button" '+(row.kind==='draft'?'data-draft="'+esc(row.id):'data-action="'+row.kind)+'" data-id="'+esc(row.id)+'"'+(applying||devBusy||!officeToken?' disabled':'')+'>'+ (applying?'반영 중':row.kind==='draft'?'초안 보기':'반영')+'</button>':'<span class="state">대기</span>')+'</div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
 		+Object.values(state?.approvals||{}).map(note).join(''),'approvals');
 }
 function openAction(kind,id,button){
@@ -303,6 +303,7 @@ function showPerson(id,focus=true){
 	const role=Object.keys(devRoles).find(key=>devRoles[key]===a.name);
 	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
 	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
+	if(a.name==='PM')$('panel-body').innerHTML+=window.officeChat?.person()||'';
 	$('panel-body').innerHTML+=blogButton(a.blog_path,a.name);
 	const c=$('portrait').getContext('2d');c.imageSmoothingEnabled=false;c.scale(1.6,1.6);art.drawActor(c,{...a,x:28,y:56,walking:false},0);
 	if(focus&&!fitMode){center(a.x,a.y);follow=false}
@@ -350,7 +351,7 @@ window.officeBridge={state:()=>state,token:()=>officeToken,toast,esc,people:()=>
 	actors:()=>actors,routeFrom,walkable,chairs:()=>{const room=D.rooms.find(r=>r.id==='meeting');return room?D.props.filter(p=>p.type==='chair'&&contains(room,p.x,p.y)):[]},
 	tickHook(fn){tickHooks.add(fn);return()=>tickHooks.delete(fn)},reducedMotion:()=>reduced.matches,
 	openDevWith(text,target){
-		if(!officeToken||devBusy||applying||['dev-dialog','action-dialog','blog-dialog','meeting-dialog'].some(id=>$(id).open))return false;
+		if(!officeToken||devBusy||applying||['dev-dialog','action-dialog','blog-dialog','meeting-dialog','chat-dialog'].some(id=>$(id).open))return false;
 		openDev('plan',document.activeElement);if(!$('dev-dialog').open)return false;
 		devOrigin=(D.people.find(p=>p.name===devRoles.plan)||D.people[0]).id;
 		$('dev-target').value=(devTargets().find(t=>t.id===target)||devTargets().find(t=>t.id==='ai-hub')||devTargets()[0]).id;

@@ -145,10 +145,11 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(200, {"ok": True, "draft": drafts.card(row, data)})
 			except (OSError, ValueError, TypeError, KeyError, RecursionError):
 				self.respond_json(409, actions.result(False, "대기 중인 초안을 확인할 수 없습니다."))
-		elif target in ("/", "/office.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/office.css", "/scene.json"):
+		elif target in ("/", "/office.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/office.css", "/scene.json"):
 			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
 				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/meeting.js": ("meeting.js", "text/javascript"),
 				"/meeting_panel.js": ("meeting_panel.js", "text/javascript"), "/meeting_scene.js": ("meeting_scene.js", "text/javascript"),
+				"/chat.js": ("chat.js", "text/javascript"), "/chat_dock.js": ("chat_dock.js", "text/javascript"),
 				"/office.css": ("office.css", "text/css"),
 				"/scene.json": ("scene.json", "application/json")}[target]
 			self.respond(200, (STATIC / name).read_bytes(), kind + "; charset=utf-8")

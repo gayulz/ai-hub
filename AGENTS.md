@@ -10,7 +10,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 |---|---|---|
 | `collector/` 수집기 — 원천을 훑어 볼트에 1차 정제 기록. 매시 실행 때 네 AI 도구의 대화 원문을 `~/.ai-hub/archive/`에 gzip 사본으로 먼저 보관(로컬 전용, 지우지 않음) | Python(표준 라이브러리만) | 사용 중 |
 | `hubbackup/` 상태 백업 — `~/.ai-hub`(키 제외)·AI 도구 설정을 age로 암호화해 iCloud `ai-hub-backup/state/`에 사본(이름은 해시). 비밀키는 iCloud에 두지 않음(계획: 볼트 `261022-08`) | Python + age | 사용 중 |
-| `office/` 사무실 화면 — ZEP 스타일 픽셀 사무실로 AI 직원·자동 작업의 상태와 결재함을 보여 준다. 보기 전용, `127.0.0.1:8790`(launchd), 결정 목록 `~/.ai-hub/decisions.toml`(계획: 볼트 `261023-01`) | Python + HTML | 사용 중 |
+| `office/` 사무실 화면 — ZEP 스타일 픽셀 사무실로 AI 직원·자동 작업의 상태와 결재함을 보여 준다. 결재함에서 C4 묶음·ai-hub 실행·R1 폴더만 화면 안 확인 창으로 반영한다(쓰기 창구 하나, Origin·세션 비밀값·JSON·허용 목록으로 막음, 기록 `~/.ai-hub/logs/office-actions.jsonl`). push·공개·삭제·재시작은 넣지 않는다. `127.0.0.1:8790`(launchd), 결정 목록 `~/.ai-hub/decisions.toml`(계획: 볼트 `261023-01`, `261024-05`) | Python + HTML | 사용 중 |
 | `vaultfilter/` push 전 검사(`verify encrypted`: 암호화 여부·경로·작성자·메시지)와 마스킹 사전(경로·메시지 검사용) | Python | 사용 중 |
 | `orchestrator/` AI 개발 오케스트레이션(A안) — 구현 AI·독립 검토 AI·기계 검증·보완, 실행 기록 `~/.ai-hub/runs/`, 반영은 사용자 승인 뒤 `apply`(계획: 볼트 `261022-07`) | Python | 사용 중 |
 | `vaultsync/` 볼트 자동 기록 — 하루 2회(12:30·23:30) 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05`, `261022-06`) | Python | 사용 중 |

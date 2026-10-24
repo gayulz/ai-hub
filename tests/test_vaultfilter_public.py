@@ -94,13 +94,15 @@ class PublicCheckTest(unittest.TestCase):
 			"# 합성 값\n" + hashlib.sha256(verify.SECRET_LITERAL.search(allowed).group(0).encode()).hexdigest() + "\n",
 			encoding="utf-8")
 		first = self.commit("a.py", allowed + "\n")
-		self.assertEqual(self.check(first), (0, ""))
 		self.commit("b.py", other + "\n")
-		count, output = self.check("HEAD^..HEAD")
-		self.assertEqual(count, 1)
-		self.assertIn("비밀값", output)
 		self.commit("c.py", "acme = 1\n")
-		self.assertEqual(self.check("HEAD^..HEAD")[0], 1)  # 이름 검사는 허용 목록과 관계없다
+		self.assertEqual(self.check(first)[0], 1)  # 지금 폴더(이 저장소)의 허용 목록에는 없는 값이다
+		with contextlib.chdir(self.repo):  # 훅처럼 저장소 최상위에서 돌린다
+			self.assertEqual(self.check(first), (0, ""))
+			count, output = self.check("HEAD~2..HEAD~1")
+			self.assertEqual(count, 1)
+			self.assertIn("비밀값", output)
+			self.assertEqual(self.check("HEAD^..HEAD")[0], 1)  # 이름 검사는 허용 목록과 관계없다
 
 	def test_only_added_lines_are_checked(self):
 		token = "sk-" + "b" * 24

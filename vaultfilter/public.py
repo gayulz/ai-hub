@@ -9,7 +9,6 @@ from __future__ import annotations
 import getpass
 import hashlib
 import re
-import subprocess
 import unicodedata
 from pathlib import Path
 
@@ -33,13 +32,19 @@ def _pattern(values: list[str]) -> re.Pattern | None:
 
 
 def _allowed() -> set[str]:
-	"""사람이 확인한 합성 값(비밀값 꼴)의 sha256 목록. 값 자체는 저장소에 두지 않는다. 파일이 없으면 빈 집합."""
+	"""사람이 확인한 합성 값(비밀값 꼴)의 sha256 목록. 값 자체는 저장소에 두지 않는다.
+
+	지금 폴더에서 저장소 최상위(.git 이 있는 곳)까지 올라가며 찾는다(훅은 저장소 최상위에서 돈다).
+	다른 프로세스를 띄우지 않는다. 읽지 못하면 빈 집합이라 아무것도 통과시키지 않는다.
+	"""
 	try:
-		root = verify._git("rev-parse", "--show-toplevel").decode("utf-8").strip()
-		lines = (Path(root) / ALLOW_FILE).read_text(encoding="utf-8").splitlines()
-	except (OSError, UnicodeDecodeError, subprocess.CalledProcessError):
-		return set()
-	return {line.strip().lower() for line in lines if re.fullmatch(r"\s*[0-9a-fA-F]{64}\s*", line)}
+		for folder in (Path.cwd(), *Path.cwd().parents):
+			if (folder / ".git").exists():
+				lines = (folder / ALLOW_FILE).read_text(encoding="utf-8").splitlines()
+				return {line.strip().lower() for line in lines if re.fullmatch(r"\s*[0-9a-fA-F]{64}\s*", line)}
+	except (OSError, UnicodeDecodeError):
+		pass
+	return set()
 
 
 class Rules:

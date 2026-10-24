@@ -68,12 +68,14 @@ function createPixelArt(scene) {
 			case 'desk':
 				shadow(x,y+29,64,13);R(x+3,y+29,5,12,dark(p.wood,.4));R(x+56,y+29,5,12,dark(p.wood,.4));border(x,y,64,33,p.wood);R(x+2,y+2,60,4,light(p.wood,.27));R(x+3,y+31,58,5,dark(p.wood,.25));monitor(x+8,y-16,mix(c,p.water,.35));border(x+11,y+18,30,7,'#e8e4cf','#858c7c',1);for(let i=0;i<6;i++)R(x+14+i*4,y+20,2,2,'#a1ab98');R(x+44,y+19,5,7,'#f4eed8');mug(x+51,y+6);chair(x+20,y+37,c);break;
 			case 'cubicle': {
-				const up=o.direction!=='down',cx=x+w/2,ty=y+(up?20:35),cy=up?y+h-34:y+10;
+				const up=o.direction!=='down',cx=x+w/2,ty=y+(up?20:35),cy=up?y+h-34:y+10,py=up?y+3:y+h-18;
+				const panel=()=>{border(x,py,w,14,p.wallDark);R(x+3,py+3,w-6,7,light(c,.12));};
 				shadow(x+3,y+h-15,w-6,12);chair(cx-12,cy,c);
+				// 뒷모습 자리는 칸막이를 먼저 그리고 모니터를 칸막이 앞 높이에 둔다(머리 위 이름표가 모니터를 가리지 않게)
+				if(up)panel();
 				border(x+3,ty,w-6,43,p.wood);R(x+5,ty+2,w-10,4,light(p.wood,.27));
-				monitor(cx-17,ty+(up?-6:11),mix(c,p.water,.35));keyboard(cx-15,ty+(up?27:2));mug(x+w-21,ty+14);
-				const py=up?y+3:y+h-18;
-				border(x,py,w,14,p.wallDark);R(x+3,py+3,w-6,7,light(c,.12));
+				monitor(cx-17,up?y-1:ty+11,mix(c,p.water,.35));keyboard(cx-15,ty+(up?27:2));mug(x+w-21,ty+14);
+				if(!up)panel();
 				R(x,up?py:ty,4,up?ty+43-py:py+14-ty,p.wallDark);R(x+w-4,up?py:ty,4,up?ty+43-py:py+14-ty,dark(p.wallDark,.15));break;
 			}
 			case 'longtable':

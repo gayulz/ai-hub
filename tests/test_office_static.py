@@ -139,7 +139,7 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 class OfficeStaticTest(unittest.TestCase):
 	def test_original_pixel_art_and_22_seat_names_are_preserved(self):
 		art = "\n".join(line.strip() for line in (STATIC / "pixel-art.js").read_text().strip().splitlines())
-		self.assertEqual(hashlib.sha256(art.encode()).hexdigest(), "cd7e53cf077be4eb08794e5a201bc5387d73542fa4f277540b686d6f2ecd9ebc")
+		self.assertEqual(hashlib.sha256(art.encode()).hexdigest(), "ea3ef8d6eeb4fdaed56b2b48d64436d706bec07f85d9891c6c978c9173486f20")
 		scene = json.loads((STATIC / "scene.json").read_text())
 		self.assertEqual([p["name"] for p in scene["people"]], ["PM", "기록", "총무", "기획", "백엔드", "프론트", "디자인", "QA", "작가", "분석", "클립", "티스토리", "PD", "대본", "썸네일", "회사 개발", "레거시 분석", "이관 QA", "회사 기록", "이웃", "편집", "음악", "네이버"])
 		self.assertEqual([p["seat"] for p in scene["people"]], list(range(1, 24)))

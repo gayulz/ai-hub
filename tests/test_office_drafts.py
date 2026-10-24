@@ -162,6 +162,25 @@ class OfficeDraftTest(DraftCase):
 			self.assertEqual(self.meta(identity)["status"], "초안")
 		self.assertNotIn("사용자 글 원문", (self.hub / "logs/office-actions.jsonl").read_text())
 
+	def test_failure_shows_only_the_last_draft_reason_line_after_masking(self):
+		token = "ghp_" + "a" * 36
+		cases = (("사용자 글 원문\n" + draft.FAILURE + "owned_paths: 항목 수는 1~20개여야 합니다\n", "이유: owned_paths: 항목 수는 1~20개여야 합니다"),
+			(draft.FAILURE + "acme 저장소 경로 오류", "사용자 글·요금제 설정을 확인하세요."),
+			(draft.FAILURE + "토큰 " + token, None),
+			(draft.FAILURE + "앞 줄\n사용자 글 원문", "사용자 글·요금제 설정을 확인하세요."))
+		for stderr, expected in cases:
+			with mock.patch.object(drafts.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", stderr)):
+				status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 개발 지시"})
+			self.assertEqual(status, 500, value)
+			if expected:
+				self.assertTrue(value["message"].endswith(expected), value)
+			for raw in ("사용자 글 원문", "acme", token):
+				self.assertNotIn(raw, json.dumps(value, ensure_ascii=False))
+		audit = (self.hub / "logs/office-actions.jsonl").read_text()
+		self.assertIn("owned_paths: 항목 수는", audit)
+		self.assertNotIn("acme", audit)
+		self.assertNotIn(token, audit)
+
 	def test_links_hardlinks_and_open_permissions_prevent_run(self):
 		identity = self.generate()["id"]
 		path = self.hub / "office-drafts" / (identity + ".toml")

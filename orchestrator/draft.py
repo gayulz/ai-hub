@@ -30,6 +30,8 @@ DEFAULT_FORBIDDEN = [
 ]
 FIELDS = ("goal", "done", "owned_paths", "forbidden", "details", "commit_message")
 LIMITS = {"calls": (2, 8), "minutes": (10, 120), "fixes": (0, 2)}
+# 사무실은 표준 오류의 마지막 줄이 이 머리로 시작할 때만 이유를 화면에 보인다
+FAILURE = "초안 작성 실패: "
 
 
 def string(value, field: str, maximum: int, minimum: int = 1) -> str:
@@ -173,6 +175,9 @@ def main(argv: list[str]) -> int:
 		print(json.dumps(value, ensure_ascii=False))
 		return 0
 	except (OSError, ValueError, TypeError, KeyError, ConfigError, providers.ProviderError, RecursionError) as exc:
-		message = str(exc) if isinstance(exc, ValueError) and not isinstance(exc, UnicodeError) else type(exc).__name__
-		print("초안 작성 실패: " + message, file=sys.stderr)
+		if isinstance(exc, providers.ProviderError):
+			message = f"AI 호출 실패({exc.kind}). 요금제 한도·로그인·네트워크를 확인하세요"
+		else:
+			message = str(exc) if isinstance(exc, ValueError) and not isinstance(exc, UnicodeError) else type(exc).__name__
+		print(FAILURE + message, file=sys.stderr)
 		return 2

@@ -177,9 +177,10 @@ class OrchestratorDraftTest(DraftCase):
 
 	def test_provider_failure_does_not_retry_or_write_and_existing_output_survives(self):
 		with mock.patch.object(draft.providers, "call", side_effect=ProviderError("exit", "합성 실패")) as call, \
-				contextlib.redirect_stderr(io.StringIO()):
+				contextlib.redirect_stderr(io.StringIO()) as errors:
 			self.assertEqual(draft.main(["--role", "backend", "--text-file", str(self.text), "--out", str(self.out)]), 2)
 		call.assert_called_once()
+		self.assertEqual(errors.getvalue().strip(), draft.FAILURE + "AI 호출 실패(exit). 요금제 한도·로그인·네트워크를 확인하세요")
 		self.assertFalse(self.out.exists())
 		self.out.write_text("보존할 합성 파일")
 		self.assertEqual(self.generate()[0], 2)

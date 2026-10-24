@@ -13,12 +13,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from orchestrator.draft import ROLES, read_draft, string, summary
+from collector.redact import redact
+from collector.redact_pii import redact_pii
+from orchestrator.draft import FAILURE, ROLES, read_draft, string, summary
+from vaultfilter.public import Rules
 
 from .common import action_id, identifier, normal, regular, stamp, unavailable
 
 ACTIONS = ("dev_draft", "dev_redraft", "dev_run", "dev_discard")
 STATUSES = ("초안", "실행 시작", "버림")
+
+
+def reason(stderr: str) -> str:
+	"""초안 명령이 남긴 거부 이유 한 줄만 고른다. 다른 출력에는 사용자 글·AI 출력이 섞일 수 있어 쓰지 않는다."""
+	lines = stderr.strip().splitlines()
+	if not lines or not lines[-1].startswith(FAILURE):
+		return ""
+	value = redact_pii(redact(lines[-1][len(FAILURE):].strip()))[:200]
+	try:
+		return "" if Rules().kinds(value) else value
+	except ValueError:
+		return ""
 
 
 def directory(root: Path, relative: str) -> Path:
@@ -128,7 +143,7 @@ def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path
 		completed = subprocess.run(argv, cwd=repo, env={**os.environ, "AI_HUB_HOME": str(root), "PYTHONPATH": str(repo)},
 			stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=600, shell=False)
 	if completed.returncode != 0:
-		raise RuntimeError("초안 명령이 실패했습니다")
+		raise RuntimeError(reason(completed.stderr))
 	data = read_draft(private(path, root))
 	value = json.loads(completed.stdout)
 	plan = identifier(value["plan"])
@@ -186,8 +201,8 @@ def execute(root: Path, action: str, identity: str, text: str | None, audit, rep
 				message = "초안을 버림으로 표시했습니다. 파일은 남아 있습니다."
 	except subprocess.TimeoutExpired:
 		status, code, message = 504, 124, "초안 작성 시간이 제한을 넘었습니다. 상태를 다시 확인하세요."
-	except RuntimeError:
-		status, code, message = 500, 2, "초안 작성이 실패했습니다. 사용자 글·요금제 설정을 확인하세요."
+	except RuntimeError as exc:
+		status, code, message = 500, 2, "초안 작성이 실패했습니다. " + (f"이유: {exc}" if str(exc) else "사용자 글·요금제 설정을 확인하세요.")
 	except (OSError, ValueError, TypeError, KeyError, RecursionError):
 		status, code, message = 409, 2, "초안·상태·실행 기록을 확인할 수 없습니다. 상태를 다시 읽어 주세요."
 	entry = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), "action": action, "id": identity,

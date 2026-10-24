@@ -119,7 +119,9 @@ class Bridge:
 					for p in meeting["participants"]:
 						text += "\n" + self.safe(meeting_prompts.ROLES[p["role"]]["name"]) + ": " + self.preview(" ".join(str(p.get("reason", "")).splitlines()), 60)
 					buttons = [[button("확정하고 회의 시작", "m|" + mid)]]
-				text += "\n[확정하고 회의 시작]을 누르면 이 명단 그대로 시작합니다(최대 30분, AI 호출 최대 14회). 명단을 바꾸려면 사무실에서 하세요"
+					text += "\n[확정하고 회의 시작]을 누르면 이 명단 그대로 시작합니다(최대 30분, AI 호출 최대 14회). 명단을 바꾸려면 사무실에서 하세요"
+				else:
+					text += "\n참석자 명단을 확인할 수 없어 시작 버튼을 달지 않았습니다. 사무실에서 확인하세요"
 			elif status in ("completed", "failed", "budget_exhausted", "questions_exhausted"):
 				text = "회의 " + mid + ": " + STATUSES[status]
 				summary = meeting.get("summary") or {}

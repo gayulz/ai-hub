@@ -361,6 +361,15 @@ class TelegramBridgeTest(BridgeCase):
 			self.assertEqual(events["meeting:m-" + "2" * 32 + ":completed"].split("\n", 1)[1],
 				"다" * 1500 + ("…\n전문은 사무실 회의 화면에서" if extra else ""))
 
+	def test_proposal_with_invalid_participants_has_no_button_and_no_start_promise(self):
+		self.bridge.sync()
+		self.proposal(roles=("backend",))  # 참석자는 2~4명이어야 한다
+		self.bridge.sync()
+		sent = self.transport.sent()[-1]
+		self.assertIn("참석자 명단을 확인할 수 없어 시작 버튼을 달지 않았습니다", sent["text"])
+		self.assertNotIn("누르면 이 명단 그대로", sent["text"])
+		self.assertNotIn("reply_markup", sent)
+
 	def test_proposal_notice_has_one_start_button_safe_participants_and_limits(self):
 		self.bridge.sync()
 		state = self.proposal()

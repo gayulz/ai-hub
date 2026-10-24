@@ -30,11 +30,11 @@
 			$('meeting-progress').setAttribute('aria-valuemax',String(max));
 			$('meeting-progress').setAttribute('aria-valuenow',String(Math.min(calls,max)));
 			$('meeting-progress-bar').style.width=Math.min(100,calls/max*100)+'%';
-			const round=row.phase==='round2'?'2':'1',spoken=new Set((row.rounds?.[round]||[]).map(p=>p.role));
+			const round=row.phase==='round2'?'2':'1',spoken=new Set((row.rounds?.[round]||[]).map(p=>p.role)),spokeFirst=new Set((row.rounds?.['1']||[]).map(p=>p.role));
 			$('meeting-dock-participants').innerHTML=(row.participants||[]).map(p=>{
 				if(typeof p==='string')p={role:p,name:bridge.state()?.meeting_roles?.find(r=>r.key===p)?.name||p};
 				const absent=(row.absent||[]).find(a=>(typeof a==='string'?a:a.role)===p.role);
-				const status=absent?'불참('+(absent.reason||'사유 확인 대기')+')':spoken.has(p.role)?'발언 완료':'대기';
+				const status=absent?'불참('+(absent.reason||'사유 확인 대기')+')':spoken.has(p.role)?'발언 완료':round==='2'&&spokeFirst.has(p.role)?'2라운드 대기':'대기';
 				return '<li>'+esc(p.name)+' · '+esc(status)+'</li>';
 			}).join('');
 			let added=false;

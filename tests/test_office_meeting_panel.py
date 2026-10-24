@@ -77,7 +77,7 @@ class OfficeMeetingPanelTest(unittest.TestCase):
 		assert($('meeting-dock-participants').textContent.includes('백엔드 · 발언 완료'));assert($('meeting-dock-participants').textContent.includes('QA · 대기'));assert($('meeting-dock-participants').textContent.includes('디자인 · 불참(시간 초과)'));
 		assert.equal(Array.from($('meeting-dock-title').textContent).length,30);assert($('meeting-dock-content').textContent.includes('닫아도 회의는 서버에서 계속 진행'));
 		const first=$('meeting-log-1').children[0];detail.rounds['1'].push({role:'qa',name:'QA',text:'합성 두 번째 발언'});detail.rounds['2'].push({role:'backend',name:'백엔드',text:'동의: 합성 동의\n보완: 합성 보완'});detail.phase='round2';
-		await advance(3000);assert.strictEqual($('meeting-log-1').children[0],first);assert.equal($('meeting-log-1').children.length,2);assert($('meeting-log-2').textContent.includes('합성 보완'));assert.equal($('meeting-logs').scrollTop,$('meeting-logs').scrollHeight);
+		await advance(3000);assert($('meeting-dock-participants').textContent.includes('백엔드 · 발언 완료'));assert($('meeting-dock-participants').textContent.includes('QA · 2라운드 대기'));assert.strictEqual($('meeting-log-1').children[0],first);assert.equal($('meeting-log-1').children.length,2);assert($('meeting-log-2').textContent.includes('합성 보완'));assert.equal($('meeting-logs').scrollTop,$('meeting-logs').scrollHeight);
 		detail.status='completed';detail.summary=summary();detail.summary.conclusion.push('<script>합성 결론</script>');await advance(3000);
 		for(const text of ['결론','할 일','열린 질문','결정 후보','합성 할 일 둘'])assert($('meeting-result').textContent.includes(text));assert.equal($('meeting-result').querySelectorAll('script').length,0);assert(!$('meeting-to-dev').hidden);
 		panel.close();state.questions.items=[];

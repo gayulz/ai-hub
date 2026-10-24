@@ -224,6 +224,8 @@ class HubBackupTest(HubBackupCase):
 		allowed = self.write("ai-hub", "archive/allowed.txt")
 		self.write("ai-hub", "keys/other.agekey")
 		self.write("ai-hub", "unselected.txt")
+		self.write("ai-hub", "index/segments_1")  # 검색 색인은 다시 만들 수 있고 회사 노트 조각이 들 수 있어 백업하지 않는다
+		self.write("ai-hub", "search/eval-candidates.jsonl")
 		self.write("codex", "memories/acme.md")
 		linked = self.root / "outside"
 		linked.mkdir()

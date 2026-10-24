@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from collector.config import home
+from orchestrator.chat_record import identity as chat_identity
 from orchestrator.meeting_record import directory, identity
 from orchestrator.question_cards import identifier
 from .telegram_client import BOT_SECRET
@@ -41,9 +42,13 @@ def checked(value):
 			raise ValueError("알림 키 형식 오류")
 	now, rows = datetime.now().astimezone(), []
 	for key, card in value["cards"].items():
-		if not CARD.fullmatch(key) or not isinstance(card, dict) or set(card) != {"meeting", "questions", "pending", "submit_message", "created"}:
+		keys = {"meeting", "questions", "pending", "submit_message", "created"}
+		if not CARD.fullmatch(key) or not isinstance(card, dict) or set(card) not in (keys, keys | {"kind"}):
 			raise ValueError("카드 상태 형식 오류")
-		identity(card["meeting"])
+		kind = card.get("kind", "meeting")
+		if kind not in ("meeting", "chat"):
+			raise ValueError("카드 종류 형식 오류")
+		(chat_identity if kind == "chat" else identity)(card["meeting"])
 		if not isinstance(card["questions"], dict) or not isinstance(card["pending"], dict) or len(card["questions"]) > 3:
 			raise ValueError("질문 상태 형식 오류")
 		for qid, mid in card["questions"].items():

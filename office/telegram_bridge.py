@@ -27,6 +27,7 @@ from vaultfilter.public import Rules
 from .agents import read_runs
 from . import telegram_ask
 from .telegram_client import Client, TelegramError, configuration
+from .telegram_chat import Chat, DEADLINE
 from .telegram_state import CARD, Store, message_id
 
 STATUSES = {"participants_pending": "참석자 확인 대기", "questions_pending": "질문 답변 대기",
@@ -48,6 +49,7 @@ class Bridge:
 	def __init__(self, client, *, engine=None, records=None, state=None):
 		self.client, self.engine = client, engine or Engine()
 		self.records, self.state = records or Meetings(), state or Store()
+		self.chats = Chat(self)
 		self.root = home()
 		self.stop = threading.Event()
 		self.health = {"status": client.status, "last_poll": None}
@@ -67,15 +69,19 @@ class Bridge:
 			raise TelegramError("ResponseError")
 		return result["message_id"]
 
-	def question(self, card, number):
+	def question(self, card, number, local=None):
 		q = card["questions"][number - 1]
 		lines, buttons = [q["text"]], []
+		if local and local.get("kind") == "chat" and number == 1:
+			lines.insert(0, self.chats.heading(local))
 		for index, option in enumerate(q["options"], 1):
 			lines.append(option["label"] + (" (추천)" if option["id"] == q["recommended"] else "") + ": " + option["difference"])
 			buttons.append([button(self.safe(option["label"]), f'a|{card["id"]}|{number}|{index}')])
 		lines.append("추천 이유: " + q["reason"])
 		if q["allow_delegate"]:
 			buttons.append([button("알아서 정해 줘", f'a|{card["id"]}|{number}|d')])
+		if local and local.get("kind") == "chat":
+			lines.append("직접 답하려면 이 질문 메시지에 답장하세요")
 		return "\n".join(lines), buttons
 
 	def ready(self, card, local):
@@ -172,6 +178,7 @@ class Bridge:
 				elif local and meeting["status"] == "answers_pending" and card["status"] == "answered" and self.telegram(card):
 					if local["submit_message"] is None:
 						self.summary(card, local)
+			self.chats.sync(state)
 
 	@staticmethod
 	def telegram(card):
@@ -181,16 +188,21 @@ class Bridge:
 		return "이미 답했습니다(" + ("텔레그램에서" if self.telegram(card) else "사무실·명령줄에서") + ")"
 
 	def current(self, local, card_id):
-		meeting = self.records.read(local["meeting"])
+		records = self.chats.records if local.get("kind") == "chat" else self.records
+		meeting = records.read(local["meeting"])
 		card = next((c for c in meeting["cards"] if c["id"] == card_id), None) if meeting else None
 		return meeting, card
+
+	def active(self, meeting, card_id, local, status):
+		return (meeting["status"] == ("idle" if local.get("kind") == "chat" else status)
+			and meeting["cards"][-1]["id"] == card_id)
 
 	def choose(self, card, local, number, kind, value, label):
 		q = card["questions"][number - 1]
 		answer = {"kind": kind, "value": value}
 		changed = local["pending"].get(q["id"]) != answer
 		local["pending"][q["id"]] = answer
-		text, buttons = self.question(card, number)
+		text, buttons = self.question(card, number, local)
 		selected = "\n\n선택됨: " + self.safe(label)
 		if changed:
 			result = self.client.edit_message(local["questions"][q["id"]], self.safe(text) + selected, buttons)
@@ -202,7 +214,8 @@ class Bridge:
 			return "모든 질문에 답해 주세요"
 		answers = [{"question_id": q["id"], **local["pending"][q["id"]]} for q in card["questions"]]
 		try:
-			result = self.engine.answer(local["meeting"], card["id"], answers, source="telegram")
+			engine = self.chats.engine if local.get("kind") == "chat" else self.engine
+			result = engine.answer(local["meeting"], card["id"], answers, source="telegram")
 		except Exception as exc:
 			_, latest = self.current(local, card["id"])
 			if latest and latest["status"] != "waiting":
@@ -252,17 +265,17 @@ class Bridge:
 			return "카드를 확인할 수 없습니다"
 		mid = callback["message"].get("message_id")
 		if action == "c" and len(parts) == 2 and card["status"] == "answered" and self.telegram(card):
-			if meeting["status"] != "answers_pending" or meeting["cards"][-1]["id"] != card_id or mid != local["submit_message"]:
+			if not self.active(meeting, card_id, local, "answers_pending") or mid != local["submit_message"]:
 				return "현재 요약의 확인 버튼을 눌러 주세요"
 			job = (local["meeting"], card_id)
 			with self._jobs_lock:
 				if job not in self._queued:
 					self._queued.add(job)
-					self._queue.append(("resume", job, None))
-			return "확인했습니다. 회의를 이어갑니다"
+					self._queue.append(("chat_confirm" if local.get("kind") == "chat" else "resume", job, None))
+			return "확인했습니다. 대화를 이어갑니다" if local.get("kind") == "chat" else "확인했습니다. 회의를 이어갑니다"
 		if card["status"] != "waiting":
 			return self.already(card)
-		if meeting["status"] != "questions_pending" or meeting["cards"][-1]["id"] != card_id:
+		if not self.active(meeting, card_id, local, "questions_pending"):
 			return "현재 답변 대기 카드가 아닙니다"
 		if action == "a" and len(parts) == 4 and parts[2] in ("1", "2", "3"):
 			number = int(parts[2])
@@ -287,7 +300,7 @@ class Bridge:
 			local["pending"], local["submit_message"] = {}, None
 			self.client.edit_message(mid, "다시 골라 주세요")
 			for number, q in enumerate(card["questions"], 1):
-				text, buttons = self.question(card, number)
+				text, buttons = self.question(card, number, local)
 				result = self.client.edit_message(local["questions"][q["id"]], self.safe(text), buttons)
 				local["questions"][q["id"]] = result["message_id"]
 			return "다시 골라 주세요"
@@ -311,7 +324,7 @@ class Bridge:
 			if card["status"] != "waiting":
 				self.send(self.already(card))
 				return
-			if meeting["status"] != "questions_pending" or meeting["cards"][-1]["id"] != card_id:
+			if not self.active(meeting, card_id, local, "questions_pending"):
 				return
 			try:
 				if self.client.sensitive(value):
@@ -358,8 +371,10 @@ class Bridge:
 			if queued:
 				kind, job, roles = queued
 				mid, cid = job
-				meeting = self.records.read(mid)
-				if kind == "start":
+				meeting = self.records.read(mid) if kind != "chat_confirm" else None
+				if kind == "chat_confirm":
+					valid, arguments, failed = self.chats.prepare(job)
+				elif kind == "start":
 					valid = self.participants(meeting) == roles
 					arguments = ["start", mid, "--participants", *roles, "--source", "telegram"]
 					failed = "회의 시작: 실행하지 못했습니다. 사무실에서 시작하세요"
@@ -371,11 +386,11 @@ class Bridge:
 				if not valid:
 					with self._jobs_lock:
 						self._queued.discard(job)
-					if kind == "start":
+					if kind in ("start", "chat_confirm"):
 						self.send(failed)
 					return
 				try:
-					process = subprocess.Popen([sys.executable, "-m", "orchestrator", "meeting", *arguments], shell=False,
+					process = subprocess.Popen([sys.executable, "-m", "orchestrator", "chat" if kind == "chat_confirm" else "meeting", *arguments], shell=False,
 						stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 						cwd=Path(__file__).resolve().parents[1], env={**os.environ, "AI_HUB_HOME": str(self.root)})
 				except Exception:
@@ -383,7 +398,8 @@ class Bridge:
 						self._queued.discard(job)
 					self.send(failed)
 				else:
-					self._job = {"process": process, "key": job, "deadline": time.monotonic() + 2100, "timeout": False}
+					self._job = {"process": process, "key": job, "kind": kind,
+						"deadline": time.monotonic() + (DEADLINE if kind == "chat_confirm" else 2100), "timeout": False}
 		if self._job:
 			job, process = self._job, self._job["process"]
 			if process.poll() is None:
@@ -392,9 +408,12 @@ class Bridge:
 				process.kill()
 				process.wait(timeout=1)
 				job["timeout"] = True
-			meeting = self.records.read(job["key"][0])
-			status = "시간 초과" if job["timeout"] else STATUSES.get(meeting["status"] if meeting else "", "확인 불가")
-			self.send("회의 " + job["key"][0] + ": " + status)
+			if job["kind"] == "chat_confirm":
+				self.send(self.chats.finished(job))
+			else:
+				meeting = self.records.read(job["key"][0])
+				status = "시간 초과" if job["timeout"] else STATUSES.get(meeting["status"] if meeting else "", "확인 불가")
+				self.send("회의 " + job["key"][0] + ": " + status)
 			with self._jobs_lock:
 				self._queued.discard(job["key"])
 			self._job = None

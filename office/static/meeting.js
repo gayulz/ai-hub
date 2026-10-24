@@ -29,7 +29,8 @@
 			point=anchor?.x!==undefined?anchor:{x:anchor?.getBoundingClientRect().left||12,y:anchor?.getBoundingClientRect().bottom||12};
 			const reason=unavailable();
 			$('meeting-unavailable').textContent=reason;$('meeting-request').disabled=!!reason;
-			$('meeting-recent').innerHTML=meetings().slice(0,5).map(row=>'<button class="row meeting-recent" data-meeting-id="'+esc(row.id)+'"'+(reason?' disabled':'')+'><span>'+esc(Array.from(row.agenda||'회의').slice(0,40).join(''))+'</span><small>'+esc(statuses[row.status]||'확인 불가')+'</small></button>').join('')||'<p class="muted">최근 회의가 없습니다.</p>';
+			const unreadable=!state()?.meetings||state().meetings.status==='확인 불가';
+			$('meeting-recent').innerHTML=meetings().slice(0,5).map(row=>'<button class="row meeting-recent" data-meeting-id="'+esc(row.id)+'"'+(unreadable||reason&&['participants_pending','questions_pending','answers_pending'].includes(row.status)?' disabled':'')+'><span>'+esc(Array.from(row.agenda||'회의').slice(0,40).join(''))+'</span><small>'+esc(statuses[row.status]||'확인 불가')+'</small></button>').join('')||'<p class="muted">최근 회의가 없습니다.</p>';
 			popover.hidden=false;positionPopover();$('meeting-popover-close').focus();
 		}
 		function hideDialog(){
@@ -140,7 +141,7 @@
 			body.querySelectorAll('[data-participant]').forEach(button=>{
 				const on=selected.has(button.dataset.participant);button.setAttribute('aria-pressed',String(on));button.querySelector('small').textContent=on?'참석':'제외';
 			});
-			const proposed=proposals.get(meeting.id)?.participants||meeting.participants||[];
+			const proposed=proposals.get(meeting.id)?.participants||Object.entries(meeting.participant_reasons||{}).map(([role,reason])=>({role,reason}));
 			const reasons=proposed.filter(p=>selected.has(p.role||p.key)&&p.reason);
 			$('meeting-reasons').innerHTML=reasons.length?reasons.map(p=>'<p title="'+esc(p.reason)+'">'+esc((state()?.meeting_roles||[]).find(r=>r.key===(p.role||p.key))?.name||p.role)+': '+esc(p.reason)+'</p>').join(''):'<p class="meeting-summary">'+esc(meeting.summary||proposals.get(meeting.id)?.cards?.map(c=>c.summary).filter(Boolean).join('\n')||'안건 분석 요약을 현재 상태에서 확인할 수 없습니다.')+'</p>';
 			controls();
@@ -151,7 +152,7 @@
 			selected=new Set(proposed.map(p=>typeof p==='string'?p:p.role||p.key).filter(key=>roles.some(r=>r.key===key)));
 			body.innerHTML='<p class="intro">'+esc(row.agenda||'회의 참석자를 확인해 주세요.')+'</p><div class="meeting-chips">'+roles.map(r=>'<button class="meeting-chip" data-participant="'+esc(r.key)+'" aria-pressed="false"><canvas width="36" height="56" data-role-avatar="'+esc(r.key)+'" aria-hidden="true" hidden></canvas><span class="meeting-initial" aria-hidden="true">'+esc(Array.from(r.name)[0]||'')+'</span><span>'+esc(r.name)+'</span><small></small></button>').join('')+'</div><div id="meeting-reasons" class="meeting-reasons"></div><p id="meeting-participant-hint" class="muted" role="status"></p>';
 			submit.textContent='확정하고 회의 시작';submit.onclick=()=>{
-				controls();return send({action:'meeting_start',id:meeting.id,participants:[...selected]},'회의 시작 중',async()=>{hideDialog();bridge.toast('회의를 시작했습니다');await bridge.refresh()});
+				controls();const id=meeting.id;return send({action:'meeting_start',id,participants:[...selected]},'회의 시작 중',async()=>{hideDialog();bridge.toast('회의를 시작했습니다');await window.officeMeetingPanel?.open(id);await bridge.refresh()});
 			};
 			updateParticipants();drawAvatars(roles);
 		}
@@ -165,7 +166,8 @@
 			}else if(row.status==='participants_pending')showParticipants(row);
 			else{
 				closePopover(false);if(dialog.open)hideDialog();
-				bridge.openPanel('회의','<p class="intro">'+esc(statuses[row.status]||'확인 불가')+'</p>');
+				if(window.officeMeetingPanel)window.officeMeetingPanel.open(row.id);
+				else bridge.openPanel('회의','<p class="intro">'+esc(statuses[row.status]||'확인 불가')+'</p>');
 			}
 		}
 		window.officeMeeting={
@@ -179,7 +181,7 @@
 			else if(button.dataset.participant){const key=button.dataset.participant;if(selected.has(key))selected.delete(key);else selected.add(key);updateParticipants()}
 		};
 		body.oninput=e=>{if(e.target.dataset.questionText!==undefined)answerText(e.target);else controls()};
-		$('meeting-recent').onclick=e=>{const b=e.target.closest('[data-meeting-id]');if(b&&!b.disabled&&!unavailable()&&!otherDialog())openMeeting({id:b.dataset.meetingId})};
+		$('meeting-recent').onclick=e=>{const b=e.target.closest('[data-meeting-id]');if(b&&!b.disabled&&!otherDialog())openMeeting({id:b.dataset.meetingId})};
 		$('meeting-request').onclick=openRequest;$('meeting-close').onclick=closeDialog;$('meeting-popover-close').onclick=()=>closePopover();
 		dialog.addEventListener('cancel',e=>{e.preventDefault();closeDialog()});
 		document.addEventListener('office-meeting-room',e=>openPopover(e.detail));

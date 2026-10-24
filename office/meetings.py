@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from collector.config import ConfigError
+from collector.config import ConfigError, home
 from collector.redact import MASK, redact
 from collector.redact_pii import redact_pii
 from orchestrator import meeting_prompts, meeting_record, question_cards, targets
@@ -47,6 +47,10 @@ class Conflict(ValueError):
 
 
 class CommandFailed(RuntimeError):
+	pass
+
+
+class MissingMeeting(LookupError):
 	pass
 
 
@@ -311,7 +315,8 @@ def read_state(root: Path) -> dict:
 				try:
 					row = {key: state[key] for key in ("id", "status", "created", "active_seconds")}
 					row.update(agenda=masked(state["agenda"], rules)[:60], target=masked(state["target"], rules),
-						participants=[p["role"] for p in state["participants"] if p["role"] in meeting_prompts.ROLES], calls=len(state["calls"]))
+						participants=[p["role"] for p in state["participants"] if p["role"] in meeting_prompts.ROLES],
+						participant_reasons=participant_reasons(state, rules), calls=len(state["calls"]))
 					if "absent" in state:
 						row["absent"] = [p["role"] if isinstance(p, dict) else p for p in state["absent"]
 							if (p.get("role") if isinstance(p, dict) else p) in meeting_prompts.ROLES]
@@ -334,3 +339,61 @@ def read_state(root: Path) -> dict:
 		broken = True
 	group = unavailable("일부 회의 기록을 확인할 수 없습니다") if broken else normal()
 	return {"meetings": {**group, "items": items[:20]}, "questions": {**group, "items": questions}, "meeting_roles": roles}
+
+
+def participant_reasons(state: dict, rules: Rules) -> dict:
+	from .telegram_bridge import PATH
+	return {p["role"]: " ".join(PATH.sub("[경로 생략]", masked(p["reason"], rules)).split())[:120] for p in state.get("participants", [])
+		if p["role"] in meeting_prompts.ROLES and p.get("reason")}
+
+
+def detail(identity: str) -> dict:
+	"""쓰기용 잠금·복구를 거치지 않고 공개 가능한 칸만 투영한다."""
+	from orchestrator.meeting import MAX_CALLS, MAX_SECONDS
+	from .telegram_bridge import PATH
+	meeting_record.identity(identity)
+	try:
+		root_fd = meeting_record.directory(home() / "meetings")
+		try:
+			folder_fd = os.open(identity, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+		finally:
+			os.close(root_fd)
+	except FileNotFoundError:
+		raise MissingMeeting from None
+	try:
+		try:
+			updated = datetime.fromtimestamp(os.stat("meeting.json", dir_fd=folder_fd, follow_symlinks=False).st_mtime).astimezone().isoformat(timespec="seconds")
+		except FileNotFoundError:
+			raise ValueError("회의 상태 파일을 읽지 못했습니다") from None
+	finally:
+		os.close(folder_fd)
+	state = meeting_record.Store().read(identity)
+	if state is None:
+		raise ValueError("회의 상태를 읽지 못했습니다")
+	rules = Rules()
+	def clean(value):
+		return PATH.sub("[경로 생략]", masked(value, rules))
+	def line(value, limit=300):
+		return " ".join(clean(value).split())[:limit]
+	def person(role):
+		return {"role": clean(role), "name": clean(meeting_prompts.ROLES[role]["name"])}
+	if state["phase"] not in ("analysis", "round1", "round2", "summary", "done"):
+		raise ValueError("회의 단계 형식 오류")
+	rounds = {"1": [], "2": []}
+	for number in rounds:
+		for row in state["rounds"][number]:
+			text = line(row["method"]) if number == "1" else "\n".join(
+				line(label + ": " + " · ".join(item["text"] for item in row[key]))
+				for key, label in (("agree", "동의"), ("disagree", "반대"), ("supplement", "보완")) if row[key])
+			rounds[number].append({**person(row["role"]), "text": text})
+	summary = state["summary"]
+	return {"id": clean(identity), "status": clean(state["status"]), "phase": clean(state["phase"]),
+		"agenda": clean(state["agenda"]), "target": clean(state["target"]),
+		"participants": [{**person(p["role"]), "reason": clean(p.get("reason", ""))} for p in state["participants"]],
+		"absent": [{**person(p["role"]), "phase": clean(p["phase"]), "reason": line(p["reason"])} for p in state["absent"]],
+		"rounds": rounds, "summary": None if summary is None else {
+			key: [clean(item["text"]) for item in summary[source]]
+			for key, source in (("conclusion", "conclusion"), ("todo", "todos"), ("open_questions", "open_questions"), ("decisions", "decisions"))},
+		"calls": len(state["calls"]), "calls_max": MAX_CALLS, "active_seconds": state["active_seconds"],
+		"seconds_max": MAX_SECONDS, "failure": clean("회의를 마치지 못했습니다. 상태를 확인해 주세요." if state["failure"] else ""),
+		"updated": clean(updated)}

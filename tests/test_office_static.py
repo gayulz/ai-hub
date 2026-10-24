@@ -81,7 +81,7 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	if(bubbleMode)state.people=state.people.map(p=>({...p,status:p.id===1?'오류':[0,5,8,9,10,11,12,15].includes(p.id)?'작업 중':p.id===3?'쉬는 중':p.id===4?'확인 불가':'대기',
 		task:p.id===0?longTask:p.id===1?shortTask:p.id===5?'':'숨길 합성 작업 '+p.id}));
 	await vm.runInContext(fs.readFileSync(root+'/office.js','utf8'),sandbox);
-	assert.deepEqual(Object.keys(sandbox.window.officeBridge).sort(),['esc','openPanel','people','refresh','state','toast','token']);
+	assert.deepEqual(Object.keys(sandbox.window.officeBridge).sort(),['actors','chairs','esc','openDevWith','openPanel','people','reducedMotion','refresh','routeFrom','state','tickHook','toast','token','walkable']);
 	assert.equal(sandbox.window.officeBridge.state().updated,state.updated);
 	assert.equal(sandbox.window.officeBridge.token(),sessionOK?'xyz-session':null);
 	assert.deepEqual(sandbox.window.officeBridge.people(),scene.people);

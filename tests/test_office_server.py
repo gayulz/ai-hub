@@ -49,7 +49,8 @@ class OfficeServerTest(OfficeCase):
 		self.assertIn("connect-src 'self'", headers["Content-Security-Policy"])
 		self.assertIn(b'/office.js', body)
 		self.assertEqual(self.request("/office.js")[0], 200)
-		for path, kind in (("/pixel-art.js", "text/javascript"), ("/meeting.js", "text/javascript"), ("/office.css", "text/css"), ("/scene.json", "application/json")):
+		for path, kind in (("/pixel-art.js", "text/javascript"), ("/meeting.js", "text/javascript"),
+				("/meeting_panel.js", "text/javascript"), ("/meeting_scene.js", "text/javascript"), ("/office.css", "text/css"), ("/scene.json", "application/json")):
 			status, headers, _ = self.request(path)
 			self.assertEqual(status, 200)
 			self.assertIn(kind, headers["Content-Type"])

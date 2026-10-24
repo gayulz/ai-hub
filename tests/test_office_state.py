@@ -33,6 +33,7 @@ class OfficeStateTest(OfficeCase):
 			state = self.state()
 		self.assertEqual(state["meetings"]["status"], "정상")
 		self.assertEqual(len(state["meetings"]["items"]), 1)
+		self.assertEqual(state["meetings"]["items"][0]["participant_reasons"], {"backend": "합성 서버 검토", "qa": "합성 시험 검토"})
 		self.assertEqual(len(state["questions"]["items"]), 1)
 		self.assertEqual(state["meeting_roles"], [{"key": "qa", "name": "QA"}])
 		self.assertEqual(state["approvals"]["questions"], {"status": "정상", "count": 1})

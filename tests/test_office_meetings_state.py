@@ -41,7 +41,8 @@ class OfficeMeetingsStateTest(MeetingCase):
 		items = value["meetings"]["items"]
 		self.assertEqual(len(items), 20)
 		self.assertEqual([item["id"] for item in items], ["m-" + format(n, "032x") for n in range(24, 4, -1)])
-		self.assertEqual(set(items[0]), {"id", "status", "agenda", "target", "participants", "absent", "created", "active_seconds", "calls"})
+		self.assertEqual(set(items[0]), {"id", "status", "agenda", "target", "participants", "participant_reasons", "absent", "created", "active_seconds", "calls"})
+		self.assertEqual(items[0]["participant_reasons"], {"backend": "합성 서버 검토", "qa": "합성 시험 검토"})
 		self.assertEqual(items[0]["participants"], ["backend", "qa"])
 		self.assertEqual(items[0]["absent"], ["qa"])
 		self.assertEqual((items[0]["calls"], items[0]["active_seconds"]), (1, 90.5))
@@ -68,6 +69,19 @@ class OfficeMeetingsStateTest(MeetingCase):
 		for raw in ("acme", "xyz", "ghp_", "@", "/home/", "private"):
 			self.assertNotIn(raw, encoded)
 		self.assertIn("[보안값]", encoded)
+
+	def test_participant_reasons_are_optional_masked_single_lines_and_limited(self):
+		state = meeting_state("participants_pending")
+		state["participants"][0]["reason"] = "검토 /acme/private " + "p01" + "@" + "acme.invalid\n" + "가" * 150
+		state["participants"][1].pop("reason")
+		write_meeting(self.hub, state)
+		reasons = meetings.read_state(self.hub)["meetings"]["items"][0]["participant_reasons"]
+		self.assertEqual(set(reasons), {"backend"})
+		self.assertEqual(len(reasons["backend"]), 120)
+		self.assertNotRegex(reasons["backend"], r"private|@|\n")
+		state["participants"] = [{"role": "backend"}, {"role": "qa", "reason": ""}]
+		write_meeting(self.hub, state)
+		self.assertEqual(meetings.read_state(self.hub)["meetings"]["items"][0]["participant_reasons"], {})
 
 	def test_only_current_waiting_cards_are_exported(self):
 		for n, (status, card_status) in enumerate((("participants_pending", "waiting"), ("questions_pending", "waiting"),

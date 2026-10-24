@@ -218,3 +218,22 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .meeting-reasons p:not(.meeting-summary){margin:6px 0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .meeting-summary{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:600px){.meeting-dialog{padding:18px}.meeting-chips{gap:8px}.meeting-chip{padding:6px 10px}}
+.meeting-dock{position:fixed;z-index:6;left:16px;right:344px;bottom:104px;border:1px solid var(--line);border-radius:16px;background:var(--paper);color:var(--ink);overflow:hidden;max-height:40vh;max-height:40dvh;display:flex;flex-direction:column}
+.meeting-dock[hidden],body:has(dialog[open]) .meeting-dock,body:has(.meeting-popover:not([hidden])) .meeting-dock{display:none}
+.meeting-dock[data-expanded=true]{height:40vh;height:40dvh}
+.meeting-dock-head{display:flex;align-items:center;gap:8px;min-height:72px;padding:8px 12px;flex:none}
+.meeting-dock-heading{min-width:0;flex:1}
+.meeting-dock-heading h2{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meeting-dock-heading p{font-size:12px;color:var(--muted);margin:3px 0}
+.meeting-dock-head button{min-width:44px;min-height:44px;padding:0 8px;border:1px solid var(--line);border-radius:8px;flex:none}
+.meeting-dock-content{padding:12px 16px 16px;border-top:1px solid var(--line);overflow:auto;overscroll-behavior:contain;scroll-padding:16px;font-size:14px;line-height:1.7;overflow-wrap:anywhere}
+.meeting-dock-content[hidden]{display:none}
+.meeting-dock-participants{display:flex;flex-wrap:wrap;gap:8px 16px;list-style:none;padding:0;margin:12px 0;color:var(--muted);font-size:12px}
+.meeting-logs{max-height:18vh;overflow:auto;overscroll-behavior:contain;scroll-padding:12px}
+.meeting-logs h3,.meeting-result h3{font-size:14px;margin:12px 0 6px}
+.meeting-logs ol,.meeting-result ul{padding-left:20px}
+.meeting-logs li{white-space:pre-wrap;margin-bottom:8px}
+.meeting-dock-content>.apply-button{margin-top:12px}
+.meeting-dock button:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+@media(min-width:901px) and (max-width:1100px){.meeting-dock{right:324px}}
+@media(max-width:900px){.meeting-dock{left:8px;right:8px;bottom:max(89px,calc(80px + env(safe-area-inset-bottom)));max-height:70vh;max-height:70dvh;border-radius:16px 16px 8px 8px;z-index:8}.meeting-dock[data-expanded=true]{height:auto}.meeting-logs{max-height:28vh}.meeting-dock-head{padding:8px}.meeting-dock-heading h2{font-size:13px}}

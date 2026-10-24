@@ -154,3 +154,21 @@ body:not(.panel-open) .world{right:16px}
 
 .row code{display:block;overflow-wrap:anywhere;font-size:11px;margin-top:6px}
 .schedule div{overflow-wrap:anywhere}
+
+.approval-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.row>div{min-width:0;overflow-wrap:anywhere}
+.apply-button{flex:none;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:var(--on-accent);padding:8px 12px}
+button:disabled{opacity:.55;cursor:wait;filter:none}
+.action-dialog{width:min(480px,calc(100% - 24px));max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:24px;border:1px solid var(--line);border-radius:16px;background:var(--paper);color:var(--ink);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere}
+.action-dialog::backdrop{background:var(--ink);opacity:.45}
+.action-dialog h2{font-size:20px;margin-bottom:16px}
+#action-description{white-space:pre-line;line-height:1.8}
+#action-status{margin-top:16px;font-weight:650}
+#action-restart{margin-top:16px;font-size:12px}
+.action-dialog details{margin-top:16px}
+.action-dialog summary{cursor:pointer;min-height:44px;padding:10px 0}
+.action-dialog summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.action-dialog pre{max-height:35vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:12px;border-radius:8px;font-size:12px}
+.action-buttons{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap;margin-top:24px}
+.action-buttons .outline-button{width:auto;margin:0;min-width:88px}
+.action-buttons .apply-button{min-width:88px}

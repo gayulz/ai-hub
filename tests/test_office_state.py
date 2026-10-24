@@ -9,12 +9,75 @@ from pathlib import Path
 from unittest import mock
 
 from collector.backfill_store import Store
-from office import agents
+from office import agents, ledger
 from office.common import text
 from test_office import OfficeCase
 
 
 class OfficeStateTest(OfficeCase):
+	def test_r1_groups_only_pending_notes_without_reading_the_vault(self):
+		path = self.hub / "vaultreorg/r1-plan.json"
+		path.parent.mkdir()
+		path.write_text(json.dumps({"notes": [{"folder": "Career", "status": "pending"},
+			{"folder": "Career", "status": "pending"}, {"folder": "Career", "status": "applied"},
+			{"folder": "Study", "status": "unchanged"}, {"folder": "AI & Prompts", "status": "pending"},
+			{"folder": "root", "status": "pending"}]}))
+		before = self.snapshot()
+		group = self.state()["approvals"]["r1"]
+		self.assertEqual(group["status"], "정상")
+		self.assertEqual(group["items"], [{"id": folder, "pending": count, "reply": f"R1 {folder} 반영해"}
+			for folder, count in (("AI & Prompts", 1), ("Career", 2), ("root", 1))])
+		self.assertEqual(before, self.snapshot())
+
+	def test_missing_malformed_and_linked_r1_plan_only_disable_r1_section(self):
+		path = self.hub / "vaultreorg/r1-plan.json"
+		path.parent.mkdir()
+		cases = [None, "[", "[" * 1500, "[]", "{}", '{"notes":{}}', '{"notes":[null]}',
+			'{"notes":[{"folder":"Career","status":"xyz"}]}', '{"notes":[{"folder":"../xyz","status":"pending"}]}']
+		for value in cases:
+			with self.subTest(value=value):
+				if value is not None:
+					path.write_text(value)
+				state = self.state()
+				self.assertEqual(state["approvals"]["r1"]["status"], "확인 불가")
+				self.assertEqual(state["approvals"]["r1"]["items"], [])
+				self.assertEqual(state["approvals"]["c4"]["status"], "정상")
+				self.assertEqual(state["approvals"]["runs"]["status"], "정상")
+		path.unlink()
+		path.symlink_to(self.hub / "plans.toml")
+		self.assertEqual(self.state()["approvals"]["r1"]["status"], "확인 불가")
+
+	def test_action_activity_keeps_latest_twenty_and_skips_broken_records(self):
+		path = self.hub / "logs/office-actions.jsonl"
+		with path.open("w") as out:
+			out.write("{\n")
+			for n in range(25):
+				out.write(json.dumps({"at": (self.now + timedelta(minutes=n)).isoformat(), "action": "r1_apply",
+					"id": "Career", "message": "R1 폴더 반영을 마쳤습니다.", "output": "acme-private-material"}) + "\n")
+		activity = self.state()["activity"]
+		self.assertEqual(len(activity), 20)
+		self.assertTrue(all(row["source"] == "office-action" for row in activity))
+		self.assertNotIn("acme-private-material", json.dumps(activity))
+
+	def test_deeply_nested_action_log_does_not_hide_healthy_state(self):
+		(self.hub / "logs/office-actions.jsonl").write_text("[" * 1500 + "\n")
+		state = self.state()
+		self.assertEqual(state["approvals"]["c4"]["status"], "정상")
+		self.assertTrue(state["activity"])
+
+	def test_json_reader_recursion_errors_are_isolated_to_their_source(self):
+		plan = self.hub / "vaultreorg/r1-plan.json"
+		plan.parent.mkdir()
+		plan.write_text('{"notes":[]}')
+		(self.hub / "logs/office-actions.jsonl").write_text("{}\n")
+		for method in ("load", "loads"):
+			with self.subTest(method=method), mock.patch.object(ledger, "json", wraps=json) as reader:
+				getattr(reader, method).side_effect = RecursionError
+				state = self.state()
+				self.assertEqual(state["approvals"]["c4"]["status"], "정상")
+				self.assertEqual(state["approvals"]["runs"]["status"], "정상")
+				self.assertEqual(state["approvals"]["r1"]["status"], "확인 불가" if method == "load" else "정상")
+
 	def test_metadata_preserves_dates_and_counts_but_omits_absolute_paths(self):
 		self.assertEqual(text("10/23 xyz 7/17건"), "10/23 xyz 7/17건")
 		self.assertEqual(text("xyz /acme/xyz"), "xyz [경로 생략]")

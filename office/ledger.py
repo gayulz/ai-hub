@@ -5,15 +5,54 @@ from __future__ import annotations
 import sqlite3
 import shutil
 import tempfile
+import json
+from collections import Counter, deque
 from datetime import date
 from pathlib import Path
 
 from collector.backfill_store import Store
 from collector.config import ConfigError
 
-from .common import identifier, normal, regular, stamp, text, unavailable
+from .common import action_id, identifier, normal, regular, stamp, text, unavailable
 
 PARTS = ("progress", "batches", "active", "usage", "calls", "followups", "records")
+
+
+def read_r1(root: Path) -> dict:
+	try:
+		with regular(root / "vaultreorg/r1-plan.json", root).open(encoding="utf-8") as source:
+			data = json.load(source)
+		if not isinstance(data, dict) or not isinstance(data.get("notes"), list):
+			raise ValueError
+		counts = Counter()
+		for note in data["notes"]:
+			folder = action_id("r1_apply", note["folder"])
+			if note["status"] not in ("pending", "unchanged", "failed", "skipped", "applied"):
+				raise ValueError
+			if note["status"] == "pending":
+				counts[folder] += 1
+		return normal(items=[{"id": folder, "pending": count, "reply": f"R1 {folder} 반영해"}
+			for folder, count in sorted(counts.items())])
+	except (OSError, ValueError, TypeError, KeyError, RecursionError):
+		return unavailable("R1 계획이 없거나 형식이 잘못됐습니다", items=[])
+
+
+def read_action_activity(root: Path) -> list[dict]:
+	try:
+		with regular(root / "logs/office-actions.jsonl", root).open(encoding="utf-8") as source:
+			lines = deque(source, maxlen=20)
+	except (OSError, ValueError):
+		return []
+	items = []
+	for line in lines:
+		try:
+			row = json.loads(line)
+			identity = action_id(row["action"], row["id"])
+			items.append({"at": stamp(row["at"]), "source": "office-action",
+				"text": text(identity + " · " + row["message"])})
+		except (ValueError, TypeError, KeyError, RecursionError):
+			continue
+	return items
 
 
 def read_ledger(root: Path, day: str) -> dict:

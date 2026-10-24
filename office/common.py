@@ -4,10 +4,32 @@ from __future__ import annotations
 
 import re
 import tomllib
-from datetime import datetime
+import unicodedata
+from datetime import date, datetime
 from pathlib import Path
 
 from collector.redact import redact
+
+
+def action_id(action: str, value) -> str:
+	if not isinstance(value, str) or not value:
+		raise ValueError("식별자 형식 오류")
+	if action == "c4_apply":
+		valid = re.fullmatch(r"c4-[a-fA-F0-9]{16}", value)
+	elif action == "run_apply":
+		valid = re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{3}", value)
+		if valid:
+			date.fromisoformat(value[:10])
+	elif action == "r1_apply":
+		valid = (value not in (".", "..") and value == value.strip()
+			and not any(c in value for c in ("/", "\\", ".."))
+			and not any(unicodedata.category(c).startswith("C") or c in "\u2028\u2029" for c in value)
+			and unicodedata.category(value[0])[0] not in "SMZ")
+	else:
+		raise ValueError("허용하지 않는 동작")
+	if not valid:
+		raise ValueError("식별자 형식 오류")
+	return value
 
 
 def unavailable(reason: str, **values) -> dict:

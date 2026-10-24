@@ -15,7 +15,7 @@ from test_office import OfficeCase
 class OfficeServerTest(OfficeCase):
 	def setUp(self):
 		super().setUp()
-		self.httpd = SimpleNamespace(server_port=8790)
+		self.httpd = SimpleNamespace(server_port=8790, office_token=server.secrets.token_urlsafe(32))
 
 	def raw_request(self, raw, method="GET"):
 		class MemorySocket:
@@ -90,11 +90,15 @@ class OfficeServerTest(OfficeCase):
 			self.assertNotIn(value, html + js)
 		self.assertIn("setInterval(loadState,10000)", js)
 		self.assertIn("fetch('/api/state'", js)
-		self.assertIn('보기 전용', js)
+		self.assertIn('반영 전에 변경 내용을 확인합니다.', js)
 		self.assertNotIn('navigator.clipboard', js)
 		self.assertNotIn('https://', html + js)
 		self.assertNotIn('http://', html + js)
-		self.assertNotIn('method:', js)
+		self.assertIn("method:'POST'", js)
+		self.assertIn("fetch('/api/action'", js)
+		self.assertIn("fetch('/api/session'", js)
+		for value in ('alert(', 'confirm(', 'localStorage', 'sessionStorage'):
+			self.assertNotIn(value, js)
 		for path in [*Path("office").glob("*.py"), *server.STATIC.iterdir()]:
 			self.assertLessEqual(len(path.read_text().splitlines()), 500)
 

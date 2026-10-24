@@ -11,7 +11,7 @@ from collector.config import home
 from . import agents, roles
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
-from .ledger import read_ledger
+from .ledger import read_action_activity, read_ledger, read_r1
 from .schedule import build_schedule
 
 
@@ -113,7 +113,7 @@ def build_state(now: datetime | None = None) -> dict:
 		for item in runs["items"] if item["status"] == "승인 필요"]
 	run_errors = runs["status"] == "확인 불가" or any(item["status"] == "확인 불가" for item in runs["items"])
 	run_group = unavailable("일부 실행의 반영 대기를 확인할 수 없습니다", items=approvals) if run_errors else normal(items=approvals)
-	activity = runs["activity"] + [{"at": item["log"]["at"], "text": item["name"] + " · " + item["log"]["last_line"],
+	activity = runs["activity"] + read_action_activity(root) + [{"at": item["log"]["at"], "text": item["name"] + " · " + item["log"]["last_line"],
 		"source": item["id"]} for item in jobs if item["log"]["at"]]
 	activity.sort(key=lambda item: datetime.fromisoformat(item["at"]), reverse=True)
 	role_people = roles.build_people(root, user_home, now, runs, plans, ledger, jobs)
@@ -127,7 +127,7 @@ def build_state(now: datetime | None = None) -> dict:
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs,
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
-		"approvals": {"c4": ledger["batches"], "runs": run_group, "decisions": decisions["decisions"]},
+		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root), "decisions": decisions["decisions"]},
 		"board": {"items": board_items[:20], "status": "확인 불가" if runs["status"] == "확인 불가" else ledger["records"]["status"],
 			"progress": ledger["progress"], "usage": usage,
 			"schedule": {"decisions": {**decisions["schedule"], "items": decisions["schedule"]["items"][:3]}, "jobs": [{"id": item["id"], "title": item["name"],

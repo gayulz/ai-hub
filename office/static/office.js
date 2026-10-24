@@ -27,9 +27,11 @@ function tick(t){const dt=Math.min(.04,(t-last)/1000||0);last=t;player.walking=f
 let press=null,moved=false,pinchDistance=0;const pointers=new Map();map.addEventListener('pointerdown',e=>{map.focus({preventScroll:true});map.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1){press={x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY};moved=false}else{moved=true;const a=[...pointers.values()];pinchDistance=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)}});
 map.addEventListener('pointermove',e=>{const b=map.getBoundingClientRect();if(pointers.has(e.pointerId)){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2){const a=[...pointers.values()],d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);if(pinchDistance)zoomAt(S*d/pinchDistance,(a[0].x+a[1].x)/2-b.left,(a[0].y+a[1].y)/2-b.top);pinchDistance=d;return}if(press){if(Math.hypot(e.clientX-press.x,e.clientY-press.y)>6)moved=true;if(moved){camera.x-=(e.clientX-press.lastX)/S;camera.y-=(e.clientY-press.lastY)/S;fitMode=false;follow=false;clampCamera()}press.lastX=e.clientX;press.lastY=e.clientY}}else{const x=camera.x+(e.clientX-b.left)/S,y=camera.y+(e.clientY-b.top)/S;hovered=actors.find(a=>Math.abs(a.x-x)<18&&y>a.y-54&&y<a.y+7)||null;map.style.cursor=hovered?'pointer':'crosshair'}});
 map.addEventListener('pointerup',e=>{pointers.delete(e.pointerId);if(!moved&&press){const b=map.getBoundingClientRect(),x=camera.x+(e.clientX-b.left)/S,y=camera.y+(e.clientY-b.top)/S;const a=actors.find(a=>Math.abs(a.x-x)<20&&y>a.y-54&&y<a.y+9);const board=boards.find(p=>contains({...p,w:144,h:80},x,y));if(board)showMeeting();else if(a)showPerson(a.id);else{player.path=routeTo(x,y);if(!player.path.length&&Math.hypot(x-player.x,y-player.y)>26)toast('빈 바닥이나 연결된 길을 눌러 주세요.')}}press=null;if(!pointers.size)pinchDistance=0});map.addEventListener('pointercancel',()=>{pointers.clear();press=null;pinchDistance=0});map.addEventListener('pointerleave',()=>hovered=null);map.addEventListener('wheel',e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();const b=map.getBoundingClientRect();zoomAt(S*Math.exp(-Math.max(-100,Math.min(100,e.deltaY))*.004),e.clientX-b.left,e.clientY-b.top)},{passive:false});
-window.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA'].includes(e.target.tagName))return;const k=e.key.toLowerCase();if(e.key==='Escape'){closePanel();return}if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)&&!(mobile.matches&&document.body.classList.contains('panel-open'))){keys.add(k);e.preventDefault()}if(e.code==='Space'&&near&&e.target===map){e.preventDefault();showPerson(near.id)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>keys.clear());
+window.addEventListener('keydown',e=>{if($('action-dialog').open||['INPUT','TEXTAREA'].includes(e.target.tagName))return;const k=e.key.toLowerCase();if(e.key==='Escape'){closePanel();return}if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)&&!(mobile.matches&&document.body.classList.contains('panel-open'))){keys.add(k);e.preventDefault()}if(e.code==='Space'&&near&&e.target===map){e.preventDefault();showPerson(near.id)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>keys.clear());
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
 let currentPanel=()=>overview(),refreshing=false,state=null;
+let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
+const actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply'};
 function panel(title,html,view='status'){previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
 function closePanel(){world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
 
@@ -39,7 +41,7 @@ const note=group=>group?.status==='확인 불가'?empty('일부 자료를 확인
 const when=value=>value?new Date(value).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'시각 미확인';
 const stat=(label,value)=>'<div class="stat"><span>'+esc(label)+'</span><b>'+esc(value??'확인 불가')+'</b></div>';
 function approvals(){
-	return [['c4','C4 승인',state?.approvals?.c4],['apply','실행 반영',state?.approvals?.runs],['decision','결정 대기',state?.approvals?.decisions]]
+	return [['c4','C4 승인',state?.approvals?.c4],['apply','실행 반영',state?.approvals?.runs],['r1','R1 폴더',state?.approvals?.r1],['decision','결정 대기',state?.approvals?.decisions]]
 		.flatMap(([kind,label,group])=>items(group).map(row=>({...row,kind,label,title:row.title||[row.project,row.id].filter(Boolean).join(' · ')})));
 }
 const activityHTML=()=>state?'<ol class="timeline">'+(state.activity||[]).map(row=>'<li>'+esc(row.text)+'<time>'+esc(when(row.at))+'</time></li>').join('')+'</ol>':empty('활동 자료 조회 중');
@@ -60,7 +62,7 @@ function usageHTML(){
 		+stat('NotebookLM',usage.notebooklm?.count==null?'미측정':usage.notebooklm.count+'회')+note(c4)+note(plans);
 }
 function approvalButtons(){
-	return '<div class="approval-grid">'+[['c4','C4 승인','c4'],['apply','실행 반영','runs'],['decision','결정 대기','decisions']].map(([kind,label,key])=>'<button data-filter="'+kind+'"><b>'+(!state||state.approvals?.[key]?.status==='확인 불가'?'?':approvals().filter(a=>a.kind===kind).length)+'</b>'+label+'</button>').join('')+'</div>';
+	return '<div class="approval-grid">'+[['c4','C4 승인','c4'],['apply','실행 반영','runs'],['r1','R1 폴더','r1'],['decision','결정 대기','decisions']].map(([kind,label,key])=>'<button data-filter="'+kind+'"><b>'+(!state||state.approvals?.[key]?.status==='확인 불가'?'?':approvals().filter(a=>a.kind===kind).length)+'</b>'+label+'</button>').join('')+'</div>';
 }
 function scheduleHTML(list){
 	let undated=false;
@@ -82,9 +84,56 @@ function overview(){
 function showApprovals(filter='all'){
 	currentPanel=()=>showApprovals(filter);
 	const list=approvals().filter(row=>filter==='all'||row.kind===filter);
-	panel('확인이 필요한 일','<p class="intro">'+(state?approvals().length+'건':'확인 불가')+' · 보기 전용</p><div class="subtabs">'+[['all','전체'],['c4','C4'],['apply','반영'],['decision','결정']].map(([id,label])=>'<button data-filter="'+id+'" aria-pressed="'+(id===filter)+'">'+label+'</button>').join('')+'</div>'
-		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+'</div><span class="state">대기</span></div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
+	panel('확인이 필요한 일','<p class="intro">'+(state?approvals().length+'건':'확인 불가')+' · '+(applying?'반영 중':'반영 전에 변경 내용을 확인합니다.')+'</p><div class="subtabs">'+[['all','전체'],['c4','C4'],['apply','실행'],['r1','R1'],['decision','결정']].map(([id,label])=>'<button data-filter="'+id+'" aria-pressed="'+(id===filter)+'">'+label+'</button>').join('')+'</div>'
+		+(!officeToken?empty('반영 세션을 읽지 못했습니다. 화면을 다시 열어 주세요.'):'' )
+		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+(row.kind==='c4'?' · 준비 '+esc(row.prepared)+'건 · 보류 '+esc(row.held)+'건':row.kind==='r1'?' · 노트 '+esc(row.pending)+'개':'')+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+'</div>'+(actionFor[row.kind]?'<button class="apply-button" data-action="'+row.kind+'" data-id="'+esc(row.id)+'"'+(applying||!officeToken?' disabled':'')+'>'+ (applying?'반영 중':'반영')+'</button>':'<span class="state">대기</span>')+'</div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
 		+Object.values(state?.approvals||{}).map(note).join(''),'approvals');
+}
+function openAction(kind,id,button){
+	if(applying||!officeToken||$('action-dialog').open)return;
+	const row=approvals().find(item=>item.kind===kind&&item.id===id);
+	if(!row||!actionFor[kind])return;
+	chosenAction={action:actionFor[kind],id};actionFocus=button;keys.clear();
+	$('action-title').textContent=row.label+' 반영 확인';
+	const description=kind==='c4'?'준비 '+row.prepared+'건을 볼트에 반영합니다. 보류 '+row.held+'건은 남습니다.\n기록: 볼트 노트·일지와 원장.\n되돌리기: 볼트 커밋이 생긴 뒤 해당 커밋을 되돌리고 원장 상태를 확인하세요.':kind==='r1'?'폴더의 노트 '+row.pending+'개에 메타데이터·태그 변경을 반영합니다.\n기록: 로컬 볼트 커밋 한 개와 사무실 활동 기록.\n되돌리기: 해당 볼트 커밋을 되돌리세요.':'검토된 실행의 변경을 저장소에 반영합니다.\n기록: 로컬 squash 커밋 한 개와 볼트 일지.\n되돌리기: 해당 저장소 커밋을 되돌리세요.';
+	$('action-description').textContent=id+'\n'+description;
+	$('action-status').textContent='';$('action-result').hidden=true;$('action-details').open=false;
+	$('action-confirm').hidden=false;$('action-confirm').disabled=false;$('action-confirm').textContent='반영';
+	$('action-cancel').disabled=false;$('action-cancel').textContent='취소';
+	$('action-dialog').showModal();$('action-cancel').focus();
+}
+function closeAction(){
+	if(applying)return;
+	$('action-dialog').close();chosenAction=null;
+	if(actionFocus?.isConnected)actionFocus.focus({preventScroll:true});else $('close-panel').focus();
+}
+async function submitAction(){
+	if(applying||!chosenAction||!officeToken)return;
+	applying=true;$('action-confirm').disabled=true;$('action-cancel').disabled=true;
+	$('action-confirm').textContent='반영 중';$('action-status').textContent='반영 중 · 결과를 기다려 주세요.';refreshPanel();
+	try{
+		const response=await fetch('/api/action',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Office-Token':officeToken},body:JSON.stringify(chosenAction)});
+		const data=await response.json();
+		$('action-status').textContent=data.message||'반영 결과를 확인할 수 없습니다.';
+		$('action-result').hidden=false;$('action-output').textContent=data.output||'출력이 없습니다.';
+		$('action-restart').hidden=!data.restart_needed;
+		$('action-restart').textContent=data.restart_needed?'사무실 재시작 필요: 터미널에서 launchctl kickstart -k gui/$(id -u)/com.$(id -un).ai-hub-office':'';
+	}catch{
+		$('action-status').textContent='반영 결과를 받지 못했습니다. 활동 기록과 상태를 확인한 뒤 다시 시도하세요.';
+	}finally{
+		applying=false;chosenAction=null;$('action-confirm').hidden=true;$('action-cancel').disabled=false;$('action-cancel').textContent='닫기';
+		await loadState();$('action-cancel').focus();
+	}
+}
+$('action-confirm').onclick=submitAction;$('action-cancel').onclick=closeAction;
+$('action-dialog').addEventListener('cancel',e=>{e.preventDefault();closeAction()});
+async function loadSession(){
+	const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
+	try{
+		const response=await fetch('/api/session',{cache:'no-store',signal:controller.signal});
+		if(!response.ok)throw new Error('세션 조회 실패');
+		const data=await response.json();officeToken=typeof data.token==='string'&&data.token?data.token:null;
+	}catch{officeToken=null}finally{clearTimeout(timeout)}
 }
 function showSchedule(){
 	currentPanel=showSchedule;
@@ -126,7 +175,7 @@ function showMeeting(filter='all'){
 function showCharacters(){currentPanel=showCharacters;const list=[{...player,identity:'검은 머리 · 초록 캡 · 안경'},...actors];panel('캐릭터 23명','<p class="intro">역할마다 고정된 헤어·의상·소품을 사용해요.</p><div class="character-grid">'+list.map((a,i)=>'<div class="character-card"><canvas width="100" height="108" data-character="'+i+'" aria-label="'+esc(a.name)+' 캐릭터"></canvas><b>'+esc(a.name)+'</b><small>'+esc(a.identity||'')+'</small></div>').join('')+'</div>');document.querySelectorAll('[data-character]').forEach(c=>{const a=list[Number(c.dataset.character)],cx=c.getContext('2d');cx.imageSmoothingEnabled=false;cx.scale(1.7,1.7);art.drawActor(cx,{...a,x:29,y:59,walking:false,face:'down'},0)})}
 function showDirectory(){currentPanel=showDirectory;panel('부서 찾기','<p class="intro">부서나 직원을 선택해 살펴보세요.</p><button class="outline-button" data-characters="true" style="margin:0 0 16px">캐릭터 23명 한눈에 보기</button>'+D.rooms.map(r=>'<button class="row person-row" data-room="'+r.id+'"><span>'+esc(r.name)+'</span><span class="row-state">'+actors.filter(a=>a.department===r.id).length+'명</span></button>').join(''))}
 function view(v){if(v==='office'){if(mobile.matches&&!$('side').hidden)closePanel();else overview()}else if(v==='approvals')showApprovals();else if(v==='schedule')showSchedule();else showStatus()}
-document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.dataset.action)openAction(b.dataset.action,b.dataset.id,b);else if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
 
 function refreshPanel(){
 	if($('side').hidden)return;
@@ -160,5 +209,5 @@ console.assert(actors.length===22&&D.props.filter(p=>p.type==='desk').length===2
 console.assert(actors.filter(a=>a.department==='company').every(a=>!a.task),'회사 역할의 내용 숨김');
 if(!mobile.matches)overview();else{S=1.15;follow=true}
 new ResizeObserver(resize).observe(world);resize();requestAnimationFrame(tick);
-await loadState();setInterval(loadState,10000);
+await loadSession();await loadState();setInterval(loadState,10000);
 })().catch(()=>{document.getElementById('live').textContent='장면 자료를 읽을 수 없습니다.';document.getElementById('brand-name').textContent='사무실 조회 실패'});

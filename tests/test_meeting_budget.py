@@ -56,13 +56,13 @@ class MeetingBudgetTest(MeetingCase):
 			state = self.analyze()
 			clock[0] += 5000
 			self.assertLess(self.engine.resume(state["id"])["active_seconds"], 1)
-		self.assertTrue(all(0 < call[1]["timeout"] <= 1200 for call in self.ai.calls))
+		self.assertTrue(all(0 < call[1]["timeout"] <= meeting.MAX_SECONDS for call in self.ai.calls))
 
 	def test_time_exhausted_and_interrupted_call_reservation_survive_resume(self):
 		state = self.analyze()
 		with self.engine.store.locked(state["id"]) as record:
 			state = record.load()
-			state["active_seconds"] = 1190
+			state["active_seconds"] = meeting.MAX_SECONDS - 10
 			record.save(state)
 		count = len(self.ai.calls)
 		state = self.start(state)
@@ -71,7 +71,7 @@ class MeetingBudgetTest(MeetingCase):
 		state = self.analyze()
 		with self.engine.store.locked(state["id"]) as record:
 			state = record.load()
-			state["calls"].append({"phase": "round1", "role": "backend", "plan": "p01", "ok": None, "timeout": 1170})
+			state["calls"].append({"phase": "round1", "role": "backend", "plan": "p01", "ok": None, "timeout": meeting.MAX_SECONDS - 30})
 			state["active_seconds"] = 30
 			record.save(state)
 		state = self.engine.resume(state["id"])
@@ -107,7 +107,7 @@ class MeetingBudgetTest(MeetingCase):
 		clock = [0.0]
 		original = self.ai.__call__
 		def slow(plan, **kwargs):
-			clock[0] += 1201
+			clock[0] += meeting.MAX_SECONDS + 1
 			return original(plan, **kwargs)
 		with mock.patch("orchestrator.meeting.time.monotonic", side_effect=lambda: clock[0]), \
 				mock.patch("orchestrator.providers.call", side_effect=slow):
@@ -134,7 +134,8 @@ class MeetingBudgetTest(MeetingCase):
 		with mock.patch("orchestrator.providers.call", side_effect=rejected_once):
 			state = self.start(self.analyze())
 		self.assertEqual(meeting.MAX_CALLS, 14)
-		self.assertEqual(meeting.MAX_SECONDS, 1200)
+		self.assertEqual(meeting.MAX_SECONDS, 1800)
+		self.assertEqual(meeting.SUMMARY_SECONDS, 180)
 		self.assertEqual(state["status"], "budget_exhausted")
 		self.assertIsNotNone(state["summary"])
 		self.assertEqual(len(state["calls"]), 14)
@@ -198,7 +199,30 @@ class MeetingBudgetTest(MeetingCase):
 			self.assertFalse(any(c.get("retry") for c in state["calls"]))
 			session.summarize()
 		self.assertIsNotNone(state["summary"])
+		self.assertGreaterEqual(self.ai.calls[-1][1]["timeout"], meeting.SUMMARY_SECONDS)
 		self.assertLessEqual(self.ai.calls[-1][1]["timeout"], meeting.SUMMARY_SECONDS + 29)
+
+	def test_speech_cannot_spend_summary_reserve_and_summary_receives_it_all(self):
+		state = self.analyze()
+		clock, original = [0.0], self.ai.__call__
+		def speech(plan, **kwargs):
+			clock[0] += kwargs["timeout"]
+			return original(plan, **kwargs)
+		with mock.patch("orchestrator.meeting.time.monotonic", side_effect=lambda: clock[0]), \
+				self.engine.store.locked(state["id"]) as record:
+			state.update(status="running", phase="round1", active_seconds=meeting.MAX_SECONDS - meeting.SUMMARY_SECONDS - 31)
+			session = meeting.Session(record, state, meeting.Rules())
+			with mock.patch("orchestrator.providers.call", side_effect=speech):
+				state["rounds"]["1"].append(session.ask("round1", "backend"))
+			self.assertEqual(self.ai.calls[-1][1]["timeout"], 31)
+			self.assertEqual(meeting.MAX_SECONDS - state["active_seconds"], 180)
+			with mock.patch("orchestrator.providers.call") as call:
+				self.assertIsNone(session.ask("round1", "qa"))
+				call.assert_not_called()
+			session.summarize()
+		self.assertIsNotNone(state["summary"])
+		self.assertEqual(self.ai.calls[-1][1]["timeout"], 180)
+		self.assertEqual(state["calls"][-1]["phase"], "summary")
 
 	def test_successful_retry_also_counts_its_active_time(self):
 		clock = [0.0]

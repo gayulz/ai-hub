@@ -27,7 +27,21 @@ class MeetingCliTest(MeetingCase):
 		code, output, errors = self.command("start", state["id"], "--participants", "backend", "qa")
 		self.assertEqual((code, errors), (0, ""))
 		self.assertEqual(json.loads(output)["status"], "completed")
+		self.assertEqual(json.loads(output)["participant_confirmation"]["source"], "cli")
 		self.assertEqual(self.command("resume", state["id"])[0], 0)
+
+	def test_cli_start_records_explicit_source_and_rejects_unknown_source(self):
+		for source in ("telegram", "office"):
+			with self.subTest(source=source):
+				state = self.analyze()
+				code, output, errors = self.command("start", state["id"], "--participants", *self.ai.roles, "--source", source)
+				self.assertEqual((code, errors), (0, ""))
+				self.assertEqual(json.loads(output)["participant_confirmation"]["source"], source)
+		state = self.analyze()
+		with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+			self.command("start", state["id"], "--participants", *self.ai.roles, "--source", "unknown")
+		self.assertEqual(error.exception.code, 2)
+		self.assertEqual(self.engine.store.read(state["id"]), state)
 
 	def test_cli_accepts_a_configured_participant_added_to_the_proposal(self):
 		state = self.analyze()

@@ -2,7 +2,7 @@
 
 meeting analyze --target ai-hub --text-file agenda.txt
 meeting status <id>
-meeting start <id> --participants backend qa
+meeting start <id> --participants backend qa [--source cli|office|telegram]
 meeting answer <id> --card <card-id> --answers-file answers.json [--source cli|office|telegram]
 meeting resume <id> [--confirm-answers <card-id>] [--source cli|office|telegram]
 
@@ -50,7 +50,7 @@ def main(argv):
 	for command in ("status", "start", "answer", "resume"):
 		item = sub.add_parser(command)
 		item.add_argument("id")
-		if command in ("answer", "resume"):
+		if command in ("start", "answer", "resume"):
 			item.add_argument("--source", choices=("cli", "office", "telegram"), default="cli")
 		if command == "start":
 			item.add_argument("--participants", nargs="+", required=True)
@@ -65,7 +65,7 @@ def main(argv):
 		if args.command == "analyze":
 			state = engine.analyze(read_input(args.text_file, 2000), args.target)
 		elif args.command == "start":
-			state = engine.start(args.id, args.participants)
+			state = engine.start(args.id, args.participants, source=args.source)
 		elif args.command == "answer":
 			state = engine.answer(args.id, args.card, json.loads(read_input(args.answers_file, 10000)), source=args.source)
 		elif args.command == "resume":

@@ -1,4 +1,7 @@
-"""개인 대화의 질문 답·요약 확인과 읽기 전용 알림만 연결한다."""
+"""개인 대화의 질문 답·요약 확인·제안 명단 그대로 시작과 알림만 연결한다.
+
+확인 요청(k)은 기록만 한다. 반영·개발 실행·push·삭제·재시작·임의 명령·명단 변경은 받지 않는다.
+"""
 
 from __future__ import annotations
 
@@ -17,8 +20,8 @@ from collector.config import home
 from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator.meeting import Engine
-from orchestrator.meeting_record import Store as Meetings
-from orchestrator import question_cards
+from orchestrator.meeting_record import ID, Store as Meetings
+from orchestrator import meeting_prompts, question_cards
 from vaultfilter.public import Rules
 
 from .agents import read_runs
@@ -87,12 +90,30 @@ class Bridge:
 		value = self.safe(value)
 		return value[:maximum] + "…" + suffix if len(value) > maximum else value
 
+	@staticmethod
+	def participants(meeting):
+		if not meeting or meeting.get("status") != "participants_pending" or meeting.get("confirmed") is not False:
+			return None
+		proposed = meeting.get("participants")
+		if (not isinstance(proposed, list) or not 2 <= len(proposed) <= 4
+				or any(not isinstance(p, dict) or not isinstance(p.get("role"), str)
+					or p["role"] not in meeting_prompts.ROLES for p in proposed)):
+			return None
+		roles = tuple(p["role"] for p in proposed)
+		return roles if len(set(roles)) == len(roles) else None
+
 	def events(self, meetings):
 		events = []
 		for meeting in meetings:
 			status, mid = meeting["status"], meeting["id"]
+			buttons = None
 			if status == "participants_pending":
-				text = "참석자 제안이 있습니다. 사무실에서 확인하고 시작하세요\n" + self.preview(meeting["agenda"], 200)
+				text = "참석자 제안이 있습니다\n" + self.preview(meeting["agenda"], 200)
+				if self.participants(meeting) and ID.fullmatch(mid):
+					for p in meeting["participants"]:
+						text += "\n" + self.safe(meeting_prompts.ROLES[p["role"]]["name"]) + ": " + self.preview(" ".join(str(p.get("reason", "")).splitlines()), 60)
+					buttons = [[button("확정하고 회의 시작", "m|" + mid)]]
+				text += "\n[확정하고 회의 시작]을 누르면 이 명단 그대로 시작합니다(최대 30분, AI 호출 최대 14회). 명단을 바꾸려면 사무실에서 하세요"
 			elif status in ("completed", "failed", "budget_exhausted", "questions_exhausted"):
 				text = "회의 " + mid + ": " + STATUSES[status]
 				summary = meeting.get("summary") or {}
@@ -108,29 +129,29 @@ class Bridge:
 						text += "\n할 일\n" + "\n".join(lines[:8])
 			else:
 				continue
-			events.append((meeting.get("created", ""), f"meeting:{mid}:{status}", text))
+			events.append((meeting.get("created", ""), f"meeting:{mid}:{status}", text, buttons))
 		for run in read_runs(self.root)["items"]:
 			if run["status"] == "승인 필요":
 				text = "실행 승인 필요: " + run["id"]
 				if run.get("public"):
 					text += "\n" + self.preview(run.get("goal", ""), 300)
-				events.append((run.get("at") or "", "run:" + run["id"], text))
-		return [(key, text) for _, key, text in sorted(events)[-500:]]
+				events.append((run.get("at") or "", "run:" + run["id"], text, None))
+		return [(key, text, buttons) for _, key, text, buttons in sorted(events)[-500:]]
 
 	def sync(self):
 		meetings = self.records.list_states()
 		with self.state.locked() as state:
 			events = self.events(meetings)
 			if not state["baseline_done"]:
-				state["seen"] = [key for key, _ in events]
+				state["seen"] = [key for key, _, _ in events]
 				state["baseline_done"] = True
 			else:
-				for key, text in events:
+				for key, text, buttons in events:
 					if key not in state["seen"]:
-						self.send(text)
+						self.send(text, buttons)
 						state["seen"].append(key)
-				current_keys = {key for key, _ in events}
-				state["seen"] = [key for key in state["seen"] if key not in current_keys] + [key for key, _ in events]
+				current_keys = {key for key, _, _ in events}
+				state["seen"] = [key for key in state["seen"] if key not in current_keys] + [key for key, _, _ in events]
 			for meeting in meetings:
 				if not meeting["cards"]:
 					continue
@@ -193,11 +214,33 @@ class Bridge:
 		self.summary(result["cards"][-1], local)
 		return "제출했습니다. 요약을 확인해 주세요"
 
+	def request_start(self, mid, message):
+		meeting = self.records.read(mid)
+		if not meeting or meeting["status"] != "participants_pending" or meeting.get("confirmed"):
+			return "이미 시작했거나 끝난 회의입니다"
+		roles = self.participants(meeting)
+		if roles is None or not message_id(message.get("message_id")):
+			return "참석자 제안을 확인할 수 없습니다"
+		job = (mid, "start")
+		with self._jobs_lock:
+			if job in self._queued:
+				return "이미 시작을 요청했습니다"
+			self._queued.add(job)
+			self._queue.append(("start", job, roles))
+		try:
+			self.client.edit_message(message["message_id"], self.safe(message.get("text", "")) + "\n\n선택됨: 확정하고 회의 시작")
+		except Exception as exc:
+			failure(exc)
+		return "시작합니다"
+
 	def callback(self, callback, state):
 		data = callback.get("data", "")
+		# 시작 동의는 제안 명단 버튼만 받으며 무응답·다른 글·확인 요청(k)은 연결하지 않는다.
 		if isinstance(data, str) and data.startswith("k|"):
 			return telegram_ask.answer_option(self.client, callback, state)
 		parts = data.split("|") if isinstance(data, str) and len(data.encode("utf-8")) <= 64 else []
+		if len(parts) == 2 and parts[0] == "m" and ID.fullmatch(parts[1]):
+			return self.request_start(parts[1], callback["message"])
 		if len(parts) not in (2, 4) or parts[0] not in ("a", "s", "r", "c") or not CARD.fullmatch(parts[1]):
 			return "허용하지 않는 응답입니다"
 		action, card_id = parts[:2]
@@ -215,7 +258,7 @@ class Bridge:
 			with self._jobs_lock:
 				if job not in self._queued:
 					self._queued.add(job)
-					self._queue.append(job)
+					self._queue.append(("resume", job, None))
 			return "확인했습니다. 회의를 이어갑니다"
 		if card["status"] != "waiting":
 			return self.already(card)
@@ -311,26 +354,36 @@ class Bridge:
 	def work_once(self):
 		if self._job is None:
 			with self._jobs_lock:
-				job = self._queue.popleft() if self._queue else None
-			if job:
+				queued = self._queue.popleft() if self._queue else None
+			if queued:
+				kind, job, roles = queued
 				mid, cid = job
 				meeting = self.records.read(mid)
-				card = meeting["cards"][-1] if meeting and meeting["cards"] else None
-				if not card or card["id"] != cid or card["status"] != "answered" or not self.telegram(card):
+				if kind == "start":
+					valid = self.participants(meeting) == roles
+					arguments = ["start", mid, "--participants", *roles, "--source", "telegram"]
+					failed = "회의 시작: 실행하지 못했습니다. 사무실에서 시작하세요"
+				else:
+					card = meeting["cards"][-1] if meeting and meeting["cards"] else None
+					valid = card and card["id"] == cid and card["status"] == "answered" and self.telegram(card)
+					arguments = ["resume", mid, "--confirm-answers", cid, "--source", "telegram"]
+					failed = "회의 이어가기: 실행하지 못했습니다. 확인 버튼으로 다시 시도하세요"
+				if not valid:
 					with self._jobs_lock:
 						self._queued.discard(job)
+					if kind == "start":
+						self.send(failed)
 					return
 				try:
-					process = subprocess.Popen([sys.executable, "-m", "orchestrator", "meeting", "resume", mid,
-						"--confirm-answers", cid, "--source", "telegram"], shell=False,
+					process = subprocess.Popen([sys.executable, "-m", "orchestrator", "meeting", *arguments], shell=False,
 						stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 						cwd=Path(__file__).resolve().parents[1], env={**os.environ, "AI_HUB_HOME": str(self.root)})
 				except Exception:
 					with self._jobs_lock:
 						self._queued.discard(job)
-					self.send("회의 이어가기: 실행하지 못했습니다. 확인 버튼으로 다시 시도하세요")
+					self.send(failed)
 				else:
-					self._job = {"process": process, "key": job, "deadline": time.monotonic() + 1500, "timeout": False}
+					self._job = {"process": process, "key": job, "deadline": time.monotonic() + 2100, "timeout": False}
 		if self._job:
 			job, process = self._job, self._job["process"]
 			if process.poll() is None:

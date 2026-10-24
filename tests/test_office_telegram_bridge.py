@@ -9,7 +9,7 @@ from urllib.error import URLError
 from collector.redact_pii import host_pattern
 from office import telegram_bridge
 from office.telegram_client import Client
-from orchestrator import meeting_record, question_cards
+from orchestrator import meeting_prompts, meeting_record, question_cards
 from vaultfilter.public import Rules
 from test_meeting import MeetingCase, question
 from test_office_telegram_client import FakeTransport, TelegramCase
@@ -42,6 +42,19 @@ class BridgeCase(MeetingCase):
 	def save(self, state, create=False):
 		with self.engine.store.locked(state["id"], create=create) as record:
 			record.save(state)
+
+	def proposal(self, roles=("backend", "qa")):
+		state = meeting_record.new("합성 화면 검토", "ai-hub")
+		state.update(status="participants_pending", phase="round1",
+			participants=[{"role": role, "reason": "서로 다른 관점의 점검"} for role in roles])
+		self.save(state, create=True)
+		return state
+
+	def click_start(self, meeting, **changes):
+		message = {"message_id": 101, "chat": {"id": int(self.chat), "type": "private"},
+			"text": "참석자 제안이 있습니다\n합성 화면 검토"}
+		self.poll(callback_query={"id": "callback-" + str(self.update_id), "data": "m|" + meeting["id"],
+			"message": message, "from": {"id": int(self.chat)}, **changes})
 
 	def local(self, card):
 		with self.bridge.state.locked() as state:
@@ -232,7 +245,7 @@ class TelegramBridgeTest(BridgeCase):
 			process = popen.return_value
 			process.poll.return_value = None
 			self.bridge.work_once()
-			self.assertEqual(self.bridge._job["deadline"], 1500)
+			self.assertEqual(self.bridge._job["deadline"], 2100)
 			def wait(seconds):
 				waits.append(seconds)
 				clock[0] += 10
@@ -241,12 +254,22 @@ class TelegramBridgeTest(BridgeCase):
 				self.bridge.worker()
 				self.assertEqual(sync.call_count, 2)
 			process.kill.assert_not_called()
-			clock[0] = 1500
+			clock[0] = 2100
 			self.bridge.work_once()
 			process.kill.assert_called_once_with()
 			process.wait.assert_called_once_with(timeout=1)
 		self.assertTrue(self.transport.sent()[-1]["text"].endswith("시간 초과"))
 		self.assertNotIn("reply_markup", self.transport.sent()[-1])
+
+	def test_non_approval_runs_do_not_create_or_reuse_meeting_events(self):
+		state = meeting_record.new("합성 안건", "ai-hub")
+		state["status"] = "completed"
+		expected = self.bridge.events([state])
+		for status in ("완료", "작업 중"):
+			self.runs = [{"id": "2026-10-24-001", "status": status}]
+			for meetings, events in (([], []), ([state], expected)):
+				with self.subTest(status=status, meetings=bool(meetings)):
+					self.assertEqual(self.bridge.events(meetings), events)
 
 	def test_baseline_new_statuses_approval_privacy_and_restart_deduplication(self):
 		old = meeting_record.new("과거 안건", "ai-hub")
@@ -258,6 +281,7 @@ class TelegramBridgeTest(BridgeCase):
 		for status in ("participants_pending", "completed", "failed", "budget_exhausted", "questions_exhausted"):
 			state = meeting_record.new("새 안건 /tmp/private-data", "ai-hub")
 			state["status"] = status
+			state["participants"] = [{"role": role, "reason": "합성 점검"} for role in ("backend", "qa")]
 			state["summary"] = {"conclusion": [{"text": "결론 /private/report " + self.token + " " + "가" * 400}]}
 			self.save(state, create=True)
 		self.runs += [{"id": "2026-10-24-002", "status": "승인 필요", "public": True, "goal": "새 목표 /tmp/private-file"},
@@ -265,23 +289,34 @@ class TelegramBridgeTest(BridgeCase):
 		self.bridge.sync()
 		self.assertEqual(len(self.transport.sent()), 7)
 		texts = "\n".join(body["text"] for body in self.transport.sent())
-		self.assertIn("사무실에서 확인하고 시작하세요", texts)
+		self.assertIn("명단을 바꾸려면 사무실에서 하세요", texts)
 		self.assertIn("새 목표", texts)
 		for value in ("전송 금지 합성 자료", "/tmp/", "/private/", self.token):
 			self.assertNotIn(value, texts)
-		self.assertTrue(all("reply_markup" not in body for body in self.transport.sent()))
+		self.assertEqual(sum("reply_markup" in body for body in self.transport.sent()), 1)
 		self.bridge = telegram_bridge.Bridge(self.client, engine=self.engine)
 		self.bridge.sync()
 		self.assertEqual(len(self.transport.sent()), 7)
 
-	def test_unrelated_commands_never_start_execute_or_apply_and_silence_is_not_consent(self):
+	def test_only_proposal_button_can_start_and_silence_or_other_commands_cannot(self):
 		state, card = self.pending()
+		proposal = self.proposal()
 		self.bridge.sync()
-		for command in ("/start", "apply", "meeting start", "push", "delete", "restart"):
+		for command in ("/start", "apply", "meeting start", "run", "push", "delete", "restart", "backend frontend", "m|" + proposal["id"]):
 			self.poll(message={"chat": {"id": int(self.chat), "type": "private"}, "from": {"id": int(self.chat)}, "text": command})
+		for data in ("apply|" + proposal["id"], "run|" + proposal["id"], "m|" + proposal["id"] + "|frontend"):
+			self.click_start(proposal, data=data)
 		self.bridge.sync()
+		with mock.patch.object(telegram_bridge.subprocess, "Popen") as popen:
+			self.bridge.work_once()
+			popen.assert_not_called()
+		self.assertEqual(len(self.bridge._queue), 0)
 		self.assertEqual(self.local(card)["pending"], {})
 		self.assertEqual(self.engine.store.read(state["id"])["status"], "questions_pending")
+		self.assertEqual(self.engine.store.read(proposal["id"]), proposal)
+		self.click_start(proposal)
+		self.assertEqual(self.callback_text(), "시작합니다")
+		self.assertEqual(len(self.bridge._queue), 1)
 		self.assertEqual(len(self.ai.calls), 0)
 
 	def test_poll_backoff_is_capped_and_logs_only_error_kind(self):
@@ -315,14 +350,41 @@ class TelegramBridgeTest(BridgeCase):
 		mid = "m-" + "1" * 32
 		for extra in (0, 1):
 			self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True, "goal": "가" * (300 + extra)}]
-			meetings = [{"id": mid, "status": "participants_pending", "agenda": "나" * (200 + extra)},
+			meetings = [{"id": mid, "status": "participants_pending", "agenda": "나" * (200 + extra), "confirmed": False,
+				"participants": [{"role": role, "reason": "합성 점검"} for role in ("backend", "qa")]},
 				{"id": "m-" + "2" * 32, "status": "completed", "summary": {"conclusion": [{"text": "다" * (1500 + extra)}]}}]
-			events = dict(self.bridge.events(meetings))
+			events = {key: text for key, text, _ in self.bridge.events(meetings)}
 			suffix = "…" if extra else ""
 			self.assertEqual(events["run:2026-10-24-001"].split("\n", 1)[1], "가" * 300 + suffix)
-			self.assertEqual(events[f"meeting:{mid}:participants_pending"].split("\n", 1)[1], "나" * 200 + suffix)
+			self.assertEqual(events[f"meeting:{mid}:participants_pending"].splitlines()[1], "나" * 200 + suffix)
 			self.assertEqual(events["meeting:m-" + "2" * 32 + ":completed"].split("\n", 1)[1],
 				"다" * 1500 + ("…\n전문은 사무실 회의 화면에서" if extra else ""))
+
+	def test_proposal_notice_has_one_start_button_safe_participants_and_limits(self):
+		self.bridge.sync()
+		state = self.proposal()
+		state["agenda"] = "안" * 201
+		state["participants"][0]["reason"] = self.token + " /private/synthetic " + "이" * 100
+		state["participants"][1]["reason"] = "짧은 이유\n한 줄로"
+		self.save(state)
+		self.bridge.sync()
+		sent = self.transport.sent()[-1]
+		lines = sent["text"].splitlines()
+		self.assertEqual(lines[:2], ["참석자 제안이 있습니다", "안" * 200 + "…"])
+		masked = "[보안값] [경로 생략] "
+		self.assertEqual(lines[2], meeting_prompts.ROLES["backend"]["name"] + ": " + masked + "이" * (60 - len(masked)) + "…")
+		self.assertEqual(lines[3], meeting_prompts.ROLES["qa"]["name"] + ": 짧은 이유 한 줄로")
+		self.assertEqual(lines[-1], "[확정하고 회의 시작]을 누르면 이 명단 그대로 시작합니다(최대 30분, AI 호출 최대 14회). 명단을 바꾸려면 사무실에서 하세요")
+		self.assertEqual(sent["reply_markup"]["inline_keyboard"], [[{"text": "확정하고 회의 시작", "callback_data": "m|" + state["id"]}]])
+		self.assertLessEqual(len(("m|" + state["id"]).encode("utf-8")), 64)
+		self.assertNotIn(self.token, sent["text"])
+		self.assertNotIn("/private/synthetic", sent["text"])
+		state["status"] = "completed"
+		self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True, "goal": "합성 목표"}]
+		self.save(state)
+		self.assertTrue(all(buttons is None for _, _, buttons in self.bridge.events([state])))
+		self.bridge.sync()
+		self.assertTrue(all("reply_markup" not in body for body in self.transport.sent()[1:]))
 
 	def test_completed_notice_includes_at_most_eight_single_line_todos_from_engine_schema(self):
 		state = {"id": "m-" + "3" * 32, "status": "completed", "summary": {

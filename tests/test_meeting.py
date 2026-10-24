@@ -172,6 +172,28 @@ class MeetingTest(MeetingCase):
 			self.assertEqual(self.engine.status(state["id"]), state)
 		self.assertEqual(len(self.ai.calls), 1)
 
+	def test_participant_confirmation_and_adjustments_keep_start_source(self):
+		for source in ("telegram", "office"):
+			with self.subTest(source=source):
+				self.ai.roles = ("backend", "qa")
+				state = self.analyze()
+				self.ai.roles = ("frontend", "qa")
+				state = self.engine.start(state["id"], list(self.ai.roles), source=source)
+				self.assertEqual(state["status"], "completed")
+				confirmation = state["participant_confirmation"]
+				self.assertEqual(confirmation["source"], source)
+				self.assertEqual({row["action"] for row in confirmation["adjustments"]}, {"added", "excluded"})
+				self.assertTrue(all(row["source"] == source for row in confirmation["adjustments"]))
+				self.assertEqual(self.engine.store.read(state["id"])["participant_confirmation"], confirmation)
+
+	def test_invalid_start_source_is_rejected_without_confirming_or_calling_ai(self):
+		state = self.analyze()
+		for source in ("unknown", "", None, 123):
+			with self.subTest(source=source), self.assertRaisesRegex(ValueError, "^참석자 확정 출처가 잘못됐습니다$"):
+				self.engine.start(state["id"], list(self.ai.roles), source=source)
+			self.assertEqual(self.engine.store.read(state["id"]), state)
+		self.assertEqual(len(self.ai.calls), 1)
+
 	def test_bad_ai_schema_roles_lengths_and_summary_evidence_fail_closed(self):
 		baseline = {"summary": "안건을 비교한다", "participants": [
 			{"role": "backend", "reason": "구현 관점"}, {"role": "qa", "reason": "검증 관점"}], "questions": []}

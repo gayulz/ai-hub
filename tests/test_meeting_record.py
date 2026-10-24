@@ -63,7 +63,7 @@ class MeetingRecordTest(MeetingCase):
 		for path in folder.iterdir():
 			self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 		text = (folder / "minutes.md").read_text()
-		for value in (state["agenda"], "backend", "qa", "round1", "round2", "conclusion", "completed", "서로 다른 관점"):
+		for value in (state["agenda"], "backend", "qa", "round1", "round2", "conclusion", "completed", "서로 다른 관점", "/14", "/1800초"):
 			self.assertIn(value, text)
 		self.assertEqual(json.loads((folder / "meeting.json").read_text()), state)
 

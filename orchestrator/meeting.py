@@ -12,10 +12,8 @@ from vaultfilter.public import Rules
 
 from . import meeting_prompts as prompts, meeting_record as records, providers, targets
 from . import question_cards as cards
+from .meeting_record import MAX_CALLS, MAX_SECONDS, SUMMARY_SECONDS
 
-MAX_CALLS, MAX_SECONDS = 14, 1200
-# 공급자의 최소 제한 시간이 30초여서 정리 1회와 저장 여유를 함께 남긴다.
-SUMMARY_SECONDS = 35
 TERMINAL = ("completed", "budget_exhausted", "questions_exhausted")
 
 
@@ -45,7 +43,9 @@ class Engine:
 				Session(record, state, None).settle()
 			return state
 
-	def start(self, meeting_id: str, participants: list[str]) -> dict:
+	def start(self, meeting_id: str, participants: list[str], source: str = "cli") -> dict:
+		if source not in ("cli", "office", "telegram"):
+			raise ValueError("참석자 확정 출처가 잘못됐습니다")
 		with self.store.locked(meeting_id) as record:
 			state = record.load()
 			if state["status"] != "participants_pending" or state["confirmed"]:
@@ -61,12 +61,12 @@ class Engine:
 			session = Session(record, state, Rules())
 			session.prepare()
 			state["confirmed"] = True
-			adjustments = [{"role": role, "action": "added", "reason": "사용자가 확인 명단에 추가", "source": "cli"}
+			adjustments = [{"role": role, "action": "added", "reason": "사용자가 확인 명단에 추가", "source": source}
 				for role in participants if role not in by_role]
-			adjustments += [{"role": p["role"], "action": "excluded", "reason": "사용자가 확인 명단에서 제외", "source": "cli"}
+			adjustments += [{"role": p["role"], "action": "excluded", "reason": "사용자가 확인 명단에서 제외", "source": source}
 				for p in proposed if p["role"] not in participants]
 			state["participant_confirmation"] = {"roles": participants, "proposed": proposed,
-				"adjustments": adjustments, "source": "cli"}
+				"adjustments": adjustments, "source": source}
 			state["status"] = "running"
 			session.save()
 			session.run()

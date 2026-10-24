@@ -14,6 +14,9 @@ from test_office import OfficeCase
 class RoleCase(OfficeCase):
 	def setUp(self):
 		super().setUp()
+		patch = mock.patch("socket.create_connection", side_effect=OSError("합성 연결 거부"))
+		patch.start()
+		self.addCleanup(patch.stop)
 		self.company_paths = [self.user / "work/acme", self.user / "work/xyz"]
 		self.blog_path = self.user / "workspace/naver-blog-agent"
 		rows = ["vault=" + json.dumps(str(self.user / "vault")),
@@ -51,6 +54,7 @@ class OfficeRolesTest(RoleCase):
 			for key in ("id", "name", "department", "seat", "x", "y", "appearance", "hair", "shirt", "identity"):
 				self.assertEqual(actual[key], expected[key])
 			self.assertEqual(actual.get("facing"), expected.get("facing"))
+			self.assertEqual(actual.get("blog_path"), expected.get("blog_path"))
 			self.assertTrue({"status", "engine", "updated"} <= actual.keys())
 			self.assertEqual("task" in actual, actual["department"] != "company")
 		self.assertEqual([p["name"] for p in state["people"] if p["department"] == "lounge"], ["이웃", "편집", "음악"])

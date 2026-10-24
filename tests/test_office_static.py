@@ -14,22 +14,24 @@ HARNESS = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const root=process.argv[1],scene=JSON.parse(fs.readFileSync(root+'/scene.json','utf8'));
 const mobileMode=process.argv[2]==='mobile',sessionOK=process.argv[2]!=='no-session';
-const labels=new Map(),events=new Map(),elements=new Map(),classes=new Set();
+const labels=new Map(),events=new Map(),windowEvents=new Map(),elements=new Map(),classes=new Set(),openedLinks=[];
 let frame,interval,apiOK=true,requests=[],actionResponse,actionReject,actionCount=0,actionBody;
 const context2d=id=>new Proxy({measureText:text=>({width:text.length*7}),fillText:(text,x,y)=>{if(id==='map')labels.set(text,[x,y])}},
 	{get:(object,key)=>key in object?object[key]:(()=>{}),set:(object,key,value)=>{object[key]=value;return true}});
 class Element{
-	constructor(id=''){this.id=id;this.hidden=id==='side'||id==='nearby';this.open=false;this.disabled=false;this.dataset={};this.style={setProperty(){}};this.innerHTML='';this.textContent='';this.value='';this.scrollTop=0;this.ctx=context2d(id);this.listeners=new Map()}
+	constructor(id='',tagName='DIV'){this.id=id;this.tagName=tagName;this.hidden=id==='side'||id==='nearby';this.open=false;this.disabled=false;this.dataset={};this.style={setProperty(){}};this.innerHTML='';this.textContent='';this.value='';this.scrollTop=0;this.ctx=context2d(id);this.listeners=new Map();this.attributes={};this.children=[];this.isConnected=true}
 	getContext(){return this.ctx}getBoundingClientRect(){return {width:1000,height:650,left:0,top:0}}
-	setAttribute(){}append(){}setPointerCapture(){}querySelectorAll(){return []}
+	setAttribute(name,value){this.attributes[name]=value}append(...children){this.children.push(...children)}setPointerCapture(){}querySelectorAll(){return []}
+	replaceChildren(...children){this.children=children;this.textContent=''}
+	click(){openedLinks.push({href:this.href,target:this.target,rel:this.rel})}
 	addEventListener(name,fn){this.listeners.set(name,fn)}focus(){document.activeElement=this}
 	showModal(){this.open=true}close(){this.open=false}
 }
 const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id)},
-	createElement:()=>new Element(),querySelectorAll:()=>[],visibilityState:'visible',
+	createElement:tag=>new Element('',tag.toUpperCase()),querySelectorAll:()=>[],visibilityState:'visible',
 	addEventListener:(name,fn)=>events.set(name,fn),documentElement:new Element(),
 	body:{classList:{add:value=>classes.add(value),remove:value=>classes.delete(value),contains:value=>classes.has(value)}}};
-let state={updated:'2026-10-24T12:00:00+09:00',dev_targets:[{id:'ai-hub',label:'ai-hub'},{id:'blog-x',label:'blog-x'},{id:'xyz',label:'xyz'}],dev_plans:{implementer:'p01',reviewer:'p02'},people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
+let state={updated:'2026-10-24T12:00:00+09:00',blog_dashboard:'켜짐',dev_targets:[{id:'ai-hub',label:'ai-hub'},{id:'blog-x',label:'blog-x'},{id:'xyz',label:'xyz'}],dev_plans:{implementer:'p01',reviewer:'p02'},people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
 	approvals:{c4:{status:'정상',items:[{id:'c4-'+'a'.repeat(16),prepared:3,held:1,reply:'C4 합성 반영해'}]},
 		runs:{status:'정상',items:[{id:'2026-10-24-001',status:'승인 필요'}]},r1:{status:'정상',items:[{id:'AI & Prompts',pending:2}]},
 		drafts:{status:'정상',items:[]},decisions:{status:'정상',items:[{id:'d01',title:'합성 결정'}]}},
@@ -38,7 +40,7 @@ let state={updated:'2026-10-24T12:00:00+09:00',dev_targets:[{id:'ai-hub',label:'
 	activity:[],board:{status:'정상',items:[{kind:'chat',title:'결정',text:'합성 결정',at:'2026-10-24T12:00:00+09:00'}],progress:{items:[]}},engines:[]};
 let draftView={id:'d-20261024-120000-abcdef01',target:'blog-x',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
 const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,target:value.target,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
-const sandbox={document,window:{addEventListener(){}},matchMedia:query=>({matches:mobileMode&&query.includes('900px')}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
+const sandbox={document,window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},matchMedia:query=>({matches:mobileMode&&query.includes('900px')}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
 	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{observe(){}},AbortController,
 	console,setTimeout:()=>1,clearTimeout(){},setInterval:(fn,ms)=>{interval=fn;assert.equal(ms,10000)},
 	fetch:async(url,options)=>{
@@ -56,10 +58,55 @@ const sandbox={document,window:{addEventListener(){}},matchMedia:query=>({matche
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(root+'/pixel-art.js','utf8'),sandbox);
 const element=id=>document.getElementById(id);
-const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
+const click=data=>{const button=new Element();button.dataset=data;events.get('click')({target:{closest:()=>button}});return button};
+const html=fs.readFileSync(root+'/index.html','utf8'),blogLink=html.match(/<a\b[^>]*\bid="blog-link"[^>]*>/);
+if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLink[0].match(new RegExp(name+'="([^"]*)"'))?.[1];
 (async()=>{
 	await vm.runInContext(fs.readFileSync(root+'/office.js','utf8'),sandbox);
 	assert.deepEqual(requests,['/scene.json','/api/session','/api/state']);
+	for(const person of scene.people){
+		click({person:String(person.id)});
+		const body=element('panel-body').innerHTML;
+		assert.equal(body.includes('블로그 화면 열기'),!!person.blog_path,person.name);
+		if(!person.blog_path)continue;
+		assert(body.includes('data-blog-path="'+person.blog_path+'"'));
+		assert(body.includes('data-blog-name="'+person.name+'"'));
+		const button=click({blogPath:person.blog_path,blogName:person.name}),url='http://127.0.0.1:8765'+person.blog_path;
+		assert.equal(element('blog-link').href,url);
+		if(mobileMode){
+			assert(!element('blog-dialog').open);assert.equal(element('blog-body').children.length,0);
+			assert.deepEqual(openedLinks.at(-1),{href:url,target:'_blank',rel:'noopener noreferrer'});
+		}else{
+			assert(element('blog-dialog').open);assert.equal(document.activeElement,element('blog-close'));
+			assert.equal(element('blog-title').textContent,person.name+' 블로그 화면');
+			const frames=element('blog-body').children;assert.equal(frames.length,1);
+			assert.equal(frames[0].tagName,'IFRAME');assert.equal(frames[0].src,url);
+			assert.equal(frames[0].title,person.name+' 블로그 화면');
+			assert.deepEqual(frames[0].attributes,{sandbox:'allow-scripts allow-forms allow-same-origin allow-popups',referrerpolicy:'no-referrer'});
+			windowEvents.get('keydown')({key:'Escape',target:element('map')});assert(!element('side').hidden);
+			if(person.id===8){element('blog-link').click();assert.deepEqual(openedLinks.at(-1),{href:url,target:'_blank',rel:'noopener noreferrer'})}
+			if(person.id===19)element('blog-dialog').listeners.get('cancel')({preventDefault(){}});else element('blog-close').onclick();
+			assert(!element('blog-dialog').open);assert.equal(element('blog-body').children.length,0);
+			assert.equal(document.activeElement,button);
+		}
+	}
+	for(const path of ['', '//acme.invalid', 'https://acme.invalid', '/ xyz', '/\txyz', '/\n', '/"xyz', "/'xyz", '/<xyz', '/>xyz', '/\\xyz']){
+		const count=openedLinks.length;click({blogPath:path,blogName:'합성'});
+		assert(!element('blog-dialog').open);assert.equal(openedLinks.length,count);
+	}
+	click({room:'dev'});assert(!element('panel-body').innerHTML.includes('블로그 대시보드 열기'));
+	click({room:'blog'});assert(element('panel-body').innerHTML.includes('블로그 대시보드 열기'));
+	assert(element('panel-body').innerHTML.includes('data-blog-path="/"'));
+	click({blogPath:'/',blogName:'블로그팀'});
+	assert.equal(element('blog-link').href,'http://127.0.0.1:8765/');
+	if(!mobileMode)element('blog-close').onclick();
+	state.blog_dashboard='꺼짐';await interval();
+	const linkCount=openedLinks.length;click({blogPath:'/clip',blogName:'클립'});
+	assert.equal(element('blog-body').children.length,0);assert.equal(openedLinks.length,linkCount);
+	if(mobileMode){assert(!element('blog-dialog').open);assert.equal(element('toast').textContent,'블로그 대시보드가 꺼져 있습니다')}
+	else{assert(element('blog-dialog').open);assert.equal(element('blog-body').textContent,'블로그 대시보드가 꺼져 있습니다');element('blog-close').onclick()}
+	assert(requests.every(url=>url.startsWith('/')&&!url.startsWith('//')));assert.equal(actionCount,0);
+	state.blog_dashboard='켜짐';await interval();element('close-panel').onclick();if(!mobileMode)click({view:'office'});
 	if(!sessionOK){
 		click({view:'approvals'});
 		assert(element('panel-body').innerHTML.includes('반영 세션을 읽지 못했습니다.'));
@@ -203,6 +250,17 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 
 
 class OfficeStaticTest(unittest.TestCase):
+	def test_only_six_blog_roles_have_safe_local_paths(self):
+		people = json.loads((STATIC / "scene.json").read_text())["people"]
+		expected = {8: ("작가", "/?tab=tab3"), 9: ("분석", "/"), 10: ("클립", "/clip"),
+			11: ("티스토리", "/?tab=tab3"), 19: ("이웃", "/outreach"), 22: ("네이버", "/?tab=tab3")}
+		actual = {p["id"]: (p["name"], p["blog_path"]) for p in people if "blog_path" in p}
+		self.assertEqual(actual, expected)
+		for _, path in actual.values():
+			self.assertIsInstance(path, str)
+			self.assertTrue(path.startswith("/") and not path.startswith("//"))
+			self.assertNotRegex(path, r"[\s\"'<>\\]")
+
 	def test_original_pixel_art_and_22_seat_names_are_preserved(self):
 		art = "\n".join(line.strip() for line in (STATIC / "pixel-art.js").read_text().strip().splitlines())
 		self.assertEqual(hashlib.sha256(art.encode()).hexdigest(), "ea3ef8d6eeb4fdaed56b2b48d64436d706bec07f85d9891c6c978c9173486f20")
@@ -226,6 +284,14 @@ class OfficeStaticTest(unittest.TestCase):
 		self.assertIn('max-height:calc(100dvh - 32px)', css)
 		self.assertIn('width:min(480px,calc(100% - 24px))', css)
 		self.assertIn('<dialog id="dev-dialog"', html)
+		self.assertIn('<dialog id="blog-dialog" class="action-dialog blog-dialog" aria-labelledby="blog-title">', html)
+		self.assertIn('<a id="blog-link" class="outline-button" target="_blank" rel="noopener noreferrer">새 탭으로 열기</a>', html)
+		self.assertIn('<button id="blog-close" class="outline-button">닫기</button>', html)
+		self.assertIn('.blog-dialog{width:90vw;height:80vh;height:80dvh;', css)
+		self.assertIn('.blog-dialog[open]{display:flex;flex-direction:column;', css)
+		self.assertIn('.blog-head{display:flex;align-items:center;', css)
+		self.assertIn('flex:none', css.split('.blog-head{')[1].split('}')[0])
+		self.assertIn('.blog-body{flex:1;min-height:0;overflow:auto}', css)
 		self.assertIn('maxlength="2000"', html)
 		self.assertIn('회사 내용·비밀값은 적지 마세요', html)
 		self.assertIn('aria-describedby="dev-warning dev-remaining"', html)

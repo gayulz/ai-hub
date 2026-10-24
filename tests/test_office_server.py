@@ -3,6 +3,7 @@
 import http.client
 import io
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -15,6 +16,9 @@ from test_office import OfficeCase
 class OfficeServerTest(OfficeCase):
 	def setUp(self):
 		super().setUp()
+		patch = mock.patch("socket.create_connection", side_effect=OSError("합성 연결 거부"))
+		patch.start()
+		self.addCleanup(patch.stop)
 		self.httpd = SimpleNamespace(server_port=8790, office_token=server.secrets.token_urlsafe(32))
 
 	def raw_request(self, raw, method="GET"):
@@ -65,6 +69,20 @@ class OfficeServerTest(OfficeCase):
 	def test_localhost_with_exact_port_is_also_allowed(self):
 		self.assertEqual(self.request(host=f"localhost:{self.httpd.server_port}")[0], 200)
 
+	def test_csp_only_adds_two_blog_frame_origins_and_keeps_security_headers(self):
+		expected = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+			"font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
+			"frame-src http://127.0.0.1:8765 http://localhost:8765")
+		for path, method, host in (("/", "GET", None), ("/office.js", "GET", None),
+				("/api/state", "GET", None), ("/xyz", "GET", None), ("/", "POST", None),
+				("/api/action", "POST", None), ("/", "GET", "acme.invalid")):
+			with self.subTest(path=path, method=method, host=host):
+				_, headers, _ = self.request(path, method, host)
+				self.assertEqual(headers["Content-Security-Policy"], expected)
+				self.assertEqual(headers["Cache-Control"], "no-store")
+				self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+				self.assertFalse(any(key.lower().startswith("access-control-") for key in headers))
+
 	def test_missing_duplicate_external_and_wrong_port_hosts_are_forbidden(self):
 		for host in ("acme.invalid", "127.0.0.1", "localhost", "127.0.0.1:1", "localhost:1", f"[::1]:{self.httpd.server_port}", ""):
 			with self.subTest(host=host):
@@ -92,8 +110,7 @@ class OfficeServerTest(OfficeCase):
 		self.assertIn("fetch('/api/state'", js)
 		self.assertIn('반영 전에 변경 내용을 확인합니다.', js)
 		self.assertNotIn('navigator.clipboard', js)
-		self.assertNotIn('https://', html + js)
-		self.assertNotIn('http://', html + js)
+		self.assertEqual(re.findall(r"https?://[^\s'\"<]+", html + js), ["http://127.0.0.1:8765"])
 		self.assertIn("method:'POST'", js)
 		self.assertIn("fetch('/api/action'", js)
 		self.assertIn("fetch('/api/session'", js)

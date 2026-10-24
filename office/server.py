@@ -16,7 +16,8 @@ from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-	"font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	"font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
+	"frame-src http://127.0.0.1:8765 http://localhost:8765")
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -27,7 +27,7 @@ function tick(t){const dt=Math.min(.04,(t-last)/1000||0);last=t;player.walking=f
 let press=null,moved=false,pinchDistance=0;const pointers=new Map();map.addEventListener('pointerdown',e=>{map.focus({preventScroll:true});map.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1){press={x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY};moved=false}else{moved=true;const a=[...pointers.values()];pinchDistance=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)}});
 map.addEventListener('pointermove',e=>{const b=map.getBoundingClientRect();if(pointers.has(e.pointerId)){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2){const a=[...pointers.values()],d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);if(pinchDistance)zoomAt(S*d/pinchDistance,(a[0].x+a[1].x)/2-b.left,(a[0].y+a[1].y)/2-b.top);pinchDistance=d;return}if(press){if(Math.hypot(e.clientX-press.x,e.clientY-press.y)>6)moved=true;if(moved){camera.x-=(e.clientX-press.lastX)/S;camera.y-=(e.clientY-press.lastY)/S;fitMode=false;follow=false;clampCamera()}press.lastX=e.clientX;press.lastY=e.clientY}}else{const x=camera.x+(e.clientX-b.left)/S,y=camera.y+(e.clientY-b.top)/S;hovered=actors.find(a=>Math.abs(a.x-x)<18&&y>a.y-54&&y<a.y+7)||null;map.style.cursor=hovered?'pointer':'crosshair'}});
 map.addEventListener('pointerup',e=>{pointers.delete(e.pointerId);if(!moved&&press){const b=map.getBoundingClientRect(),x=camera.x+(e.clientX-b.left)/S,y=camera.y+(e.clientY-b.top)/S;const a=actors.find(a=>Math.abs(a.x-x)<20&&y>a.y-54&&y<a.y+9);const board=boards.find(p=>contains({...p,w:144,h:80},x,y));if(board)showMeeting();else if(a)showPerson(a.id);else{player.path=routeTo(x,y);if(!player.path.length&&Math.hypot(x-player.x,y-player.y)>26)toast('빈 바닥이나 연결된 길을 눌러 주세요.')}}press=null;if(!pointers.size)pinchDistance=0});map.addEventListener('pointercancel',()=>{pointers.clear();press=null;pinchDistance=0});map.addEventListener('pointerleave',()=>hovered=null);map.addEventListener('wheel',e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();const b=map.getBoundingClientRect();zoomAt(S*Math.exp(-Math.max(-100,Math.min(100,e.deltaY))*.004),e.clientX-b.left,e.clientY-b.top)},{passive:false});
-window.addEventListener('keydown',e=>{if($('action-dialog').open||$('dev-dialog').open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;const k=e.key.toLowerCase();if(e.key==='Escape'){closePanel();return}if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)&&!(mobile.matches&&document.body.classList.contains('panel-open'))){keys.add(k);e.preventDefault()}if(e.code==='Space'&&near&&e.target===map){e.preventDefault();showPerson(near.id)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>keys.clear());
+window.addEventListener('keydown',e=>{if($('action-dialog').open||$('dev-dialog').open||$('blog-dialog').open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;const k=e.key.toLowerCase();if(e.key==='Escape'){closePanel();return}if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)&&!(mobile.matches&&document.body.classList.contains('panel-open'))){keys.add(k);e.preventDefault()}if(e.code==='Space'&&near&&e.target===map){e.preventDefault();showPerson(near.id)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>keys.clear());
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
 let currentPanel=()=>overview(),refreshing=false,state=null;
 let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
@@ -220,12 +220,34 @@ function showStatus(kind='usage'){
 	panel('오피스 현황',tabs+body);
 }
 function personRows(list){return list.map(a=>'<button class="row person-row" data-person="'+a.id+'"><span class="avatar" style="background:'+esc(a.shirt)+'">'+esc(a.name.slice(0,1))+'</span><span>'+esc(a.name)+'<small>'+esc(a.engine||'담당 없음')+'</small></span><span class="row-state">'+esc(a.status)+'</span></button>').join('')}
+const validBlogPath=path=>typeof path==='string'&&path.startsWith('/')&&!path.startsWith('//')&&!/[\s"'<>\\]/.test(path);
+const blogButton=(path,name,label='블로그 화면 열기')=>validBlogPath(path)?'<button class="outline-button" data-blog-path="'+esc(path)+'" data-blog-name="'+esc(name)+'">'+esc(label)+'</button>':'';
+let blogFocus=null;
+function openBlog(path,name,button){
+	if(!validBlogPath(path)||$('blog-dialog').open||$('action-dialog').open||$('dev-dialog').open)return;
+	const url='http://127.0.0.1:8765'+path,available=state?.blog_dashboard==='켜짐';
+	$('blog-link').href=url;$('blog-title').textContent=name+' 블로그 화면';
+	if(mobile.matches){if(available)$('blog-link').click();else toast('블로그 대시보드가 꺼져 있습니다');return}
+	blogFocus=button;keys.clear();$('blog-body').replaceChildren();
+	if(available){
+		const frame=document.createElement('iframe');
+		frame.setAttribute('sandbox','allow-scripts allow-forms allow-same-origin allow-popups');
+		frame.setAttribute('referrerpolicy','no-referrer');frame.title=name+' 블로그 화면';frame.src=url;
+		$('blog-body').append(frame);
+	}else $('blog-body').textContent='블로그 대시보드가 꺼져 있습니다';
+	$('blog-dialog').showModal();$('blog-close').focus();
+}
+function closeBlog(){
+	$('blog-body').replaceChildren();$('blog-dialog').close();
+	if(blogFocus?.isConnected)blogFocus.focus({preventScroll:true});else $('close-panel').focus();
+}
+$('blog-close').onclick=closeBlog;$('blog-dialog').addEventListener('cancel',e=>{e.preventDefault();closeBlog()});
 function showDepartment(id,focus=true){
 	const r=D.rooms.find(r=>r.id===id),people=actors.filter(a=>a.department===id);
 	if(!r)return;
 	if(id==='meeting'){showMeeting();return}
 	currentPanel=()=>showDepartment(id,false);
-	panel(r.name,'<p class="intro">'+(id==='company'?'프로젝트 ID · 상태 · 시간':people.length?people.length+'개 역할':'공용 공간')+'</p>'+personRows(people)
+	panel(r.name,'<p class="intro">'+(id==='company'?'프로젝트 ID · 상태 · 시간':people.length?people.length+'개 역할':'공용 공간')+'</p>'+personRows(people)+(id==='blog'?blogButton('/',r.name,'블로그 대시보드 열기'):'')
 		+(id==='engines'?(state?.engines||[]).map(engine=>'<div class="row"><span>'+esc(engine.name)+'</span><span class="state">'+esc(engine.status)+'</span></div>').join(''):''));
 	if(focus&&!fitMode){center(r.x+r.w/2,r.y+r.h/2);follow=false}
 }
@@ -238,6 +260,7 @@ function showPerson(id,focus=true){
 	const role=Object.keys(devRoles).find(key=>devRoles[key]===a.name);
 	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
 	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
+	$('panel-body').innerHTML+=blogButton(a.blog_path,a.name);
 	const c=$('portrait').getContext('2d');c.imageSmoothingEnabled=false;c.scale(1.6,1.6);art.drawActor(c,{...a,x:28,y:56,walking:false},0);
 	if(focus&&!fitMode){center(a.x,a.y);follow=false}
 }
@@ -250,7 +273,7 @@ function showMeeting(filter='all'){
 function showCharacters(){currentPanel=showCharacters;const list=[{...player,identity:'검은 머리 · 초록 캡 · 안경'},...actors];panel('캐릭터 23명','<p class="intro">역할마다 고정된 헤어·의상·소품을 사용해요.</p><div class="character-grid">'+list.map((a,i)=>'<div class="character-card"><canvas width="100" height="108" data-character="'+i+'" aria-label="'+esc(a.name)+' 캐릭터"></canvas><b>'+esc(a.name)+'</b><small>'+esc(a.identity||'')+'</small></div>').join('')+'</div>');document.querySelectorAll('[data-character]').forEach(c=>{const a=list[Number(c.dataset.character)],cx=c.getContext('2d');cx.imageSmoothingEnabled=false;cx.scale(1.7,1.7);art.drawActor(cx,{...a,x:29,y:59,walking:false,face:'down'},0)})}
 function showDirectory(){currentPanel=showDirectory;panel('부서 찾기','<p class="intro">부서나 직원을 선택해 살펴보세요.</p><button class="outline-button" data-characters="true" style="margin:0 0 16px">캐릭터 23명 한눈에 보기</button>'+D.rooms.map(r=>'<button class="row person-row" data-room="'+r.id+'"><span>'+esc(r.name)+'</span><span class="row-state">'+actors.filter(a=>a.department===r.id).length+'명</span></button>').join(''))}
 function view(v){if(v==='office'){if(mobile.matches&&!$('side').hidden)closePanel();else overview()}else if(v==='approvals')showApprovals();else if(v==='schedule')showSchedule();else showStatus()}
-document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.dataset.dev)openDev(b.dataset.dev,b,b.dataset.team==='blog');else if(b.dataset.draft)showDraft(b.dataset.draft,b);else if(b.dataset.action)openAction(b.dataset.action,b.dataset.id,b);else if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.dataset.blogPath!==undefined)openBlog(b.dataset.blogPath,b.dataset.blogName,b);else if(b.dataset.dev)openDev(b.dataset.dev,b,b.dataset.team==='blog');else if(b.dataset.draft)showDraft(b.dataset.draft,b);else if(b.dataset.action)openAction(b.dataset.action,b.dataset.id,b);else if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
 
 function refreshPanel(){
 	if($('side').hidden)return;

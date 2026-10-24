@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -94,6 +95,14 @@ def dashboard(root: Path) -> dict:
 		return unavailable("대시보드 링크가 없거나 안전한 HTTP 주소가 아닙니다", url=None)
 
 
+def blog_dashboard() -> str:
+	try:
+		with socket.create_connection(("127.0.0.1", 8765), timeout=0.2):
+			return "켜짐"
+	except Exception:
+		return "꺼짐"
+
+
 def build_state(now: datetime | None = None) -> dict:
 	now = (now or datetime.now().astimezone()).astimezone()
 	root, user_home = home(), Path.home()
@@ -140,6 +149,7 @@ def build_state(now: datetime | None = None) -> dict:
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
+		"blog_dashboard": blog_dashboard(),
 		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),

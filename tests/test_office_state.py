@@ -16,6 +16,29 @@ from test_office import OfficeCase
 
 
 class OfficeStateTest(OfficeCase):
+	def setUp(self):
+		super().setUp()
+		patch = mock.patch("socket.create_connection", side_effect=OSError("합성 연결 거부"))
+		patch.start()
+		self.addCleanup(patch.stop)
+
+	def test_blog_dashboard_uses_only_bounded_tcp_and_does_not_change_other_sections(self):
+		off = self.state()
+		self.assertEqual(off["blog_dashboard"], "꺼짐")
+		before = self.snapshot()
+		with mock.patch("socket.create_connection") as connection:
+			on = self.state()
+		connection.assert_called_once_with(("127.0.0.1", 8765), timeout=0.2)
+		self.assertEqual(connection.return_value.mock_calls,
+			[mock.call.__enter__(), mock.call.__exit__(None, None, None)])
+		self.assertEqual(on["blog_dashboard"], "켜짐")
+		self.assertEqual({**on, "blog_dashboard": "꺼짐"}, off)
+		self.assertEqual(before, self.snapshot())
+		for error in (ConnectionRefusedError, TimeoutError, OSError, RuntimeError):
+			with self.subTest(error=error), mock.patch("socket.create_connection", side_effect=error) as connection:
+				self.assertEqual(self.state(), off)
+				connection.assert_called_once_with(("127.0.0.1", 8765), timeout=0.2)
+
 	def test_dev_targets_only_export_ids_and_broken_list_keeps_other_sections_normal(self):
 		self.assertEqual(self.state()["dev_targets"], [{"id": "ai-hub", "label": "ai-hub"}])
 		listing = {"ai-hub": targets.Target("ai-hub", self.root / "repo"),

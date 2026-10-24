@@ -6,6 +6,8 @@ import json
 import os
 import re
 import stat
+import threading
+import time
 import tomllib
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -68,6 +70,7 @@ class Client:
 		self._token = config["token"] if config else ""
 		self._chat = config["chat_id"] if config else ""
 		self._transport = transport
+		self._send_lock = threading.Lock()
 
 	def private(self, message, sender):
 		if not isinstance(message, dict) or not isinstance(sender, dict) or not isinstance(message.get("chat"), dict):
@@ -109,9 +112,14 @@ class Client:
 		raise error
 
 	def _message(self, method, text, buttons, **values):
-		payload = {"chat_id": self._chat, "text": self.clean(text)[:4096], **values}
+		text, parts, keyboard = self.clean(text), [], []
+		if len(text) > (4096 if method == "editMessageText" else 4000):
+			while len(text) > 4000:
+				end = text.rfind("\n", 0, 4000) + 1 or 4000
+				parts.append(text[:end])
+				text = text[end:]
+		parts.append(text)
 		if buttons is not None or method == "editMessageText":
-			keyboard = []
 			for row in buttons or []:
 				items = []
 				for button in row:
@@ -120,8 +128,24 @@ class Client:
 						raise TelegramError("CallbackDataError")
 					items.append({"text": self.clean(button["text"])[:4096], "callback_data": data})
 				keyboard.append(items)
-			payload["reply_markup"] = {"inline_keyboard": keyboard}
-		return self._call(method, payload)
+		ids = []
+		with self._send_lock:
+			for index, part in enumerate(parts):
+				if index:
+					time.sleep(0.3)
+				current = method if index == 0 else "sendMessage"
+				payload = {"chat_id": self._chat, "text": (f"({index + 1}/{len(parts)})\n" if len(parts) > 1 else "") + part}
+				if index == 0:
+					payload.update(values)
+				if index == len(parts) - 1 and buttons is not None:
+					payload["reply_markup"] = {"inline_keyboard": keyboard}
+				elif current == "editMessageText":
+					payload["reply_markup"] = {"inline_keyboard": []}
+				result = self._call(current, payload)
+				if not isinstance(result, dict) or type(result.get("message_id")) is not int or result["message_id"] <= 0:
+					raise TelegramError("ResponseError")
+				ids.append(result["message_id"])
+		return {"message_id": ids[-1], "message_ids": ids}
 
 	def send_message(self, text, buttons=None):
 		return self._message("sendMessage", text, buttons)

@@ -22,13 +22,14 @@ from orchestrator import question_cards
 from vaultfilter.public import Rules
 
 from .agents import read_runs
+from . import telegram_ask
 from .telegram_client import Client, TelegramError, configuration
 from .telegram_state import CARD, Store, message_id
 
 STATUSES = {"participants_pending": "참석자 확인 대기", "questions_pending": "질문 답변 대기",
 	"answers_pending": "답변 요약 확인 대기", "running": "진행 중", "completed": "완료", "failed": "실패",
 	"budget_exhausted": "예산 소진", "questions_exhausted": "질문 한도 소진", "record_pending": "기록 대기"}
-PATH = re.compile(r"https?://\S+|(?:~?/|[A-Za-z]:[\\/])[^\s<>\"']+|(?:\b[\w.-]+[\\/])+[\w.*-]+")
+PATH = re.compile(r"https?://\S+|(?<![\w./\\~-])(?:~/|/|[A-Za-z]:[\\/])[^\s<>\"']+")
 _runtime = None
 
 
@@ -80,23 +81,31 @@ class Bridge:
 				button("제출", "s|" + card["id"]), button("다시 고르기", "r|" + card["id"])]])
 
 	def summary(self, card, local):
-		text = self.safe("답변 요약\n" + card["summary"])
-		for start in range(0, len(text), 4096):
-			buttons = [[button("확인", "c|" + card["id"])]] if start + 4096 >= len(text) else None
-			mid = self.send(text[start:start + 4096], buttons)
-		local["submit_message"] = mid
+		local["submit_message"] = self.send("답변 요약\n" + card["summary"], [[button("확인", "c|" + card["id"])]])
+
+	def preview(self, value, maximum, suffix=""):
+		value = self.safe(value)
+		return value[:maximum] + "…" + suffix if len(value) > maximum else value
 
 	def events(self, meetings):
 		events = []
 		for meeting in meetings:
 			status, mid = meeting["status"], meeting["id"]
 			if status == "participants_pending":
-				text = "참석자 제안이 있습니다. 사무실에서 확인하고 시작하세요\n" + self.safe(meeting["agenda"])[:40]
+				text = "참석자 제안이 있습니다. 사무실에서 확인하고 시작하세요\n" + self.preview(meeting["agenda"], 200)
 			elif status in ("completed", "failed", "budget_exhausted", "questions_exhausted"):
 				text = "회의 " + mid + ": " + STATUSES[status]
-				conclusion = (meeting.get("summary") or {}).get("conclusion", [])
+				summary = meeting.get("summary") or {}
+				conclusion = summary.get("conclusion", [])
 				if isinstance(conclusion, list):
-					text += "\n" + self.safe("\n".join(row["text"] for row in conclusion if isinstance(row, dict) and isinstance(row.get("text"), str)))[:300]
+					text += "\n" + self.preview("\n".join(row["text"] for row in conclusion if isinstance(row, dict) and isinstance(row.get("text"), str)),
+						1500, "\n전문은 사무실 회의 화면에서")
+				todos = summary.get("todos", [])
+				if isinstance(todos, list):
+					lines = ["- " + self.safe(" ".join(row["text"].splitlines())) for row in todos
+						if isinstance(row, dict) and isinstance(row.get("text"), str)]
+					if lines:
+						text += "\n할 일\n" + "\n".join(lines[:8])
 			else:
 				continue
 			events.append((meeting.get("created", ""), f"meeting:{mid}:{status}", text))
@@ -104,7 +113,7 @@ class Bridge:
 			if run["status"] == "승인 필요":
 				text = "실행 승인 필요: " + run["id"]
 				if run.get("public"):
-					text += "\n" + self.safe(run.get("goal", ""))[:40]
+					text += "\n" + self.preview(run.get("goal", ""), 300)
 				events.append((run.get("at") or "", "run:" + run["id"], text))
 		return [(key, text) for _, key, text in sorted(events)[-500:]]
 
@@ -163,7 +172,8 @@ class Bridge:
 		text, buttons = self.question(card, number)
 		selected = "\n\n선택됨: " + self.safe(label)
 		if changed:
-			self.client.edit_message(local["questions"][q["id"]], self.safe(text)[:4096 - len(selected)] + selected, buttons)
+			result = self.client.edit_message(local["questions"][q["id"]], self.safe(text) + selected, buttons)
+			local["questions"][q["id"]] = result["message_id"]
 		self.ready(card, local)
 
 	def submit(self, card, local):
@@ -185,6 +195,8 @@ class Bridge:
 
 	def callback(self, callback, state):
 		data = callback.get("data", "")
+		if isinstance(data, str) and data.startswith("k|"):
+			return telegram_ask.answer_option(self.client, callback, state)
 		parts = data.split("|") if isinstance(data, str) and len(data.encode("utf-8")) <= 64 else []
 		if len(parts) not in (2, 4) or parts[0] not in ("a", "s", "r", "c") or not CARD.fullmatch(parts[1]):
 			return "허용하지 않는 응답입니다"
@@ -233,12 +245,16 @@ class Bridge:
 			self.client.edit_message(mid, "다시 골라 주세요")
 			for number, q in enumerate(card["questions"], 1):
 				text, buttons = self.question(card, number)
-				self.client.edit_message(local["questions"][q["id"]], self.safe(text), buttons)
+				result = self.client.edit_message(local["questions"][q["id"]], self.safe(text), buttons)
+				local["questions"][q["id"]] = result["message_id"]
 			return "다시 골라 주세요"
 		return "허용하지 않는 응답입니다"
 
 	def reply(self, message, state):
-		mid = message.get("reply_to_message", {}).get("message_id")
+		if telegram_ask.answer_text(self.client, message, state):
+			return
+		reply = message.get("reply_to_message")
+		mid = reply.get("message_id") if isinstance(reply, dict) else None
 		value = message.get("text")
 		if not message_id(mid) or not isinstance(value, str):
 			return

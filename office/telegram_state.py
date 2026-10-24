@@ -18,10 +18,11 @@ from orchestrator.question_cards import identifier
 from .telegram_client import BOT_SECRET
 
 CARD = re.compile(r"q-[a-f0-9]{32}")
+ASK = re.compile(r"k-[a-f0-9]{8}")
 
 
 def empty():
-	return {"offset": 0, "baseline_done": False, "seen": [], "cards": {}}
+	return {"offset": 0, "baseline_done": False, "seen": [], "cards": {}, "asks": {}}
 
 
 def message_id(value):
@@ -29,9 +30,11 @@ def message_id(value):
 
 
 def checked(value):
+	if isinstance(value, dict) and set(value) == set(empty()) - {"asks"}:
+		value["asks"] = {}
 	if (not isinstance(value, dict) or set(value) != set(empty()) or type(value["offset"]) is not int
 			or value["offset"] < 0 or type(value["baseline_done"]) is not bool
-			or not isinstance(value["seen"], list) or not isinstance(value["cards"], dict)):
+			or not isinstance(value["seen"], list) or not isinstance(value["cards"], dict) or not isinstance(value["asks"], dict)):
 		raise ValueError("연동 상태 형식 오류")
 	for key in value["seen"]:
 		if not isinstance(key, str) or not re.fullmatch(r"(?:meeting:m-[a-f0-9]{32}:[a-z_]+|run:[0-9-]{14})", key):
@@ -61,7 +64,36 @@ def checked(value):
 			rows.append((key, card))
 	value["seen"] = list(dict.fromkeys(value["seen"]))[-500:]
 	value["cards"] = dict(sorted(rows, key=lambda row: row[1]["created"])[-100:])
+	value["asks"] = checked_asks(value["asks"], now)
 	return value
+
+
+def checked_asks(asks, now):
+	rows = []
+	for key, ask in asks.items():
+		if (not isinstance(key, str) or not ASK.fullmatch(key) or not isinstance(ask, dict)
+				or set(ask) != {"id", "message_id", "options", "created", "answer"} or ask["id"] != key
+				or not message_id(ask["message_id"]) or not isinstance(ask["options"], list)
+				or not 2 <= len(ask["options"]) <= 4):
+			raise ValueError("확인 요청 형식 오류")
+		if any(not isinstance(option, str) or not 1 <= len(option) <= 20 or BOT_SECRET.search(option) for option in ask["options"]):
+			raise ValueError("확인 선택지 형식 오류")
+		created = datetime.fromisoformat(ask["created"])
+		if created.tzinfo is None:
+			raise ValueError("확인 생성 시각 형식 오류")
+		answer = ask["answer"]
+		if answer is not None:
+			if (not isinstance(answer, dict) or set(answer) != {"kind", "value", "at"}
+					or answer["kind"] not in ("option", "text") or not isinstance(answer["value"], str)
+					or not 1 <= len(answer["value"]) <= 1000 or BOT_SECRET.search(answer["value"])
+					or (answer["kind"] == "option" and answer["value"] not in ask["options"])):
+				raise ValueError("확인 답 형식 오류")
+			at = datetime.fromisoformat(answer["at"])
+			if at.tzinfo is None or not created <= at <= now:
+				raise ValueError("확인 답 시각 형식 오류")
+		if now - timedelta(days=7) <= created <= now:
+			rows.append((key, ask))
+	return dict(sorted(rows, key=lambda row: row[1]["created"])[-50:])
 
 
 def private(fd):

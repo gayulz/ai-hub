@@ -298,3 +298,67 @@ class TelegramBridgeTest(BridgeCase):
 		self.transport.error = None
 		self.bridge.poll_once()
 		self.assertEqual(self.bridge.health["status"], "켜짐")
+
+	def test_paths_hide_only_urls_home_absolute_and_drive_paths(self):
+		for value in ("확정/시작", "UI/UX", "24/7", "office/static/office.js", "src\\module.py"):
+			with self.subTest(value=value):
+				self.assertEqual(self.bridge.safe(value), value)
+		for value in ("/Users/x/y", "~/.ai-hub/z", "https://example.invalid/a", "http://example.invalid/a",
+				"/home/x/y", "/private/x/y", "/var/x/y", "/tmp/x/y", "C:\\Users\\x\\y", "D:/work/file"):
+			with self.subTest(value=value):
+				self.assertEqual(self.bridge.safe(value), "[경로 생략]")
+		self.assertEqual(self.bridge.safe("목표: 확정/시작 경로: /Users/x/y"), "목표: 확정/시작 경로: [경로 생략]")
+		for value in (self.token, self.chat, "ghp_" + "z" * 36, "x" + "@example.invalid", "password=" + "z" * 24):
+			self.assertNotIn(value, self.bridge.safe(value))
+
+	def test_previews_have_requested_limits_and_ellipsis_only_when_truncated(self):
+		mid = "m-" + "1" * 32
+		for extra in (0, 1):
+			self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True, "goal": "가" * (300 + extra)}]
+			meetings = [{"id": mid, "status": "participants_pending", "agenda": "나" * (200 + extra)},
+				{"id": "m-" + "2" * 32, "status": "completed", "summary": {"conclusion": [{"text": "다" * (1500 + extra)}]}}]
+			events = dict(self.bridge.events(meetings))
+			suffix = "…" if extra else ""
+			self.assertEqual(events["run:2026-10-24-001"].split("\n", 1)[1], "가" * 300 + suffix)
+			self.assertEqual(events[f"meeting:{mid}:participants_pending"].split("\n", 1)[1], "나" * 200 + suffix)
+			self.assertEqual(events["meeting:m-" + "2" * 32 + ":completed"].split("\n", 1)[1],
+				"다" * 1500 + ("…\n전문은 사무실 회의 화면에서" if extra else ""))
+
+	def test_completed_notice_includes_at_most_eight_single_line_todos_from_engine_schema(self):
+		state = {"id": "m-" + "3" * 32, "status": "completed", "summary": {
+			"conclusion": [{"text": "첫 결론"}, {"text": "다음 결론"}],
+			"todos": [{"text": "항목 " + str(i) + "\n계속 /private/synthetic"} for i in range(10)],
+			"open_questions": [{"text": "전송 대상 아님"}]}}
+		value = self.bridge.events([state])[0][1]
+		self.assertIn("첫 결론\n다음 결론\n할 일\n", value)
+		self.assertEqual(value.split("\n할 일\n")[1].splitlines(),
+			["- 항목 " + str(i) + " 계속 [경로 생략]" for i in range(8)])
+		self.assertNotIn("전송 대상 아님", value)
+		self.assertNotIn("…", value)
+
+	def test_long_question_and_edit_keep_all_text_and_track_buttons_last_message(self):
+		state, card = self.pending(2)
+		q = card["questions"][0]
+		q.update(text="문" * 500, reason="이" * 500, options=[
+			{"id": key, "label": label * 500, "difference": "차" * 500, "reply": key + "안"}
+			for key, label in (("a", "가"), ("b", "나"), ("c", "다"))])
+		self.save(state)
+		with mock.patch("office.telegram_client.time.sleep"):
+			self.bridge.sync()
+			original, _ = self.bridge.question(card, 1)
+			sent = self.transport.sent()[:-1]
+			self.assertGreater(len(sent), 1)
+			self.assertEqual("".join(body["text"].split("\n", 1)[1] for body in sent), original)
+			self.assertEqual(self.local(card)["questions"]["q1"], self.transport.message_id - 1)
+			before = len(self.transport.calls)
+			self.click(card)
+			calls = [body for method, body, _ in self.transport.calls[before:] if method in ("sendMessage", "editMessageText")]
+			self.assertEqual("".join(body["text"].split("\n", 1)[1] for body in calls), original + "\n\n선택됨: " + "가" * 500)
+			self.assertEqual(self.local(card)["questions"]["q1"], self.transport.message_id)
+			self.click(card, option="2")
+			self.assertEqual(self.local(card)["pending"]["q1"]["value"], "b")
+			self.click(card, number=2)
+			reset_mid = self.local(card)["questions"]["q1"]
+			self.click(card, "r")
+			self.assertEqual(self.local(card)["pending"], {})
+			self.assertEqual(self.local(card)["questions"]["q1"], reset_mid)

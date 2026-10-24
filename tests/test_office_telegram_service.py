@@ -96,7 +96,7 @@ class TelegramRecoveryTest(BridgeCase):
 		self.click(card, "s")
 		summary = self.engine.store.read(state["id"])["cards"][-1]["summary"]
 		sent = self.transport.sent()[before:]
-		self.assertEqual("".join(body["text"] for body in sent), "답변 요약\n" + summary)
+		self.assertEqual("".join(body["text"].split("\n", 1)[1] for body in sent), "답변 요약\n" + summary)
 		self.assertGreater(len(sent), 1)
 		self.assertTrue(all(len(body["text"]) <= 4096 for body in sent))
 		self.assertTrue(all("reply_markup" not in body for body in sent[:-1]))

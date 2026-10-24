@@ -18,6 +18,11 @@ def local_card(number=1, age=0):
 		"created": (datetime.now().astimezone() - timedelta(days=age)).isoformat()}
 
 
+def local_ask(number=1, age=0):
+	return {"id": "k-" + f"{number:08x}", "message_id": number, "options": ["승인", "거절"],
+		"created": (datetime.now().astimezone() - timedelta(days=age)).isoformat(), "answer": None}
+
+
 class TelegramStateTest(TelegramCase):
 	def test_roundtrip_permissions_and_offset_survive_restart(self):
 		store = Store()
@@ -124,3 +129,38 @@ class TelegramStateTest(TelegramCase):
 				raise RuntimeError("합성 후속 전송 실패")
 		with Store().locked() as state:
 			self.assertEqual(len(state["cards"]), 1)
+
+	def test_old_state_gains_asks_without_losing_offset_seen_or_pending_cards(self):
+		old = {"offset": 31, "baseline_done": True, "seen": ["run:2026-10-24-001"],
+			"cards": {"q-" + "1" * 32: local_card()}}
+		with Store().locked():
+			pass
+		(self.hub / "run/telegram-state.json").write_text(json.dumps(old))
+		with Store().locked() as state:
+			self.assertEqual(state, {**old, "asks": {}})
+
+	def test_only_fifty_most_recent_asks_within_seven_days_survive(self):
+		state = empty()
+		asks = [local_ask(i) for i in range(1, 56)] + [local_ask(100, age=8)]
+		state["asks"] = {ask["id"]: ask for ask in asks}
+		checked(state)
+		self.assertEqual(len(state["asks"]), 50)
+		self.assertNotIn(asks[0]["id"], state["asks"])
+		self.assertNotIn(asks[-1]["id"], state["asks"])
+		self.assertIn(asks[-2]["id"], state["asks"])
+		with Store().locked() as saved:
+			saved.update(state)
+		with Store().locked() as saved:
+			self.assertEqual(saved, state)
+
+	def test_invalid_ask_ids_options_answers_and_bot_secret_are_rejected(self):
+		row = local_ask()
+		changes = ({"id": "k-bad"}, {"message_id": True}, {"options": ["승인"]},
+			{"options": ["가" * 21, "거절"]}, {"options": [self.token, "거절"]},
+			{"created": "2026-01-01"}, {"answer": {"kind": "command", "value": "apply", "at": row["created"]}},
+			{"answer": {"kind": "option", "value": "다른 답", "at": row["created"]}},
+			{"answer": {"kind": "text", "value": "가" * 1001, "at": row["created"]}},
+			{"answer": {"kind": "text", "value": self.token, "at": row["created"]}})
+		for change in changes:
+			with self.subTest(fields=list(change)), self.assertRaises(ValueError):
+				checked({**empty(), "asks": {row["id"]: {**row, **change}}})

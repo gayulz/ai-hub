@@ -113,14 +113,14 @@ class TelegramClientTest(TelegramCase):
 		self.config()
 		client = Client(transport=self.transport)
 		buttons = [[{"text": "작게", "callback_data": "a|card|1|1"}]]
-		client.send_message("가" * 5000, buttons)
+		client.send_message("합성 글", buttons)
 		client.edit_message(11, "선택됨: 작게", buttons)
 		client.edit_message(11, "선택 초기화")
 		client.answer_callback("callback-1", "선택했습니다")
 		self.transport.updates = [{"update_id": 5}]
 		self.assertEqual(client.get_updates(4), [{"update_id": 5}])
 		calls = self.transport.calls
-		self.assertEqual(len(calls[0][1]["text"]), 4096)
+		self.assertEqual(calls[0][1]["text"], "합성 글")
 		self.assertEqual(calls[0][1]["reply_markup"], {"inline_keyboard": buttons})
 		self.assertEqual(calls[1][1]["message_id"], 11)
 		self.assertEqual(calls[2][1]["reply_markup"], {"inline_keyboard": []})
@@ -129,6 +129,79 @@ class TelegramClientTest(TelegramCase):
 			client.send_message("합성 글", [[{"text": "선택", "callback_data": "가" * 22}]])
 		self.assertFalse(client.sensitive("14:30에 진행해 주세요"))
 		self.assertEqual(client.clean("14:30에 진행해 주세요"), "14:30에 진행해 주세요")
+
+	def test_long_messages_preserve_every_character_and_send_buttons_only_last_in_order(self):
+		self.config()
+		client = Client(transport=self.transport)
+		buttons = [[{"text": "선택", "callback_data": "k|k-1234abcd|1"}]]
+		for size in (4000, 4001, 4096, 4097, 8000, 8001, 15000):
+			with self.subTest(size=size), mock.patch("office.telegram_client.time.sleep") as sleep:
+				self.transport.calls.clear()
+				order = []
+				original = self.transport.__call__
+				def send(request, **kwargs):
+					order.append("전송")
+					return original(request, **kwargs)
+				client._transport = send
+				sleep.side_effect = lambda seconds: order.append(seconds)
+				result = client.send_message("가" * size, buttons)
+				sent = self.transport.sent()
+				count = (size + 3999) // 4000
+				self.assertEqual(len(sent), count)
+				self.assertEqual(order, [item for _ in range(count - 1) for item in ("전송", 0.3)] + ["전송"])
+				self.assertEqual(sleep.call_count, count - 1)
+				content = []
+				for index, body in enumerate(sent, 1):
+					prefix = f"({index}/{count})\n" if count > 1 else ""
+					self.assertTrue(body["text"].startswith(prefix))
+					self.assertLessEqual(len(body["text"]), 4096)
+					content.append(body["text"][len(prefix):])
+				self.assertEqual("".join(content), "가" * size)
+				self.assertTrue(all("reply_markup" not in body for body in sent[:-1]))
+				self.assertEqual(sent[-1]["reply_markup"], {"inline_keyboard": buttons})
+				self.assertEqual(result, {"message_id": self.transport.message_id,
+					"message_ids": list(range(self.transport.message_id - count + 1, self.transport.message_id + 1))})
+
+	def test_splitting_keeps_line_endings_and_falls_back_for_a_long_line(self):
+		self.config()
+		client = Client(transport=self.transport)
+		value = "가" * 2500 + "\n" + "나" * 3000 + "\n" + "다" * 4500
+		with mock.patch("office.telegram_client.time.sleep"):
+			client.send_message(value)
+		sent = self.transport.sent()
+		parts = [body["text"].split("\n", 1)[1] for body in sent]
+		self.assertEqual(parts, ["가" * 2500 + "\n", "나" * 3000 + "\n", "다" * 4000, "다" * 500])
+		self.assertEqual("".join(parts), value)
+
+	def test_edit_overflow_edits_first_part_and_sends_rest_with_buttons_last(self):
+		self.config()
+		client = Client(transport=self.transport)
+		buttons = [[{"text": "선택", "callback_data": "k|k-1234abcd|1"}]]
+		for size in (4096, 4097, 8500):
+			with self.subTest(size=size), mock.patch("office.telegram_client.time.sleep") as sleep:
+				self.transport.calls.clear()
+				result = client.edit_message(11, "가" * size, buttons)
+				calls = self.transport.calls
+				self.assertEqual(calls[0][0], "editMessageText")
+				self.assertEqual(calls[0][1]["message_id"], 11)
+				self.assertTrue(all(method == "sendMessage" and "message_id" not in body for method, body, _ in calls[1:]))
+				parts = [body["text"].split("\n", 1)[1] if len(calls) > 1 else body["text"] for _, body, _ in calls]
+				self.assertEqual("".join(parts), "가" * size)
+				self.assertTrue(all(body.get("reply_markup", {}).get("inline_keyboard", []) == [] for _, body, _ in calls[:-1]))
+				self.assertEqual(calls[-1][1]["reply_markup"], {"inline_keyboard": buttons})
+				self.assertEqual(result["message_ids"][0], 11)
+				self.assertEqual(result["message_id"], result["message_ids"][-1])
+				self.assertEqual(sleep.call_args_list, [mock.call(0.3)] * (len(calls) - 1))
+
+	def test_invalid_buttons_are_rejected_before_any_partial_send_and_results_hide_provider_data(self):
+		self.config()
+		client = Client(transport=self.transport)
+		with self.assertRaises(TelegramError):
+			client.send_message("가" * 8500, [[{"text": "선택", "callback_data": "가" * 22}]])
+		self.assertEqual(self.transport.calls, [])
+		self.transport.response = json.dumps({"ok": True, "result": {"message_id": 12,
+			"chat": {"id": self.chat}, "원문": self.token}}).encode()
+		self.assertEqual(client.send_message("합성 글"), {"message_id": 12, "message_ids": [12]})
 
 	def test_provider_exception_body_and_token_url_never_escape(self):
 		self.config()

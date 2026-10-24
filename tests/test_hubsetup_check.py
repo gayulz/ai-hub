@@ -1,13 +1,15 @@
 """실패·경고 구분과 읽기 전용 보안 경계를 합성 자료로 확인한다."""
 
 import contextlib
+import copy
 import io
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 from hubsetup import __main__ as cli
-from hubsetup import check
+from hubsetup import check, config, records
 from test_hubsetup import HubSetupCase
 
 
@@ -21,6 +23,8 @@ class HubSetupCheckTest(HubSetupCase):
 		self.assertIn("| 점검 항목 | 결과 | 안내 |", result.stdout)
 		self.assertNotIn("| 실패 |", result.stdout)
 		self.assertNotIn("xyz@example.invalid", result.stdout)
+		self.assertIn("작업 기록: .claude/settings.local.json | 통과", result.stdout)
+		self.assertIn("검사 대상: .claude/settings.json, .claude/settings.local.json", result.stdout)
 		self.assertEqual(before, self.snapshot())
 		self.assertTrue(all(args[0] == "print" for args in self.calls()[calls:]))
 
@@ -184,3 +188,108 @@ class HubSetupCheckTest(HubSetupCase):
 		result = self.command("check")
 		self.assertEqual(result.returncode, 1)
 		self.assertIn("| 설치물: vf | 실패 |", result.stdout)
+
+	def test_claude_check_reports_global_location_and_validates_both_files_without_changes(self):
+		self.apply()
+		local_path = self.user / ".claude/settings.local.json"
+		global_path = local_path.with_name("settings.json")
+		local_path.rename(global_path)
+		global_path.chmod(0o640)
+		local_path.write_text('{"env": {"ACME_PRIVATE": "acme-private-value"}}')
+		local_path.chmod(0o640)
+		before, calls = self.snapshot(), len(self.calls())
+		result = self.command("check")
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertIn("| 작업 기록: .claude/settings.json | 통과 |", result.stdout)
+		self.assertIn("검사 대상: .claude/settings.json, .claude/settings.local.json", result.stdout)
+		self.assertNotIn("작업 기록: .claude/settings.local.json |", result.stdout)
+		for value in ("acme-private-value", "ACME_PRIVATE", records.hook_command(config.context("com.acme"), "claude")):
+			self.assertNotIn(value, result.stdout + result.stderr)
+		self.assertEqual(before, self.snapshot())
+		self.assertTrue(all(args[0] == "print" for args in self.calls()[calls:]))
+
+	def test_claude_check_fails_for_split_and_duplicate_hooks_and_continues(self):
+		self.apply()
+		local_path = self.user / ".claude/settings.local.json"
+		global_path = local_path.with_name("settings.json")
+		data = json.loads(local_path.read_text())
+		for split in (False, True):
+			with self.subTest(split=split):
+				global_data, local_data = copy.deepcopy(data), copy.deepcopy(data)
+				if split:
+					del global_data["hooks"]["Stop"]
+					del global_data["hooks"]["SessionEnd"]
+					del local_data["hooks"]["UserPromptSubmit"]
+				global_path.write_text(json.dumps(global_data))
+				local_path.write_text(json.dumps(local_data))
+				before = self.snapshot()
+				result = self.command("check")
+				self.assertEqual(result.returncode, 1)
+				self.assertIn("검사 대상: .claude/settings.json, .claude/settings.local.json", result.stdout)
+				self.assertIn("| 작업 기록: .codex/hooks.json | 통과 |", result.stdout)
+				self.assertIn("| 마지막 백업:", result.stdout)
+				self.assertEqual(before, self.snapshot())
+		global_path.unlink()
+		data["hooks"]["Stop"][0]["hooks"] *= 2
+		local_path.write_text(json.dumps(data))
+		before = self.snapshot()
+		result = self.command("check")
+		self.assertEqual(result.returncode, 1)
+		self.assertIn("| 작업 기록: .claude/settings.local.json | 실패 |", result.stdout)
+		self.assertEqual(before, self.snapshot())
+
+	def test_claude_check_rejects_missing_or_misconfigured_hooks_in_either_location(self):
+		self.apply()
+		local_path = self.user / ".claude/settings.local.json"
+		original = json.loads(local_path.read_text())
+		for name in ("settings.local.json", "settings.json"):
+			path = local_path.with_name(name)
+			for field, value in (("command", "acme-private-value -m collector hook claude"), ("type", "prompt"),
+					("timeout", 10), ("timeout", None), ("matcher", "acme"), ("missing", None)):
+				with self.subTest(name=name, field=field):
+					data = copy.deepcopy(original)
+					group = data["hooks"]["Stop"][0]
+					if field == "matcher":
+						group[field] = value
+					elif field == "missing":
+						del data["hooks"]["Stop"]
+					else:
+						group["hooks"][0][field] = value
+					path.write_text(json.dumps(data))
+					before, calls = self.snapshot(), len(self.calls())
+					result = self.command("check")
+					self.assertEqual(result.returncode, 1)
+					if field == "timeout" and value is None:
+						self.assertIn("ai-hub 항목·형식·경로 확인 필요 (검사 대상:", result.stdout)
+					else:
+						self.assertIn(f"| 작업 기록: .claude/{name} | 실패 |", result.stdout)
+					self.assertNotIn("acme-private-value", result.stdout + result.stderr)
+					self.assertEqual(before, self.snapshot())
+					self.assertTrue(all(args[0] == "print" for args in self.calls()[calls:]))
+			path.unlink()
+
+	def test_claude_check_rejects_errors_and_links_in_the_unselected_file(self):
+		self.apply()
+		local_path = self.user / ".claude/settings.local.json"
+		original = local_path.read_text()
+		outside = self.root / "acme-settings"
+		outside.write_text("acme-private-value")
+		for selected, other in (("settings.local.json", "settings.json"), ("settings.json", "settings.local.json")):
+			local_path.with_name(selected).write_text(original)
+			path = local_path.with_name(other)
+			for broken in ("{acme-private-value", "", '{"hooks": {"AcmeExtra": [42]}}', None):
+				with self.subTest(selected=selected, broken=broken):
+					if broken is None:
+						path.symlink_to(outside)
+					else:
+						path.write_text(broken)
+					before, calls = self.snapshot(), len(self.calls())
+					result = self.command("check")
+					self.assertEqual(result.returncode, 1)
+					self.assertIn("ai-hub 항목·형식·경로 확인 필요 (검사 대상:", result.stdout)
+					self.assertNotIn("acme-private-value", result.stdout + result.stderr)
+					self.assertIn("| 마지막 백업:", result.stdout)
+					self.assertEqual(before, self.snapshot())
+					self.assertTrue(all(args[0] == "print" for args in self.calls()[calls:]))
+					path.unlink()
+			local_path.with_name(selected).unlink()

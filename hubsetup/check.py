@@ -16,7 +16,7 @@ from hubbackup import backup, state, targets
 
 from .config import Context, SetupError, command, context, git, read_config
 from .templates import MODULES, matches, render
-from .records import PATHS, TARGETS, render_record, valid_hooks
+from .records import CLAUDE_HOOK_PATHS, PATHS, TARGETS, render_record, valid_hooks
 
 
 def config_paths(data, location: str = ""):
@@ -113,13 +113,17 @@ def check(label_prefix: str | None = None) -> int:
 				ok = False
 			add(f"설치물: {item.path.name}", ok, "내용·권한 일치" if ok else "내용·권한·경로 확인 필요")
 		for tool, kind in TARGETS:
+			name = PATHS[tool][0 if kind == "hooks" else 1]
 			try:
 				item = render_record(ctx, tool, kind)
+				name = str(item.path.relative_to(ctx.user_home))
 				ok = matches(item) and (kind != "hooks" or valid_hooks(ctx, tool, item.text))
 			except (OSError, UnicodeError, ValueError, TypeError, KeyError, SetupError):
 				ok = False
-			name = PATHS[tool][0 if kind == "hooks" else 1]
-			add(f"작업 기록: {name}", ok, "ai-hub 항목 확인" if ok else "ai-hub 항목·형식·경로 확인 필요")
+			detail = "ai-hub 항목 확인" if ok else "ai-hub 항목·형식·경로 확인 필요"
+			if tool == "claude" and kind == "hooks":
+				detail += " (검사 대상: " + ", ".join(CLAUDE_HOOK_PATHS) + ")"
+			add(f"작업 기록: {name}", ok, detail)
 		for module in MODULES:
 			label = f"{ctx.label_prefix}.ai-hub-{module}"
 			ok = command(["launchctl", "print", f"{ctx.domain}/{label}"]).returncode == 0

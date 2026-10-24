@@ -16,12 +16,14 @@ from pathlib import Path
 
 from collector.config import Plan
 
+from . import readonly_guard
+
 READ_ONLY_TOOLS = "Read,Grep,Glob"
 WRITE_BLOCKED_TOOLS = "Edit,Write,MultiEdit,NotebookEdit,Bash,WebFetch,WebSearch"
 
 
 class ProviderError(Exception):
-	"""호출 실패. kind 는 timeout·exit·empty·json·missing 중 하나. 메시지에 원문을 넣지 않는다."""
+	"""호출 실패. kind 는 timeout·exit·empty·json·missing·write 중 하나. 메시지에 원문을 넣지 않는다."""
 
 	def __init__(self, kind: str, message: str):
 		super().__init__(message)
@@ -140,6 +142,10 @@ def call(plan: Plan, writer: bool, prompt: str, cwd: Path, schema: dict, timeout
 			argv, use_stdin = _agy(plan, writer, schema, prompt)
 		else:
 			raise ProviderError("missing", f"지원하지 않는 도구: {plan.tool}")
+		if not writer:
+			before = readonly_guard.snapshot(cwd)
+			if before is None:
+				readonly_guard.verify(cwd, before, plan.tool)
 		started = time.monotonic()
 		try:
 			result = subprocess.run(argv, input=prompt if use_stdin else None, cwd=cwd,
@@ -148,7 +154,10 @@ def call(plan: Plan, writer: bool, prompt: str, cwd: Path, schema: dict, timeout
 			raise ProviderError("timeout", f"{plan.id} 시간 초과") from None
 		except OSError:
 			raise ProviderError("missing", f"{plan.id} 실행 파일 없음") from None
-		seconds = time.monotonic() - started
+		finally:
+			seconds = time.monotonic() - started
+			if not writer:
+				readonly_guard.verify(cwd, before, plan.tool)
 		if result.returncode != 0:
 			raise ProviderError("exit", f"{plan.id} 종료 코드 {result.returncode}")
 		data, usage = _unwrap(plan.tool, result.stdout, last_file)

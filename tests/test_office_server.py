@@ -1,6 +1,7 @@
 """원시 HTTP 요청으로 경로·Host·메서드 제한을 소켓 없이 확인한다."""
 
 import http.client
+import http.server
 import io
 import json
 import re
@@ -43,6 +44,7 @@ class OfficeServerTest(OfficeCase):
 		with mock.patch.object(server, "ThreadingHTTPServer") as constructor:
 			server.create_server(8790)
 		constructor.assert_called_once_with(("127.0.0.1", 8790), server.Handler)
+		self.assertGreaterEqual(http.server.ThreadingHTTPServer.request_queue_size, 64)
 		status, headers, body = self.request()
 		self.assertEqual(status, 200)
 		self.assertIn("text/html", headers["Content-Type"])

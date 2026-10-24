@@ -157,6 +157,10 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond(404, "페이지가 없습니다".encode())
 
 
+# 화면 하나가 정적 파일 10여 개를 한꺼번에 요청해 기본 대기열(5)이 넘치면 연결이 끊긴다.
+ThreadingHTTPServer.request_queue_size = 64
+
+
 def create_server(port: int = 8790) -> ThreadingHTTPServer:
 	server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
 	server.office_token = secrets.token_urlsafe(32)

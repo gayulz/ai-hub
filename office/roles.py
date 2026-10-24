@@ -1,4 +1,4 @@
-"""22개 역할의 자리·외형은 고정하고 해당 역할의 신호만 상태로 바꾼다."""
+"""23개 역할의 자리·외형은 고정하고 해당 역할의 신호만 상태로 바꾼다."""
 
 import re
 from pathlib import Path
@@ -103,6 +103,8 @@ def build_people(root, user_home, now, runs, plans, ledger, jobs):
 		update("분석", {"status": "작업 중", "engine": "NotebookLM", "task": "자료 분석 중"})
 	# 티스토리는 상주 데몬만으로 담당 작업을 구분할 수 없어 명시적인 작업 로그만 쓴다.
 	update("티스토리", signals.tistory(blog, now))
+	# 네이버 블로그 편집기 올리기·발행 전 확인·검색 순위 관측
+	update("네이버", signals.naver(blog, now))
 	shorts = signals.shorts(user_home, now)
 	if shorts["status"] == "확인 불가":
 		for name in ("PD", "대본", "편집", "음악", "썸네일"):

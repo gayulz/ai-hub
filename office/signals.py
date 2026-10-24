@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -122,6 +124,38 @@ def tistory(blog: Path, now: datetime) -> dict:
 		return {"status": "대기"}
 	except (OSError, ValueError, TypeError, KeyError, AttributeError):
 		return unavailable("티스토리 작업 상태를 읽을 수 없습니다")
+
+
+def naver(blog: Path, now: datetime) -> dict:
+	try:
+		path = blog / ".blogops/blogops.db"
+		try:
+			path.stat()
+		except FileNotFoundError:
+			return {"status": "대기"}
+		path = regular(path, blog)
+		with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)) as conn:
+			jobs = conn.execute("SELECT kind, status, started_at, finished_at FROM job_run WHERE kind IN ('STAGE', 'BLOG_RANK')").fetchall()
+			events = conn.execute("SELECT platform, to_state, created_at FROM post_event WHERE platform='NAVER' AND to_state IN ('STAGING', 'STAGED')").fetchall()
+		matches = []
+		for kind, status, started, finished in jobs:
+			value = finished or started
+			at = datetime.fromisoformat(value)
+			if not at.tzinfo:
+				raise ValueError
+			fresh = recent(finished, now) if finished else 0 <= (now - at).total_seconds() <= 7200
+			if fresh:
+				matches.append((2 if not finished else 1, at,
+					"네이버 편집기 올리기" if kind == "STAGE" else "검색 순위 관측", value))
+		for platform, to_state, value in events:
+			if recent(value, now):
+				matches.append((0, datetime.fromisoformat(value), "네이버 글 올리는 중", value))
+		if matches:
+			priority, at, task, value = max(matches)
+			return {"status": "작업 중", "task": task, "engine": "로컬", "updated": value}
+		return {"status": "대기"}
+	except (OSError, sqlite3.Error, ValueError, TypeError):
+		return unavailable("네이버 작업 상태를 읽을 수 없습니다")
 
 
 def shorts(user_home: Path, now: datetime) -> dict:

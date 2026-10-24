@@ -1,4 +1,4 @@
-"""합성 신호로 22개 고정 역할과 기계실의 출처별 오류 격리를 확인한다."""
+"""합성 신호로 23개 고정 역할과 기계실의 출처별 오류 격리를 확인한다."""
 
 import json
 import os
@@ -44,15 +44,29 @@ class RoleCase(OfficeCase):
 
 
 class OfficeRolesTest(RoleCase):
-	def test_22_roles_keep_design_appearance_department_seat_and_coordinates(self):
+	def test_23_roles_keep_design_appearance_department_seat_and_coordinates(self):
 		state = self.state()
-		self.assertEqual((len(state["people"]), len(state["rooms"]), len(state["engines"])), (22, 8, 8))
+		self.assertEqual((len(state["people"]), len(state["rooms"]), len(state["engines"])), (23, 8, 8))
 		for actual, expected in zip(state["people"], scene()["people"]):
-			for key in ("name", "department", "seat", "x", "y", "appearance", "hair", "shirt"):
+			for key in ("id", "name", "department", "seat", "x", "y", "appearance", "hair", "shirt", "identity"):
 				self.assertEqual(actual[key], expected[key])
+			self.assertEqual(actual.get("facing"), expected.get("facing"))
 			self.assertTrue({"status", "engine", "updated"} <= actual.keys())
 			self.assertEqual("task" in actual, actual["department"] != "company")
 		self.assertEqual([p["name"] for p in state["people"] if p["department"] == "lounge"], ["이웃", "편집", "음악"])
+		naver = state["people"][-1]
+		self.assertEqual((naver["id"], naver["name"], naver["seat"], naver["department"]), (22, "네이버", 23, "blog"))
+		self.assertEqual(naver["description"], "네이버 블로그 편집기 올리기·발행 전 확인·검색 순위 관측")
+
+	def test_naver_signal_is_attached_after_tistory_without_changing_other_roles(self):
+		with mock.patch.object(signals, "naver", return_value={"status": "작업 중", "engine": "로컬",
+				"task": "네이버 편집기 올리기", "updated": self.now.isoformat()}) as naver:
+			people = self.roles()
+		naver.assert_called_once_with(self.blog_path, self.now)
+		self.assertEqual((people["네이버"]["status"], people["네이버"]["task"], people["네이버"]["engine"]),
+			("작업 중", "네이버 편집기 올리기", "로컬"))
+		for name in ("작가", "분석", "클립", "티스토리"):
+			self.assertEqual(people[name]["status"], "대기")
 
 	def test_presence_company_roles_use_project_order_and_continued_duration(self):
 		self.presence(cls="company", project="p01", since=1680)

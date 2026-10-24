@@ -47,6 +47,7 @@ function createPixelArt(scene) {
 	function chair(x,y,c){border(x,y,24,20,dark(c,.2));R(x+2,y+2,20,12,c);R(x+4,y+3,16,3,light(c,.25));R(x+3,y+17,18,8,light(c,.08));R(x+10,y+25,4,5,dark(c,.4));R(x+3,y+29,18,2,dark(c,.4));}
 	function monitor(x,y,c){border(x,y,34,23,'#354a49','#263836');R(x+3,y+3,28,16,c);R(x+5,y+5,21,2,light(c,.55));R(x+5,y+10,12,2,light(c,.35));R(x+5,y+14,18,1,light(c,.32));R(x+15,y+23,4,5,'#405956');R(x+10,y+27,14,2,'#405956');}
 	function mug(x,y,c='#faf1d5'){R(x,y,7,8,c);R(x+2,y,4,2,'#695a48');R(x+7,y+2,3,4,c);R(x+8,y+3,1,2,p.wood);}
+	function keyboard(x,y){border(x,y,30,7,p.paper,p.wallDark,1);for(let i=0;i<6;i++)R(x+3+i*4,y+2,2,2,p.muted);}
 	function pot(x,y,c=p.treeLight){R(x+7,y+24,16,3,dark(p.wood,.28));R(x+8,y+27,14,11,'#b38364');R(x+10,y+28,4,8,'#d6ae86');R(x+5,y+22,20,5,'#d2a179');R(x+13,y+8,3,16,p.tree);R(x+5,y+9,10,8,c);R(x+2,y+5,8,7,light(c,.17));R(x+14,y+4,10,9,light(c,.1));R(x+16,y,7,7,c);R(x+12,y+14,13,6,p.tree);R(x+5,y+16,9,5,light(c,.08));}
 	function tree(x,y,pine=false){
 		const c=p.tree,l=p.treeLight;shadow(x+5,y+66,52,13);R(x+28,y+46,10,pine?42:34,dark(p.wood,.4));R(x+30,y+49,4,pine?37:28,p.wood);R(x+20,y+74,24,5,dark(p.wood,.4));
@@ -66,6 +67,31 @@ function createPixelArt(scene) {
 			case 'deskseat':
 			case 'desk':
 				shadow(x,y+29,64,13);R(x+3,y+29,5,12,dark(p.wood,.4));R(x+56,y+29,5,12,dark(p.wood,.4));border(x,y,64,33,p.wood);R(x+2,y+2,60,4,light(p.wood,.27));R(x+3,y+31,58,5,dark(p.wood,.25));monitor(x+8,y-16,mix(c,p.water,.35));border(x+11,y+18,30,7,'#e8e4cf','#858c7c',1);for(let i=0;i<6;i++)R(x+14+i*4,y+20,2,2,'#a1ab98');R(x+44,y+19,5,7,'#f4eed8');mug(x+51,y+6);chair(x+20,y+37,c);break;
+			case 'cubicle': {
+				const up=o.direction!=='down',cx=x+w/2,ty=y+(up?20:35),cy=up?y+h-34:y+10;
+				shadow(x+3,y+h-15,w-6,12);chair(cx-12,cy,c);
+				border(x+3,ty,w-6,43,p.wood);R(x+5,ty+2,w-10,4,light(p.wood,.27));
+				monitor(cx-17,ty+(up?-6:11),mix(c,p.water,.35));keyboard(cx-15,ty+(up?27:2));mug(x+w-21,ty+14);
+				const py=up?y+3:y+h-18;
+				border(x,py,w,14,p.wallDark);R(x+3,py+3,w-6,7,light(c,.12));
+				R(x,up?py:ty,4,up?ty+43-py:py+14-ty,p.wallDark);R(x+w-4,up?py:ty,4,up?ty+43-py:py+14-ty,dark(p.wallDark,.15));break;
+			}
+			case 'longtable':
+				(scene.props||[]).filter(q=>q.type==='chair'&&(o.seats||[]).includes(q.seat)).forEach(prop);
+				shadow(x,y+h-6,w,14);R(x+7,y+h-3,6,10,dark(p.wood,.4));R(x+w-13,y+h-3,6,10,dark(p.wood,.4));
+				border(x,y,w,h,p.wood);grain(x+3,y+3,w-6,h-8,light(p.wood,.12));R(x+3,y+h-5,w-6,3,dark(p.wood,.2));
+				border(x+w/2-12,y+h/2-9,24,18,p.paper,p.wallDark,1);R(x+w/2-8,y+h/2-3,16,2,p.muted);mug(x+20,y+15);mug(x+w-25,y+h-24);break;
+			case 'workbench': {
+				const count=o.monitors||3;
+				shadow(x,y+h-10,w,12);border(x,y,w,9,p.wallDark);border(x,y+24,w,h-28,p.wood);R(x+3,y+26,w-6,4,light(p.wood,.27));
+				for(let i=0;i<count;i++){const cx=x+(i+.5)*w/count;monitor(cx-17,y+8,mix(c,p.water,.35));keyboard(cx-15,y+47);}
+				R(x+6,y+h-4,6,9,dark(p.wood,.4));R(x+w-12,y+h-4,6,9,dark(p.wood,.4));mug(x+w-18,y+33);break;
+			}
+			case 'bossdesk':
+				chair(x+w/2-12,y-25,c);shadow(x,y+h-7,w,14);border(x,y,w,h,p.wood);R(x+3,y+3,w-6,5,light(p.wood,.27));
+				monitor(x+14,y+14,p.water);monitor(x+54,y+14,p.waterLight);keyboard(x+36,y+4);
+				border(x+w-39,y+11,27,22,p.paper,p.wallDark,1);for(let i=0;i<3;i++)R(x+w-35,y+16+i*5,18,1,p.muted);
+				R(x+8,y+h-4,7,10,dark(p.wood,.4));R(x+w-15,y+h-4,7,10,dark(p.wood,.4));mug(x+w-23,y+h-16);break;
 			case 'table':
 				shadow(x,y+h-7,w,14);R(x+6,y+h-4,5,10,dark(p.wood,.4));R(x+w-11,y+h-4,5,10,dark(p.wood,.4));border(x,y,w,h,p.wood);R(x+3,y+3,w-6,h-9,light(p.wood,.22));R(x+3,y+h-6,w-6,3,dark(p.wood,.11));border(x+w*.35,y+12,19,15,'#eee8d2','#b6b394',1);R(x+w*.35+3,y+16,12,1,'#aab59b');R(x+w*.35+3,y+20,8,1,'#aab59b');mug(x+w-19,y+9);R(x+11,y+h-16,12,7,c);break;
 			case 'sofa':
@@ -114,8 +140,8 @@ function createPixelArt(scene) {
 			default:throw new Error('지원하지 않는 오브젝트: '+o.type);
 		}
 	}
-	const props=scene.props||[];props.filter(o=>o.type==='rug').forEach(prop);
-	props.filter(o=>o.type!=='rug').sort((a,b)=>(a.y+(a.type==='tree'?70:30))-(b.y+(b.type==='tree'?70:30))).forEach(prop);
+	const props=scene.props||[],tableSeats=new Set(props.filter(o=>o.type==='longtable').flatMap(o=>o.seats||[]));props.filter(o=>o.type==='rug').forEach(prop);
+	props.filter(o=>o.type!=='rug'&&!(o.type==='chair'&&tableSeats.has(o.seat))).sort((a,b)=>(a.y+(a.type==='tree'?70:30))-(b.y+(b.type==='tree'?70:30))).forEach(prop);
 	if(night){for(let i=0;i<65;i++){const x=Math.floor(rand()*width),y=Math.floor(rand()*height);if((scene.rooms||[]).some(q=>x>q.x&&x<q.x+q.w&&y>q.y&&y<q.y+q.h))continue;R(x,y,2,2,'#dcda9b');if(i%4===0){R(x-2,y,6,2,'#d9d6a844');R(x,y-2,2,6,'#d9d6a844');}}}
 	function drawActor(target,a,time=0){
 		const key=String(a.id||a.name||'guest'),hash=[...key].reduce((n,ch)=>((n*31+ch.charCodeAt(0))>>>0),7);
@@ -124,7 +150,7 @@ function createPixelArt(scene) {
 		const accessory=ap.accessory||['none','glasses','none','headset','cap'][Math.floor(hash/20)%5],headwear=ap.headwear||(accessory==='cap'?'cap':'none');
 		const shirt=a.shirt||'#8fa481',hair=a.hair||'#574638',skin=ap.skin||['#efc8a4','#dab08a','#bf8d6d','#e7b998'][hash%4];
 		const trousers=ap.trousers||['#586957','#5b6673','#756253','#4c6864'][Math.floor(hash/3)%4],shoes=ap.shoes||'#47534b';
-		const ink='#293630',back=a.face==='up',side=a.face==='left'||a.face==='right',cap=ap.capColor||shirt;
+		const ink='#293630',back=a.facing?a.facing==='back':a.face==='up',side=!a.facing&&(a.face==='left'||a.face==='right'),cap=ap.capColor||shirt;
 		const phase=a.walking?Math.floor(time/130)%4:0,stride=a.walking?[0,1,0,-1][phase]:0,bob=a.walking?phase%2:0;
 		target.save();target.translate(Math.round(a.x-17.6),Math.round(a.y-52.8));target.scale(1.1,1.1);target.imageSmoothingEnabled=false;
 		const px=(x,y,w,h,c)=>{target.fillStyle=c;target.fillRect(x,y,w,h);};

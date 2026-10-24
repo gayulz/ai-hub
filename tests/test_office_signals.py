@@ -1,14 +1,157 @@
-"""임시 세션의 시각·메타데이터만으로 숏폼 신호와 읽기 경계를 확인한다."""
+"""합성 세션·DB의 시각과 메타데이터만으로 신호와 읽기 경계를 확인한다."""
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 from office import signals
+
+
+class NaverTest(unittest.TestCase):
+	def setUp(self):
+		self.tmp = tempfile.TemporaryDirectory()
+		self.addCleanup(self.tmp.cleanup)
+		self.blog = Path(self.tmp.name) / "acme"
+		self.path = self.blog / ".blogops/blogops.db"
+		self.path.parent.mkdir(parents=True)
+		self.now = datetime(2026, 10, 24, 12, tzinfo=timezone(timedelta(hours=9)))
+		with closing(sqlite3.connect(self.path)) as conn, conn:
+			conn.executescript("""
+				CREATE TABLE job_run(kind TEXT, status TEXT, started_at TEXT, finished_at TEXT, detail TEXT);
+				CREATE TABLE post_event(platform TEXT, to_state TEXT, created_at TEXT, detail TEXT);
+			""")
+
+	def stamp(self, age):
+		return (self.now - timedelta(seconds=age)).isoformat()
+
+	def job(self, kind="STAGE", started=60, finished=None, status="DONE"):
+		with closing(sqlite3.connect(self.path)) as conn, conn:
+			conn.execute("INSERT INTO job_run VALUES (?,?,?,?,?)", (kind, status, self.stamp(started),
+				self.stamp(finished) if isinstance(finished, int) else finished, "읽기 금지 합성 내용"))
+
+	def event(self, age=60, platform="NAVER", state="STAGING"):
+		with closing(sqlite3.connect(self.path)) as conn, conn:
+			conn.execute("INSERT INTO post_event VALUES (?,?,?,?)", (platform, state, self.stamp(age), "읽기 금지 합성 내용"))
+
+	def signal(self):
+		before = (self.path.read_bytes(), self.path.stat().st_mtime_ns)
+		result = signals.naver(self.blog, self.now)
+		self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
+		self.assertNotIn("읽기 금지", json.dumps(result, ensure_ascii=False))
+		return result
+
+	def test_unfinished_stage_uses_start_within_two_hours_regardless_of_status(self):
+		self.job(started=3600, finished="")
+		self.assertEqual(self.signal(), {"status": "작업 중", "engine": "로컬", "task": "네이버 편집기 올리기", "updated": self.stamp(3600)})
+
+	def test_recent_finished_rank_uses_finish_instead_of_old_start(self):
+		self.job("BLOG_RANK", started=86400, finished=600, status="FAILED")
+		self.assertEqual(self.signal(), {"status": "작업 중", "engine": "로컬", "task": "검색 순위 관측", "updated": self.stamp(600)})
+
+	def test_only_old_rows_and_unrelated_kinds_stay_idle(self):
+		self.job(started=7201)
+		self.job("BLOG_RANK", finished=601)
+		self.job("DRAFT")
+		self.event(age=601)
+		self.event(platform="GLOBAL")
+		self.event(state="PUBLISHED")
+		self.assertEqual(self.signal(), {"status": "대기"})
+
+	def test_recent_staging_and_staged_events_are_work(self):
+		for state in ("STAGING", "STAGED"):
+			with self.subTest(state=state):
+				self.event(state=state)
+				self.assertEqual(self.signal(), {"status": "작업 중", "engine": "로컬", "task": "네이버 글 올리는 중", "updated": self.stamp(60)})
+
+	def test_unfinished_then_completed_then_events_take_priority_and_latest_wins(self):
+		self.event(age=0)
+		self.job("BLOG_RANK", started=86400, finished=10)
+		self.job(started=7200)
+		self.assertEqual(self.signal()["task"], "네이버 편집기 올리기")
+		self.job("BLOG_RANK", started=3600)
+		self.assertEqual(self.signal()["task"], "검색 순위 관측")
+
+	def test_future_and_out_of_window_rows_are_not_active(self):
+		for finished, age, expected in ((None, 7200, "작업 중"), (None, 7201, "대기"), (None, -1, "대기"),
+				(600, 86400, "작업 중"), (601, 86400, "대기"), (-1, 60, "대기")):
+			with self.subTest(finished=finished, age=age):
+				with closing(sqlite3.connect(self.path)) as conn, conn:
+					conn.execute("DELETE FROM job_run")
+				self.job(started=age, finished=finished)
+				self.assertEqual(self.signal()["status"], expected)
+		for age, expected in ((600, "작업 중"), (601, "대기"), (-1, "대기")):
+			with self.subTest(event_age=age):
+				with closing(sqlite3.connect(self.path)) as conn, conn:
+					conn.execute("DELETE FROM job_run")
+					conn.execute("DELETE FROM post_event")
+				self.event(age=age)
+				self.assertEqual(self.signal()["status"], expected)
+
+	def test_missing_db_is_idle_without_creating_files(self):
+		self.path.unlink()
+		self.assertEqual(signals.naver(self.blog, self.now), {"status": "대기"})
+		self.assertEqual(list(self.path.parent.iterdir()), [])
+
+	def test_missing_tables_or_columns_are_unavailable_even_with_an_active_job(self):
+		self.job()
+		original = self.path.read_bytes()
+		for sql in ("ALTER TABLE job_run RENAME COLUMN status TO xyz", "ALTER TABLE post_event RENAME COLUMN created_at TO xyz",
+				"DROP TABLE job_run", "DROP TABLE post_event"):
+			with self.subTest(sql=sql):
+				self.path.write_bytes(original)
+				with closing(sqlite3.connect(self.path)) as conn, conn:
+					conn.execute(sql)
+				self.assertEqual(self.signal(), {"status": "확인 불가", "reason": "네이버 작업 상태를 읽을 수 없습니다"})
+
+	def test_readonly_uri_short_timeout_metadata_columns_and_closed_connection(self):
+		self.job()
+		self.event()
+		connect, connections, queries, reads = sqlite3.connect, [], [], []
+		allowed = {"kind", "status", "started_at", "finished_at", "platform", "to_state", "created_at"}
+		def authorize(action, table, column, *unused):
+			if action == sqlite3.SQLITE_READ:
+				reads.append(column)
+				return sqlite3.SQLITE_OK if column in allowed else sqlite3.SQLITE_DENY
+			return sqlite3.SQLITE_OK
+		def open_db(database, **kwargs):
+			self.assertEqual(database, self.path.resolve().as_uri() + "?mode=ro")
+			self.assertTrue(kwargs["uri"])
+			self.assertGreater(kwargs["timeout"], 0)
+			self.assertLessEqual(kwargs["timeout"], 1)
+			conn = connect(database, **kwargs)
+			with self.assertRaises(sqlite3.OperationalError):
+				conn.execute("CREATE TABLE xyz(value)")
+			conn.set_authorizer(authorize)
+			conn.set_trace_callback(queries.append)
+			connections.append(conn)
+			return conn
+		with mock.patch.object(signals.sqlite3, "connect", side_effect=open_db):
+			self.assertEqual(self.signal()["status"], "작업 중")
+		self.assertEqual(set(reads), allowed)
+		self.assertTrue(all(query.startswith("SELECT ") for query in queries))
+		with self.assertRaises(sqlite3.ProgrammingError):
+			connections[0].execute("SELECT kind FROM job_run")
+
+	def test_open_failure_locked_invalid_db_and_invalid_timestamps_are_unavailable(self):
+		for error in (PermissionError(), sqlite3.OperationalError("합성 실패")):
+			with self.subTest(error=type(error)), mock.patch.object(signals.sqlite3, "connect", side_effect=error):
+				self.assertEqual(self.signal()["status"], "확인 불가")
+		with closing(sqlite3.connect(self.path)) as conn, conn:
+			conn.execute("BEGIN EXCLUSIVE")
+			self.assertEqual(self.signal()["status"], "확인 불가")
+			conn.rollback()
+		self.job()
+		with closing(sqlite3.connect(self.path)) as conn, conn:
+			conn.execute("UPDATE job_run SET started_at='2026-10-24T12:00:00'")
+		self.assertEqual(self.signal()["status"], "확인 불가")
+		self.path.write_bytes(b"acme")
+		self.assertEqual(self.signal()["status"], "확인 불가")
 
 
 class ShortsTest(unittest.TestCase):

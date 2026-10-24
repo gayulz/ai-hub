@@ -52,7 +52,7 @@ class OfficeServerTest(OfficeCase):
 		status, headers, body = self.request("/api/state")
 		self.assertEqual(status, 200)
 		self.assertEqual(len(json.loads(body)["agents"]), 6)
-		self.assertEqual(len(json.loads(body)["people"]), 22)
+		self.assertEqual(len(json.loads(body)["people"]), 23)
 		self.assertEqual(len(json.loads(body)["engines"]), 8)
 		self.assertNotIn("Access-Control-Allow-Origin", headers)
 		self.assertEqual(headers["Cache-Control"], "no-store")

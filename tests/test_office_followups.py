@@ -56,5 +56,5 @@ class OfficeFollowupsTest(RoleCase):
 		self.conn.commit()
 		state = self.state()
 		self.assertEqual(state["schedule"]["status"], "확인 불가")
-		self.assertEqual(len(state["people"]), 22)
+		self.assertEqual(len(state["people"]), 23)
 		self.assertEqual(state["usage"]["plans"]["status"], "정상")

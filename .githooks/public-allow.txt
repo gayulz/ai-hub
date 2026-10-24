@@ -1,0 +1,5 @@
+# 공개 저장소 push 전 검사의 허용 목록: 사람이 확인한 합성 값(비밀값 꼴)의 sha256만 적는다. 값은 적지 않는다.
+# tests/test_office_actions.py 출력 가림 시험의 합성 값(10-24)
+b905a40183cdfbf7f56c9d4075f848ffcf66a428ab162996e3f21f0ae1f41000
+# tests/test_office_actions.py 출력 가림 시험의 합성 개인 키 블록 표시(10-24)
+25bd23f7b0483310653fa9f524341eda38c431afc725202baf19116f9463af87

@@ -1,6 +1,7 @@
 """가상 저장소로 공개 저장소 push 전 검사(새 줄·경로·작성자·메시지)를 확인한다. 합성 이름만 쓴다."""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -84,6 +85,22 @@ class PublicCheckTest(unittest.TestCase):
 		self.assertIn("비밀값", output)
 		self.assertIn("홈 경로", output)
 		self.assertNotIn(token, output)
+
+	def test_allow_list_passes_only_the_exact_secret_shaped_string(self):
+		allowed = "secret = " + '"' + "xyz-" + "synthetic-" + "value" + '"'
+		other = "secret = " + '"' + "xyz-" + "synthetic-" + "other" + '"'
+		(self.repo / ".githooks").mkdir()
+		(self.repo / ".githooks/public-allow.txt").write_text(
+			"# 합성 값\n" + hashlib.sha256(verify.SECRET_LITERAL.search(allowed).group(0).encode()).hexdigest() + "\n",
+			encoding="utf-8")
+		first = self.commit("a.py", allowed + "\n")
+		self.assertEqual(self.check(first), (0, ""))
+		self.commit("b.py", other + "\n")
+		count, output = self.check("HEAD^..HEAD")
+		self.assertEqual(count, 1)
+		self.assertIn("비밀값", output)
+		self.commit("c.py", "acme = 1\n")
+		self.assertEqual(self.check("HEAD^..HEAD")[0], 1)  # 이름 검사는 허용 목록과 관계없다
 
 	def test_only_added_lines_are_checked(self):
 		token = "sk-" + "b" * 24

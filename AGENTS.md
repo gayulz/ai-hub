@@ -47,3 +47,4 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 - 테스트: `python3 -m unittest discover -s tests`
 - 단위 테스트 통과를 "검증 완료"라고 부르지 않는다. 실제 볼트 기록·예약 실행은 실행 결과로 따로 확인한다.
 - 커밋 메시지에 AI 서명(`Co-Authored-By` 등)을 넣지 않는다.
+- 이 저장소는 공개다. push 전 검사(`.githooks/pre-push`)가 새로 추가된 줄의 회사 이름·비밀값 꼴·홈 경로를 거부한다. 테스트의 합성 비밀값·토큰은 문자열을 이어 붙여 만든다(예: `"ghp_" + "a" * 36`). 꼭 필요하면 사람이 확인한 뒤 `.githooks/public-allow.txt`에 그 문자열의 sha256만 적는다.

@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import getpass
+import hashlib
 import re
+import subprocess
 import unicodedata
+from pathlib import Path
 
 from collector import redact as secrets
 
@@ -17,6 +20,7 @@ from .store import Dictionary
 
 NAME_KINDS = ("회사명", "서비스명", "호스트", "사람이름")
 SECRETS = (secrets.PRIVATE_KEY, secrets.JWT, secrets.TOKEN_PREFIX, verify.SECRET_LITERAL)
+ALLOW_FILE = ".githooks/public-allow.txt"
 
 
 def _pattern(values: list[str]) -> re.Pattern | None:
@@ -28,6 +32,16 @@ def _pattern(values: list[str]) -> re.Pattern | None:
 	return re.compile("|".join(parts), re.IGNORECASE) if parts else None
 
 
+def _allowed() -> set[str]:
+	"""사람이 확인한 합성 값(비밀값 꼴)의 sha256 목록. 값 자체는 저장소에 두지 않는다. 파일이 없으면 빈 집합."""
+	try:
+		root = verify._git("rev-parse", "--show-toplevel").decode("utf-8").strip()
+		lines = (Path(root) / ALLOW_FILE).read_text(encoding="utf-8").splitlines()
+	except (OSError, UnicodeDecodeError, subprocess.CalledProcessError):
+		return set()
+	return {line.strip().lower() for line in lines if re.fullmatch(r"\s*[0-9a-fA-F]{64}\s*", line)}
+
+
 class Rules:
 	def __init__(self):
 		dictionary = Dictionary()
@@ -37,13 +51,16 @@ class Rules:
 		user = getpass.getuser()
 		self.people = _pattern([e["value"] for e in dictionary.entries] + [user])
 		self.home = re.compile(rf"/(?:Users|home)/{re.escape(user)}(?![A-Za-z0-9])")
+		self.allowed = _allowed()
 
 	def kinds(self, text: str) -> list[str]:
 		text = unicodedata.normalize("NFC", text)
 		found = []
 		if self.names and self.names.search(text):
 			found.append("사전 이름")
-		if any(pattern.search(text) for pattern in SECRETS):
+		# 허용 목록은 비밀값 꼴에만 쓴다. 정확히 같은 문자열만 통과한다
+		if any(hashlib.sha256(match.group(0).encode("utf-8")).hexdigest() not in self.allowed
+				for pattern in SECRETS for match in pattern.finditer(text)):
 			found.append("비밀값")
 		if self.home.search(text):
 			found.append("홈 경로")

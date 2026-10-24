@@ -29,15 +29,15 @@ const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Ele
 	createElement:()=>new Element(),querySelectorAll:()=>[],visibilityState:'visible',
 	addEventListener:(name,fn)=>events.set(name,fn),documentElement:new Element(),
 	body:{classList:{add:value=>classes.add(value),remove:value=>classes.delete(value),contains:value=>classes.has(value)}}};
-let state={updated:'2026-10-24T12:00:00+09:00',people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
+let state={updated:'2026-10-24T12:00:00+09:00',dev_targets:[{id:'ai-hub',label:'ai-hub'},{id:'blog-x',label:'blog-x'},{id:'xyz',label:'xyz'}],dev_plans:{implementer:'p01',reviewer:'p02'},people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
 	approvals:{c4:{status:'정상',items:[{id:'c4-'+'a'.repeat(16),prepared:3,held:1,reply:'C4 합성 반영해'}]},
 		runs:{status:'정상',items:[{id:'2026-10-24-001',status:'승인 필요'}]},r1:{status:'정상',items:[{id:'AI & Prompts',pending:2}]},
 		drafts:{status:'정상',items:[]},decisions:{status:'정상',items:[{id:'d01',title:'합성 결정'}]}},
 	usage:{c4:{status:'정상',subscription:3,local:5},limit:{status:'정상',daily_limit_calls:20},plans:{status:'정상',items:[]},notebooklm:{count:null}},
 	schedule:{status:'정상',items:[{title:'합성 후속 일정',source:'개인',due:'2026-10-26'}]},
 	activity:[],board:{status:'정상',items:[{kind:'chat',title:'결정',text:'합성 결정',at:'2026-10-24T12:00:00+09:00'}],progress:{items:[]}},engines:[]};
-let draftView={id:'d-20261024-120000-abcdef01',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
-const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
+let draftView={id:'d-20261024-120000-abcdef01',target:'blog-x',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
+const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,target:value.target,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
 const sandbox={document,window:{addEventListener(){}},matchMedia:query=>({matches:mobileMode&&query.includes('900px')}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
 	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{observe(){}},AbortController,
 	console,setTimeout:()=>1,clearTimeout(){},setInterval:(fn,ms)=>{interval=fn;assert.equal(ms,10000)},
@@ -133,7 +133,15 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 		click({person:id});assert(element('panel-body').innerHTML.includes('data-dev="'+role+'"'));
 	}
 	click({person:'7'});assert(!element('panel-body').innerHTML.includes('data-dev='));
+	for(const id of ['8','9','10','11','22']){
+		click({person:id});assert(element('panel-body').innerHTML.includes('data-team="blog"'));
+	}
+	click({dev:'backend',team:'blog'});assert.equal(element('dev-target').value,'blog-x');element('dev-close').onclick();
+	const savedTargets=state.dev_targets;state.dev_targets=[savedTargets[0]];
+	click({dev:'backend',team:'blog'});assert.equal(element('dev-target').value,'ai-hub');element('dev-close').onclick();state.dev_targets=savedTargets;
 	click({dev:'frontend'});assert(element('dev-dialog').open);assert.equal(element('dev-role').value,'frontend');
+	assert.equal(element('dev-target').value,'ai-hub');assert(element('dev-target').innerHTML.includes('blog-x'));
+	element('dev-target').value='blog-x';element('dev-target').onchange();assert(element('dev-warning').textContent.includes('blog-x 저장소'));
 	assert.equal(document.activeElement,element('dev-text'));assert(element('dev-write').disabled);
 	element('dev-text').value='합성 지시';element('dev-text').oninput();
 	assert(!element('dev-write').disabled);assert(element('dev-remaining').textContent.includes(String(2000-'합성 지시'.length)));
@@ -142,8 +150,10 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 	element('dev-text').value='합성 지시';element('dev-text').oninput();
 	const beforeDraft=actionCount,drafting=element('dev-write').onclick();
 	assert.equal(actionBody.action,'dev_draft');assert.equal(actionBody.id,'frontend');assert.equal(actionBody.text,'합성 지시');
+	assert.equal(actionBody.target,'blog-x');assert.deepEqual(Object.keys(actionBody).sort(),['action','id','target','text']);
 	assert.equal(element('dev-status').textContent,'초안 쓰는 중(1~3분)');
 	assert(element('dev-write').disabled&&element('dev-text').disabled&&element('dev-close').disabled);
+	assert(element('dev-target').disabled);
 	element('dev-write').onclick();assert.equal(actionCount,beforeDraft+1);
 	element('dev-dialog').listeners.get('cancel')({preventDefault(){}});assert(element('dev-dialog').open);
 	await interval();assert.equal(element('dev-text').value,'합성 지시');
@@ -151,20 +161,25 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 	assert(!element('dev-card').hidden);assert(element('dev-editor').hidden);
 	assert(element('dev-card').innerHTML.includes('&lt;script&gt;'));assert(!element('dev-card').innerHTML.includes('<script>'));
 	for(const text of ['완료 조건','고칠 파일 범위','금지 사항','예산','4회 호출'])assert(element('dev-card').innerHTML.includes(text));
+	for(const text of ['대상 저장소','blog-x','구현 요금제: p01','검토 요금제: p02'])assert(element('dev-card').innerHTML.includes(text));
 	assert(!element('dev-run').hidden&&!element('dev-run').disabled);
 	element('dev-redraft').onclick();assert(!element('dev-editor').hidden);assert.equal(element('dev-text-label').textContent,'추가 지시');
+	assert(element('dev-target').disabled);assert.equal(element('dev-target').value,'blog-x');
 	element('dev-text').value='추가 합성 지시';element('dev-text').oninput();
 	const redrafting=element('dev-write').onclick();assert.equal(actionBody.action,'dev_redraft');assert.equal(actionBody.id,draftView.id);
 	assert.equal(actionBody.text,'추가 합성 지시');
+	assert.deepEqual(Object.keys(actionBody).sort(),['action','id','text']);
 	draftView={...draftView,id:'d-20261024-120100-abcdef02'};pendingDraft(draftView);
 	actionResponse({ok:true,json:async()=>({ok:true,message:'합성 다시 쓰기 완료',draft:draftView})});await redrafting;
 	const beforeRun=actionCount;element('dev-run').onclick();assert(!element('dev-dialog').open);assert(element('action-dialog').open);
 	assert.equal(actionCount,beforeRun);assert.equal(element('action-confirm').textContent,'실행');
 	assert(element('action-description').textContent.includes('4회 호출 · 30분 · 보완 1회'));
 	assert(element('action-description').textContent.includes('반영은 따로 승인'));
+	for(const text of ['대상 저장소: blog-x','구현 요금제: p01','검토 요금제: p02'])assert(element('action-description').textContent.includes(text));
 	element('action-cancel').onclick();assert.equal(actionCount,beforeRun);
 	click({filter:'draft'});assert(element('panel-body').innerHTML.includes('개발 지시 초안'));
 	assert(element('panel-body').innerHTML.includes('완료 조건 1개'));
+	assert(element('panel-body').innerHTML.includes('대상 저장소 blog-x'));
 	click({draft:draftView.id});await new Promise(resolve=>setImmediate(resolve));assert(element('dev-dialog').open);
 	assert(!element('dev-card').hidden);assert.equal(element('dev-role').value,'frontend');
 	element('dev-run').onclick();const running=element('action-confirm').onclick();
@@ -214,6 +229,11 @@ class OfficeStaticTest(unittest.TestCase):
 		self.assertIn('maxlength="2000"', html)
 		self.assertIn('회사 내용·비밀값은 적지 마세요', html)
 		self.assertIn('aria-describedby="dev-warning dev-remaining"', html)
+		self.assertIn('<label for="dev-target">대상 저장소</label>', html)
+		self.assertIn('<select id="dev-target"', html)
+		self.assertIn('overflow-wrap:anywhere', css)
+		self.assertIn('.dev-card .stat{flex-wrap:wrap;', css)
+		self.assertNotRegex((STATIC / "office.js").read_text(), r"\b(?:alert|confirm|prompt)\s*\(")
 		self.assertIn('max-width:100%', css)
 		self.assertIn('textarea:focus-visible', css)
 		for word in ("이 안 선택", "시안", "예시", 'id="choose"', 'id="copy-dialog"'):

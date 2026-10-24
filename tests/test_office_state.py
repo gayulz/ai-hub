@@ -10,11 +10,40 @@ from unittest import mock
 
 from collector.backfill_store import Store
 from office import agents, ledger
+from orchestrator import targets
 from office.common import text
 from test_office import OfficeCase
 
 
 class OfficeStateTest(OfficeCase):
+	def test_dev_targets_only_export_ids_and_broken_list_keeps_other_sections_normal(self):
+		self.assertEqual(self.state()["dev_targets"], [{"id": "ai-hub", "label": "ai-hub"}])
+		listing = {"ai-hub": targets.Target("ai-hub", self.root / "repo"),
+			"blog-x": targets.Target("blog-x", self.root / "private-payload", "private-command")}
+		with mock.patch.object(targets, "targets", return_value=listing):
+			state = self.state()
+		self.assertEqual(state["dev_targets"], [{"id": key, "label": key} for key in listing])
+		self.assertNotIn("private-payload", json.dumps(state))
+		self.assertNotIn("private-command", json.dumps(state))
+		(self.hub / "repos.toml").write_text('[[repo]\nid="private-payload"')
+		state = self.state()
+		self.assertEqual(state["dev_targets"], [{"id": "ai-hub", "label": "ai-hub"}])
+		for key in ("c4", "runs", "drafts", "decisions"):
+			self.assertEqual(state["approvals"][key]["status"], "정상")
+
+	def test_dev_plans_show_first_configured_implementer_and_reviewer_without_breaking_other_usage(self):
+		path = self.hub / "plans.toml"
+		original = path.read_text()
+		path.write_text(original + '\n[orchestration]\nimplementer=["acme-codex","acme-agy"]\nreviewer=["acme-claude"]\n')
+		state = self.state()
+		self.assertEqual(state["dev_plans"], {"implementer": "acme-codex", "reviewer": "acme-claude"})
+		self.assertEqual(state["usage"]["limit"]["status"], "정상")
+		for section in ('implementer=[]\nreviewer=[]', 'implementer="private-payload"\nreviewer=[1]'):
+			path.write_text(original + '\n[orchestration]\n' + section)
+			state = self.state()
+			self.assertEqual(state["dev_plans"], {"implementer": None, "reviewer": None})
+			self.assertEqual(state["usage"]["limit"]["status"], "정상")
+
 	def test_missing_broken_or_linked_drafts_only_affect_the_drafts_group(self):
 		self.assertEqual(self.state()["approvals"]["drafts"], {"status": "정상", "items": []})
 		folder = self.hub / "office-drafts"

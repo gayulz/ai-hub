@@ -146,6 +146,8 @@ class OfficeActionHTTPTest(ActionCase):
 		with mock.patch.object(actions.drafts, "execute", return_value=(200, actions.result(True, "합성 초안"))) as execute:
 			for action, identity in (("dev_draft", "backend"), ("dev_redraft", "d-20261024-123456-abcdef01")):
 				payload = {"action": action, "id": identity, "text": "가" * 2000}
+				if action == "dev_draft":
+					payload["target"] = "ai-hub"
 				self.assertEqual(self.request(payload)[0], 200)
 				self.assertEqual(execute.call_args.args[3], payload["text"])
 				self.assertEqual(self.request({**payload, "text": "가" * 2001})[0], 400)

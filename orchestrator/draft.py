@@ -1,10 +1,11 @@
-"""읽기 전용 기획 호출의 JSON을 검사하고 고정된 저장소의 요청서로 만든다."""
+"""읽기 전용 기획 호출의 JSON을 검사하고 허용된 저장소의 요청서로 만든다."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path, PureWindowsPath
@@ -14,11 +15,11 @@ from collector.redact_pii import EMAIL
 from vaultfilter.public import Rules
 from vaultfilter.verify import AI_SIGNATURE
 
-from . import prompts, providers
+from . import prompts, providers, targets
 from .checks import DEFAULT_TEST
 from .flow import role_plans
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = targets.REPO
 ROLES = ("plan", "backend", "frontend", "design")
 DEFAULT_FORBIDDEN = [
 	"브라우저를 열지 않는다(화면·headless 모두 금지).",
@@ -68,21 +69,24 @@ def owned_path(value: str) -> None:
 		raise ValueError("owned_paths: 저장소 안의 구체적인 상대 경로·글롭만 허용합니다")
 
 
-def validate(data, role: str, rules: Rules) -> dict:
+def validate(data, role: str, rules: Rules, selected: targets.Target | None = None) -> dict:
+	selected = selected or targets.target("ai-hub")
 	if role not in ROLES or not isinstance(data, dict):
 		raise ValueError("역할 또는 초안 JSON 형식을 확인하세요")
-	request = {"repo": str(REPO), "kind": "code", "role": role,
+	request = {"repo": str(selected.path), "kind": "code", "role": role,
 		"goal": string(data.get("goal"), "goal", 300),
 		"done": strings(data.get("done"), "done", 10),
 		"owned_paths": strings(data.get("owned_paths"), "owned_paths", 20),
 		"forbidden": strings(data.get("forbidden"), "forbidden", 40, 0),
 		"details": string(data.get("details"), "details", 10000, 0),
-		"test_command": DEFAULT_TEST,
+		"test_command": selected.test_command,
 		"commit_message": string(data.get("commit_message"), "commit_message", 200)}
 	for path in request["owned_paths"]:
 		owned_path(path)
 	if AI_SIGNATURE.search(request["commit_message"]):
 		raise ValueError("commit_message: AI 서명은 허용하지 않습니다")
+	if selected.commit_pattern is not None and not re.fullmatch(selected.commit_pattern, request["commit_message"]):
+		raise ValueError("commit_message: 대상 저장소의 커밋 꼴과 다릅니다")
 	for field in FIELDS:
 		value = request[field]
 		safe_text("\n".join(value) if isinstance(value, list) else value, rules)
@@ -90,7 +94,7 @@ def validate(data, role: str, rules: Rules) -> dict:
 	if not isinstance(budget, dict) or any(type(budget.get(key)) is not int for key in LIMITS):
 		raise ValueError("budget: calls·minutes·fixes는 정수여야 합니다")
 	budget = {key: max(low, min(budget[key], high)) for key, (low, high) in LIMITS.items()}
-	request["forbidden"] += DEFAULT_FORBIDDEN
+	request["forbidden"] += DEFAULT_FORBIDDEN + list(selected.forbidden)
 	return {"request": request, "budget": budget}
 
 
@@ -98,14 +102,15 @@ def read_draft(path: Path, rules: Rules | None = None) -> dict:
 	from .__main__ import read_request
 	data = read_request(str(path))
 	request, budget = data["request"], data.get("budget")
-	if (request.get("repo") != str(REPO) or request.get("kind") != "code"
-			or request.get("test_command") != DEFAULT_TEST):
-		raise ValueError("초안의 저장소·종류·테스트 명령이 고정값과 다릅니다")
+	selected = targets.for_repo(request.get("repo"))
+	if request.get("kind") != "code" or request.get("test_command") != selected.test_command:
+		raise ValueError("초안의 종류·테스트 명령이 대상 저장소의 값과 다릅니다")
 	forbidden = request.get("forbidden")
-	if not isinstance(forbidden, list) or forbidden[-len(DEFAULT_FORBIDDEN):] != DEFAULT_FORBIDDEN:
-		raise ValueError("초안에 기본 금지 사항이 필요합니다")
-	checked = validate({**request, "forbidden": forbidden[:-len(DEFAULT_FORBIDDEN)], "budget": budget},
-		request.get("role"), rules or Rules())
+	tail = DEFAULT_FORBIDDEN + list(selected.forbidden)
+	if not isinstance(forbidden, list) or forbidden[-len(tail):] != tail:
+		raise ValueError("초안에 기본·대상 저장소 금지 사항이 필요합니다")
+	checked = validate({**request, "forbidden": forbidden[:-len(tail)], "budget": budget},
+		request.get("role"), rules or Rules(), selected)
 	if data != checked:
 		raise ValueError("초안 필드 또는 예산이 허용된 형식·범위와 다릅니다")
 	return checked
@@ -128,24 +133,26 @@ def serialize(data: dict) -> str:
 def summary(data: dict, plan: str) -> dict:
 	request = data["request"]
 	return {key: request[key] for key in ("goal", "done", "owned_paths", "forbidden", "role")} | {
-		"budget": data["budget"], "plan": plan}
+		"budget": data["budget"], "plan": plan, "target": targets.for_repo(request.get("repo", str(targets.REPO))).id}
 
 
-def create(role: str, text_file: Path, out: Path, previous: Path | None = None) -> dict:
+def create(role: str, text_file: Path, out: Path, previous: Path | None = None, target_id: str = "ai-hub") -> dict:
+	selected = targets.target(target_id)
 	rules = Rules()
 	text = user_text(text_file.read_text(encoding="utf-8"), rules)
 	prior = read_draft(previous, rules) if previous else None
-	if prior and prior["request"]["role"] != role:
-		raise ValueError("이전 초안과 요청 역할이 다릅니다")
+	if prior and (prior["request"]["role"] != role or prior["request"]["repo"] != str(selected.path)):
+		raise ValueError("이전 초안과 요청 역할·대상이 다릅니다")
 	with (home() / "plans.toml").open("rb") as stream:
 		config = tomllib.load(stream).get("orchestration", {})
 	plans = role_plans(load_plans(), config, "draft")
 	if not plans:
 		raise ValueError("기획 역할에 personal 허용 요금제가 없습니다")
 	previous_fields = {key: prior["request"][key] for key in FIELDS} | {"budget": prior["budget"]} if prior else None
-	reply = providers.call(plans[0], writer=False, prompt=prompts.draft(role, text, previous_fields),
-		cwd=REPO, schema=prompts.DRAFT_SCHEMA, timeout=570)
-	data = validate(reply.data, role, rules)
+	reply = providers.call(plans[0], writer=False,
+		prompt=prompts.draft(role, text, previous_fields, selected.id, selected.commit_pattern),
+		cwd=selected.path, schema=prompts.DRAFT_SCHEMA, timeout=570)
+	data = validate(reply.data, role, rules, selected)
 	content = serialize(data)
 	if tomllib.loads(content) != data:
 		raise ValueError("TOML 직렬화 결과가 초안과 다릅니다")
@@ -166,12 +173,13 @@ def create(role: str, text_file: Path, out: Path, previous: Path | None = None) 
 def main(argv: list[str]) -> int:
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--role", required=True, choices=ROLES)
+	parser.add_argument("--target", default="ai-hub")
 	parser.add_argument("--text-file", required=True, type=Path)
 	parser.add_argument("--out", required=True, type=Path)
 	parser.add_argument("--previous", type=Path)
 	args = parser.parse_args(argv)
 	try:
-		value = create(args.role, args.text_file, args.out, args.previous)
+		value = create(args.role, args.text_file, args.out, args.previous, args.target)
 		print(json.dumps(value, ensure_ascii=False))
 		return 0
 	except (OSError, ValueError, TypeError, KeyError, ConfigError, providers.ProviderError, RecursionError) as exc:

@@ -5,15 +5,18 @@ import os
 import subprocess
 import tempfile
 import unittest
+import contextlib
+import io
 from pathlib import Path
 from unittest import mock
 
 from collector import vault
 from collector.config import load_plans
-from orchestrator import __main__ as cli
+from orchestrator import __main__ as cli, checks, targets
 from orchestrator.flow import Flow
 from orchestrator.providers import ProviderError, Reply, extract_json
 from orchestrator.record import Run, new_run_id
+from test_orchestrator_targets import init_repo, write_repos
 
 PLANS = """
 [[plans]]
@@ -75,7 +78,7 @@ class FakeAI:
 class OrchestratorTest(unittest.TestCase):
 	def setUp(self):
 		self.tmp = tempfile.TemporaryDirectory()
-		root = Path(self.tmp.name)
+		root = Path(self.tmp.name).resolve()
 		self.home, self.repo, self.vault = root / "hub", root / "repo", root / "vault"
 		(self.home / "redaction").mkdir(parents=True)
 		(self.home / "redaction" / "dictionary.json").write_text(json.dumps({"entries": [
@@ -111,6 +114,26 @@ class OrchestratorTest(unittest.TestCase):
 	def flow(self, run, fake):
 		return Flow(run, load_plans(), cli.orchestration_config(), caller=fake).run_all()
 
+	def approved(self, changes):
+		run = self.new_run()
+		Flow(run, load_plans(), cli.orchestration_config()).prepare()
+		for name, value in changes.items():
+			path = Path(run.worktree) / name
+			if value is None:
+				path.unlink()
+			else:
+				path.parent.mkdir(parents=True, exist_ok=True)
+				path.write_text(value)
+		sh(run.worktree, "git", "add", "--", *changes)
+		sh(run.worktree, "git", "commit", "-q", "-m", "합성 변경")
+		run.finish("승인 필요", "합성 검토 통과")
+		return run
+
+	def snapshot(self):
+		return (checks.git(self.repo, "rev-parse", "HEAD"), (self.repo / ".git/index").read_bytes(),
+			{str(path.relative_to(self.repo)): path.read_bytes() for path in self.repo.rglob("*")
+				if path.is_file() and ".git" not in path.relative_to(self.repo).parts})
+
 	def test_pass_reaches_approval_then_apply_makes_one_commit(self):
 		run = self.flow(self.new_run(), FakeAI([PASS], {"src/a.py": "VALUE = 2\n"}))
 		self.assertEqual(run.status, "승인 필요")
@@ -122,6 +145,92 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertEqual(log[0], "값을 2로 바꾼다")
 		self.assertEqual((self.repo / "src" / "a.py").read_text(encoding="utf-8"), "VALUE = 2\n")
 		self.assertFalse(Path(run.worktree).exists())
+
+	def test_apply_rejects_dirty_modified_deleted_untracked_and_directory_collisions_without_mutation(self):
+		cases = [("src/a.py", "추가 합성 내용", "수정"), ("src/a.py", None, "삭제"),
+			("src/new file.py", "합성 새 파일", "추적 안 됨"), ("src/새\n파일.py", "합성 줄바꿈 파일", "추적 안 됨"),
+			("src/new.pyc", "합성 캐시", "추적 안 됨"), ("src/newdir/file.py", "합성 파일", "상위 파일"),
+			("src/newfile", "합성 파일", "하위 파일")]
+		for name, value, kind in cases:
+			with self.subTest(kind=kind, name=name):
+				run = self.approved({name: value if value is not None else "브랜치의 변경"})
+				path = self.repo / name
+				if kind == "삭제":
+					path.unlink()
+				elif kind == "상위 파일":
+					path.parent.write_text("상위 합성 파일")
+				elif kind == "하위 파일":
+					path.mkdir()
+					(path / "local.txt").write_text("하위 합성 파일")
+				else:
+					path.write_text("보존할 미커밋 내용")
+				before = self.snapshot()
+				with mock.patch.object(cli, "finish_outputs") as finish:
+					with self.assertRaisesRegex(RuntimeError, "^작업 중인 파일과 겹쳐 반영하지 않습니다: 1개$"):
+						cli.cmd_apply(run.run_id)
+					finish.assert_not_called()
+				self.assertEqual(self.snapshot(), before)
+				self.assertEqual(Run.load(run.run_id).status, "승인 필요")
+				if kind == "상위 파일":
+					path.parent.unlink()
+				elif kind == "하위 파일":
+					(path / "local.txt").unlink()
+					path.rmdir()
+				elif name == "src/a.py":
+					path.write_text("VALUE = 1\n")
+				else:
+					path.unlink()
+
+	def test_apply_keeps_unrelated_tracked_and_untracked_changes_and_staged_refusal(self):
+		run = self.approved({"src/a.py": "VALUE = 2\n"})
+		path = self.repo / "tests/test_a.py"
+		path.write_text("보존할 테스트 수정")
+		untracked = self.repo / "notes.txt"
+		untracked.write_text("보존할 새 파일")
+		sh(self.repo, "git", "add", "tests/test_a.py")
+		before = self.snapshot()
+		with self.assertRaisesRegex(RuntimeError, "스테이징된 변경"):
+			cli.cmd_apply(run.run_id)
+		self.assertEqual(self.snapshot(), before)
+		sh(self.repo, "git", "reset", "-q", "HEAD", "--", "tests/test_a.py")
+		with mock.patch.object(cli, "finish_outputs"):
+			self.assertEqual(cli.cmd_apply(run.run_id), 0)
+		self.assertEqual(path.read_text(), "보존할 테스트 수정")
+		self.assertEqual(untracked.read_text(), "보존할 새 파일")
+		self.assertEqual((self.repo / "src/a.py").read_text(), "VALUE = 2\n")
+		self.assertEqual(checks.git(self.repo, "diff", "--cached", "--name-only"), "")
+
+	def test_target_trailer_only_for_successful_claude_implementation_and_restart_last_line(self):
+		other = init_repo(self.repo.parent / "other")
+		patch = mock.patch.object(targets, "REPO", other)
+		patch.start()
+		self.addCleanup(patch.stop)
+		row = {"id": "blog-x", "path": str(self.repo), "test_command": checks.DEFAULT_TEST,
+			"claude_trailer": "합성 Claude 서명", "restart_paths": ["src/"], "restart_notice": "사용자 승인 회차에 재기동"}
+		calls = [([{"role": "implement", "tool": "claude", "ok": True}], True),
+			([{"role": "implement", "tool": "codex", "ok": True}, {"role": "review", "tool": "claude", "ok": True}], False),
+			([{"role": "implement", "tool": "claude", "ok": False}, {"role": "implement", "tool": "codex", "ok": True}], False),
+			([{"role": "implement", "tool": "claude", "ok": None}], False)]
+		for number, (history, expected) in enumerate(calls):
+			with self.subTest(history=history):
+				write_repos(self.home, row)
+				run = self.approved({"src/a.py": f"VALUE = {number + 2}\n"})
+				run.calls = history
+				run.save()
+				with mock.patch.object(cli, "finish_outputs", side_effect=lambda _: print("합성 보고서")), \
+						contextlib.redirect_stdout(io.StringIO()) as output:
+					self.assertEqual(cli.cmd_apply(run.run_id), 0)
+				message = checks.git(self.repo, "log", "-1", "--format=%B").rstrip()
+				self.assertEqual(message, run.request["commit_message"] + ("\n\n" + row["claude_trailer"] if expected else ""))
+				self.assertEqual(output.getvalue().splitlines()[-1], "재기동 필요: " + row["restart_notice"])
+		write_repos(self.home, {**row, "claude_trailer": ""})
+		run = self.approved({"tests/test_a.py": "합성 테스트 변경"})
+		run.calls = calls[0][0]
+		run.save()
+		with mock.patch.object(cli, "finish_outputs"), contextlib.redirect_stdout(io.StringIO()) as output:
+			cli.cmd_apply(run.run_id)
+		self.assertEqual(output.getvalue(), "")
+		self.assertEqual(checks.git(self.repo, "log", "-1", "--format=%B").strip(), run.request["commit_message"])
 
 	def test_major_finding_is_fixed_then_rechecked(self):
 		run = self.flow(self.new_run(), FakeAI([CHANGES, PASS], {"src/a.py": "VALUE = 2\n"}))

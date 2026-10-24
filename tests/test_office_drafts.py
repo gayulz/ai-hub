@@ -12,7 +12,7 @@ from unittest import mock
 
 from office import actions, drafts
 from office.common import action_id
-from orchestrator import draft
+from orchestrator import draft, targets
 from test_orchestrator_draft import DraftCase, sample
 
 
@@ -30,7 +30,9 @@ class OfficeDraftTest(DraftCase):
 		self.assertNotIn(self.text.read_text(), " ".join(argv))
 		out = Path(argv[argv.index("--out") + 1])
 		role = argv[argv.index("--role") + 1]
-		data = draft.validate(sample(), role, draft.Rules())
+		target_id = argv[argv.index("--target") + 1]
+		self.assertEqual(argv[4:8], ["--role", role, "--target", target_id])
+		data = draft.validate(sample(), role, draft.Rules(), targets.target(target_id))
 		fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 		with os.fdopen(fd, "w") as stream:
 			stream.write(draft.serialize(data))
@@ -38,7 +40,7 @@ class OfficeDraftTest(DraftCase):
 
 	def generate(self, role="backend", text="합성 사용자 원문은 기록에 남기지 않습니다"):
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft) as command:
-			status, value = actions.apply({"action": "dev_draft", "id": role, "text": text})
+			status, value = actions.apply({"action": "dev_draft", "id": role, "text": text, "target": "ai-hub"})
 		self.assertEqual(status, 200, value)
 		command.assert_called_once()
 		return value["draft"]
@@ -52,7 +54,7 @@ class OfficeDraftTest(DraftCase):
 		self.assertEqual(action_id("dev_run", identity), identity)
 		self.assertEqual(self.meta(identity)["status"], "초안")
 		self.assertEqual(self.meta(identity)["role"], "frontend")
-		self.assertEqual(drafts.read_drafts(self.hub)["items"], [{"id": identity, "role": "frontend", "goal": value["goal"],
+		self.assertEqual(drafts.read_drafts(self.hub)["items"], [{"id": identity, "role": "frontend", "target": "ai-hub", "goal": value["goal"],
 			"done": len(value["done"]), "owned_paths": value["owned_paths"], "created": value["created"]}])
 		additional = "완료 조건을 한 개 더 적어 주세요"
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft) as command:
@@ -107,9 +109,26 @@ class OfficeDraftTest(DraftCase):
 		self.assertEqual(stat.S_IMODE(log.parent.stat().st_mode), 0o700)
 		self.assertIn("합성 실행 기록", log.read_text())
 
+	def test_legacy_metadata_without_target_is_read_as_ai_hub_without_rewriting(self):
+		identity = self.generate()["id"]
+		row = self.meta(identity)
+		del row["target"]
+		del row["summary"]["target"]
+		drafts.save(self.hub, row)
+		path = self.hub / "office-drafts" / (identity + ".json")
+		before = path.read_bytes()
+		row, data = drafts.load(self.hub, identity)
+		self.assertEqual(row["target"], "ai-hub")
+		self.assertEqual(drafts.card(row, data)["target"], "ai-hub")
+		self.assertEqual(path.read_bytes(), before)
+
 	def test_exact_payload_role_id_text_validation_never_reaches_subprocess(self):
-		bad = [{"action": "dev_draft", "id": role, "text": "합성"} for role in ("qa", "xyz", "../backend", [], None)]
-		bad += [{"action": "dev_draft", "id": "plan", "text": text} for text in ("", " ", "a" * 2001, "a\x00b", [], 3, None)]
+		bad = [{"action": "dev_draft", "id": role, "text": "합성", "target": "ai-hub"} for role in ("qa", "xyz", "../backend", [], None)]
+		bad += [{"action": "dev_draft", "id": "plan", "text": text, "target": "ai-hub"} for text in ("", " ", "a" * 2001, "a\x00b", [], 3, None)]
+		bad += [{"action": "dev_draft", "id": "plan", "text": "합성", "target": value}
+			for value in ([], 1, None, "", "Blog-x", "../xyz", "missing")]
+		bad += [{"action": "dev_draft", "id": "plan", "text": "합성"},
+			{"action": "dev_draft", "id": "plan", "text": "합성", "target": "ai-hub", "repo": "/tmp/xyz"}]
 		bad += [{"action": "dev_draft", "id": "plan"}, {"action": "dev_draft", "id": "plan", "text": "합성", "extra": "xyz"}]
 		for action in ("dev_redraft", "dev_run", "dev_discard"):
 			for identity in ("../xyz", "d-20261324-100000-12345678", "d-20260230-100000-12345678",
@@ -170,7 +189,7 @@ class OfficeDraftTest(DraftCase):
 			(draft.FAILURE + "앞 줄\n사용자 글 원문", "사용자 글·요금제 설정을 확인하세요."))
 		for stderr, expected in cases:
 			with mock.patch.object(drafts.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", stderr)):
-				status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 개발 지시"})
+				status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 개발 지시", "target": "ai-hub"})
 			self.assertEqual(status, 500, value)
 			if expected:
 				self.assertTrue(value["message"].endswith(expected), value)
@@ -207,10 +226,10 @@ class OfficeDraftTest(DraftCase):
 			self.assertTrue(release.wait(5))
 			return self.fake_draft(argv, **options)
 		with mock.patch.object(drafts.subprocess, "run", side_effect=wait) as command, ThreadPoolExecutor() as pool:
-			first = pool.submit(actions.apply, {"action": "dev_draft", "id": "backend", "text": "합성 지시"})
+			first = pool.submit(actions.apply, {"action": "dev_draft", "id": "backend", "text": "합성 지시", "target": "ai-hub"})
 			try:
 				self.assertTrue(started.wait(5))
-				self.assertEqual(actions.apply({"action": "dev_draft", "id": "plan", "text": "다음 지시"})[0], 409)
+				self.assertEqual(actions.apply({"action": "dev_draft", "id": "plan", "text": "다음 지시", "target": "ai-hub"})[0], 409)
 			finally:
 				release.set()
 			self.assertEqual(first.result(timeout=5)[0], 200)
@@ -230,7 +249,7 @@ class OfficeDraftTest(DraftCase):
 		folder = self.hub / "office-drafts"
 		folder.symlink_to(self.root, target_is_directory=True)
 		with mock.patch.object(drafts.subprocess, "run") as command:
-			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 지시"})[0], 409)
+			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 지시", "target": "ai-hub"})[0], 409)
 			command.assert_not_called()
 		folder.unlink()
 		identity = self.generate()["id"]

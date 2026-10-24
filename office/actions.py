@@ -12,9 +12,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from collector.config import home
+from collector.config import ConfigError, home
 from collector.redact import redact
 from collector.redact_pii import redact_pii
+from orchestrator import targets
 
 from . import drafts
 from .agents import read_runs
@@ -94,6 +95,9 @@ def execute(action: str, identity: str, audit) -> tuple[int, dict]:
 		output = "\n".join(redact_pii(redact(output)).splitlines()[-20:])
 	except (OSError, ValueError, TypeError):
 		output = "출력 가림 처리를 하지 못해 내용을 숨겼습니다."
+	lines = output.splitlines()
+	if action == "run_apply" and lines and lines[-1].startswith("재기동 필요: "):
+		message += "\n" + lines[-1]
 	ok = code == 0
 	row = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), "action": action, "id": identity,
 		"exit_code": code, "seconds": round(time.monotonic() - started, 3), "ok": ok, "message": message.splitlines()[0]}
@@ -114,12 +118,16 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
+		if action == "dev_draft":
+			keys.add("target")
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
 		if "text" in keys:
 			drafts.string(payload["text"], "사용자 글", 2000)
-	except (ValueError, TypeError):
+		if action == "dev_draft":
+			targets.target(payload["target"])
+	except (ValueError, TypeError, ConfigError):
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
 	root = home()
 	try:
@@ -130,10 +138,10 @@ def apply(payload) -> tuple[int, dict]:
 				return 409, result(False, "이미 실행 중")
 			if action in drafts.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
-					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO)
+					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO, payload.get("target", "ai-hub"))
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:
 				return execute(action, identity, audit)
-	except (OSError, ValueError, TypeError, KeyError):
+	except (OSError, ValueError, TypeError, KeyError, ConfigError):
 		return 409, result(False, "반영 상태 또는 잠금·기록을 확인할 수 없습니다. 다시 반영하기 전에 상태를 확인하세요.")

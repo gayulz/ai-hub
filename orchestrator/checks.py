@@ -27,18 +27,20 @@ def _artifact(path: str) -> bool:
 	return "__pycache__/" in path or path.endswith(".pyc")
 
 
-def changed_paths(worktree: Path) -> list[str]:
-	"""기준 대비 아직 커밋하지 않은 새 파일·수정·삭제 경로(파이썬 캐시 제외)."""
-	out = git(worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+def changed_paths(worktree: Path, include_artifacts: bool = False) -> list[str]:
+	"""미커밋 경로. 반영 충돌 검사에서는 캐시와 이름 변경의 원래 경로도 포함한다."""
+	out = git(worktree, "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	fields, paths, index = out.split("\0"), [], 0
 	while index < len(fields):
 		entry = fields[index]
 		index += 1
 		if len(entry) < 4:
 			continue
-		if not _artifact(entry[3:]):
+		if include_artifacts or not _artifact(entry[3:]):
 			paths.append(entry[3:])
-		if entry[0] in "RC":
+		if "R" in entry[:2] or "C" in entry[:2]:
+			if include_artifacts and index < len(fields):
+				paths.append(fields[index])
 			index += 1
 	return paths
 

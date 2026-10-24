@@ -6,7 +6,8 @@ from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from collector.config import home
+from collector.config import ConfigError, home
+from orchestrator import targets
 
 from . import agents, drafts, roles
 from .common import identifier, normal, read_toml, text, unavailable
@@ -24,7 +25,16 @@ def read_plans(root: Path) -> dict:
 			if pid in tools or tool not in ("codex", "agy", "claude", "ollama"):
 				raise ValueError
 			tools[pid] = tool
-		result = normal(tools=tools)
+		result = normal(tools=tools, orchestration={"implementer": None, "reviewer": None})
+		for role in result["orchestration"]:
+			try:
+				values = data.get("orchestration", {}).get(role, [])
+				if isinstance(values, list) and values:
+					pid = identifier(values[0])
+					if pid in tools:
+						result["orchestration"][role] = pid
+			except (ValueError, TypeError, AttributeError):
+				pass
 		try:
 			limit = data["backfill"]["daily_limit_calls"]
 			if type(limit) is not int or limit < 0:
@@ -88,6 +98,10 @@ def build_state(now: datetime | None = None) -> dict:
 	now = (now or datetime.now().astimezone()).astimezone()
 	root, user_home = home(), Path.home()
 	plans = read_plans(root)
+	try:
+		dev_targets = [{"id": item.id, "label": item.id} for item in targets.targets().values()]
+	except (ConfigError, OSError, ValueError):
+		dev_targets = [{"id": "ai-hub", "label": "ai-hub"}]
 	ledger = read_ledger(root, now.date().isoformat())
 	runs = agents.read_runs(root)
 	decisions = read_decisions(root, now.date())
@@ -125,7 +139,8 @@ def build_state(now: datetime | None = None) -> dict:
 		"text": item.get("text") or "오케스트레이션 · " + item["status"], "at": item["at"]}
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
-	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs,
+	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
+		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),
 			"drafts": drafts.read_drafts(root), "decisions": decisions["decisions"]},

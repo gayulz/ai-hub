@@ -13,9 +13,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from collector.config import ConfigError
 from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator.draft import FAILURE, ROLES, read_draft, string, summary
+from orchestrator import targets
 from vaultfilter.public import Rules
 
 from .common import action_id, identifier, normal, regular, stamp, unavailable
@@ -86,6 +88,10 @@ def metadata(root: Path, identity: str) -> dict:
 	if row["previous"]:
 		action_id("dev_run", row["previous"])
 	identifier(row["summary"]["plan"])
+	row.setdefault("target", "ai-hub")
+	row["summary"].setdefault("target", "ai-hub")
+	if not isinstance(row["target"], str) or not targets.ID.fullmatch(row["target"]):
+		raise ValueError("초안 대상 형식 오류")
 	return row
 
 
@@ -93,14 +99,21 @@ def load(root: Path, identity: str) -> tuple[dict, dict]:
 	row = metadata(root, identity)
 	if row["status"] != "초안":
 		raise ValueError("대기 중인 초안이 아닙니다")
-	data = read_draft(private(root / "office-drafts" / (identity + ".toml"), root))
-	if row["role"] != data["request"]["role"] or row["summary"] != summary(data, row["summary"]["plan"]):
+	try:
+		data = read_draft(private(root / "office-drafts" / (identity + ".toml"), root))
+		value = summary(data, row["summary"]["plan"])
+	except ConfigError:
+		raise ValueError("대상 저장소 목록을 읽을 수 없습니다") from None
+	if row["role"] != data["request"]["role"] or row["target"] != value["target"] or row["summary"] != value:
 		raise ValueError("초안 요약과 요청서가 다릅니다")
 	return row, data
 
 
 def card(row: dict, data: dict) -> dict:
-	return {"id": row["id"], "created": row["created"], **summary(data, row["summary"]["plan"])}
+	try:
+		return {"id": row["id"], "created": row["created"], **summary(data, row["summary"]["plan"])}
+	except ConfigError:
+		raise ValueError("대상 저장소 목록을 읽을 수 없습니다") from None
 
 
 def read_drafts(root: Path) -> dict:
@@ -121,14 +134,14 @@ def read_drafts(root: Path) -> dict:
 				continue
 			row, data = load(root, path.stem)
 			request = data["request"]
-			rows.append({"id": row["id"], "role": row["role"], "goal": request["goal"],
+			rows.append({"id": row["id"], "role": row["role"], "target": row["target"], "goal": request["goal"],
 				"done": len(request["done"]), "owned_paths": request["owned_paths"], "created": row["created"]})
 		return normal(items=rows)
-	except (OSError, ValueError, TypeError, KeyError, RecursionError):
+	except (OSError, ValueError, TypeError, KeyError, ConfigError, RecursionError):
 		return unavailable("개발 지시 초안을 읽을 수 없습니다", items=[])
 
 
-def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path) -> dict:
+def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path, target_id: str = "ai-hub") -> dict:
 	folder = directory(root, "office-drafts")
 	identity = "d-" + datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(4)
 	path = folder / (identity + ".toml")
@@ -137,7 +150,7 @@ def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path
 		stream.write(text)
 		stream.flush()
 		argv = [sys.executable, "-m", "orchestrator", "draft", "--role", role,
-			"--text-file", stream.name, "--out", str(path)]
+			"--target", target_id, "--text-file", stream.name, "--out", str(path)]
 		if previous:
 			argv += ["--previous", str(folder / (previous["id"] + ".toml"))]
 		completed = subprocess.run(argv, cwd=repo, env={**os.environ, "AI_HUB_HOME": str(root), "PYTHONPATH": str(repo)},
@@ -147,9 +160,9 @@ def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path
 	data = read_draft(private(path, root))
 	value = json.loads(completed.stdout)
 	plan = identifier(value["plan"])
-	if value != summary(data, plan) or data["request"]["role"] != role:
+	if value != summary(data, plan) or data["request"]["role"] != role or value["target"] != target_id:
 		raise ValueError("초안 명령의 요약을 확인할 수 없습니다")
-	row = {"id": identity, "role": role, "text": text, "created": datetime.now().astimezone().isoformat(timespec="seconds"),
+	row = {"id": identity, "role": role, "target": target_id, "text": text, "created": datetime.now().astimezone().isoformat(timespec="seconds"),
 		"summary": value, "status": "초안", "previous": previous["id"] if previous else ""}
 	save(root, row)
 	if previous:
@@ -176,12 +189,12 @@ def start(root: Path, row: dict, repo: Path) -> None:
 			raise
 
 
-def execute(root: Path, action: str, identity: str, text: str | None, audit, repo: Path) -> tuple[int, dict]:
+def execute(root: Path, action: str, identity: str, text: str | None, audit, repo: Path, target_id: str = "ai-hub") -> tuple[int, dict]:
 	started = time.monotonic()
 	status, code, value = 200, 0, None
 	try:
 		if action == "dev_draft":
-			value = generate(root, identity, text, None, repo)
+			value = generate(root, identity, text, None, repo, target_id)
 			message = "개발 지시 초안을 썼습니다. 내용을 확인해 주세요."
 		else:
 			if action == "dev_discard":
@@ -191,7 +204,7 @@ def execute(root: Path, action: str, identity: str, text: str | None, audit, rep
 			else:
 				row, data = load(root, identity)
 			if action == "dev_redraft":
-				value = generate(root, row["role"], text, row, repo)
+				value = generate(root, row["role"], text, row, repo, row["target"])
 				message = "개발 지시 초안을 다시 썼습니다."
 			elif action == "dev_run":
 				start(root, row, repo)
@@ -203,7 +216,7 @@ def execute(root: Path, action: str, identity: str, text: str | None, audit, rep
 		status, code, message = 504, 124, "초안 작성 시간이 제한을 넘었습니다. 상태를 다시 확인하세요."
 	except RuntimeError as exc:
 		status, code, message = 500, 2, "초안 작성이 실패했습니다. " + (f"이유: {exc}" if str(exc) else "사용자 글·요금제 설정을 확인하세요.")
-	except (OSError, ValueError, TypeError, KeyError, RecursionError):
+	except (OSError, ValueError, TypeError, KeyError, ConfigError, RecursionError):
 		status, code, message = 409, 2, "초안·상태·실행 기록을 확인할 수 없습니다. 상태를 다시 읽어 주세요."
 	entry = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), "action": action, "id": identity,
 		"exit_code": code, "seconds": round(time.monotonic() - started, 3), "ok": code == 0, "message": message}

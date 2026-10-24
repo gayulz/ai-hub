@@ -2,7 +2,7 @@
 
 사용:
 	python3 -m orchestrator run <요청서.toml>          새 실행(구현 → 검증 → 독립 검토 → 보완)
-	python3 -m orchestrator draft --role <역할> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
+	python3 -m orchestrator draft --role <역할> --target <대상> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
 	python3 -m orchestrator resume <run_id> [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
@@ -24,9 +24,9 @@ from datetime import datetime
 from pathlib import Path
 
 from collector import vault
-from collector.config import home, load_plans, load_sources
+from collector.config import ConfigError, home, load_plans, load_sources
 
-from . import checks
+from . import checks, targets
 from .flow import Flow
 from .record import DEFAULT_BUDGET, Run, new_run_id
 
@@ -157,17 +157,28 @@ def cmd_apply(run_id: str) -> int:
 		raise RuntimeError(f"반영할 수 없는 상태입니다: {run.kind} · {run.status}")
 	if checks.git(run.repo, "diff", "--cached", "--name-only").strip():
 		raise RuntimeError("본 저장소에 스테이징된 변경이 있어 반영하지 않습니다")
+	paths = [p for p in checks.git(run.repo, "diff", "--name-only", "-z", "--no-renames", run.base_commit, run.branch).split("\0") if p]
+	dirty = checks.changed_paths(Path(run.repo), include_artifacts=True)
+	overlaps = [p for p in paths if any(p == d or p.startswith(d + "/") or d.startswith(p + "/") for d in dirty)]
+	if overlaps:
+		raise RuntimeError(f"작업 중인 파일과 겹쳐 반영하지 않습니다: {len(overlaps)}개")
+	selected = next((item for item in targets.targets().values() if str(item.path) == run.repo), None)
+	message = run.request.get("commit_message") or run.request["goal"]
+	if selected and selected.claude_trailer and any(c.get("role") == "implement" and c.get("tool") == "claude"
+			and c.get("ok") is True for c in run.calls):
+		message = message.rstrip() + "\n\n" + selected.claude_trailer
 	merged = subprocess.run(["git", "-C", run.repo, "merge", "--squash", run.branch], capture_output=True, text=True)
 	if merged.returncode != 0 or not checks.git(run.repo, "diff", "--cached", "--name-only").strip():
 		checks.git(run.repo, "reset", "-q", "--merge", check=False)  # 반쯤 합친 상태를 남기지 않는다
 		raise RuntimeError(f"합칠 변경이 없거나 충돌했습니다: {(merged.stdout + merged.stderr).strip()[-200:]}")
-	message = run.request.get("commit_message") or run.request["goal"]
 	checks.git(run.repo, "commit", "-q", "-m", message)
 	commit = checks.git(run.repo, "rev-parse", "--short", "HEAD").strip()
 	checks.git(run.repo, "worktree", "remove", "--force", run.worktree, check=False)
 	checks.git(run.repo, "branch", "-D", run.branch, check=False)
 	run.finish("완료", f"본 저장소에 반영 {commit}(push 안 함)")
 	finish_outputs(run)
+	if selected and any(path.startswith(prefix) for path in paths for prefix in selected.restart_paths):
+		print("재기동 필요: " + selected.restart_notice)
 	return 0
 
 
@@ -185,7 +196,7 @@ def main(argv: list[str]) -> int:
 			return 0
 		if argv[:1] == ["apply"] and len(argv) == 2:
 			return cmd_apply(argv[1])
-	except (OSError, ValueError, RuntimeError, KeyError) as exc:
+	except (OSError, ValueError, RuntimeError, KeyError, ConfigError) as exc:
 		print(f"orchestrator 실패: {type(exc).__name__}: {exc}", file=sys.stderr)
 		return 1
 	print(USAGE, file=sys.stderr)

@@ -183,4 +183,6 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .dev-card ul{padding-left:20px;margin:8px 0}
 .dev-card li{margin-bottom:8px}
 .dev-card code{white-space:pre-wrap;overflow-wrap:anywhere}
+.dev-card .stat{flex-wrap:wrap;gap:8px}
+.dev-plans{margin-top:10px;white-space:normal;overflow-wrap:anywhere;color:var(--muted)}
 @media(max-width:600px){#dev-dialog{padding:18px}.action-buttons>*{flex:1 1 40%;min-width:0}}

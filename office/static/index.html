@@ -17,6 +17,7 @@
 	<h2 id="dev-title">개발 지시</h2><p id="dev-warning" class="intro">회사 내용·비밀값은 적지 마세요. 기획 AI가 ai-hub 저장소의 요청서 초안을 씁니다.</p>
 	<div id="dev-editor" class="dev-editor">
 		<label for="dev-role">개발팀 역할</label><select id="dev-role"><option value="plan">기획</option><option value="backend">백엔드</option><option value="frontend">프론트</option><option value="design">디자인</option></select>
+		<label for="dev-target">대상 저장소</label><select id="dev-target" aria-describedby="dev-warning"><option value="ai-hub">ai-hub</option></select>
 		<label id="dev-text-label" for="dev-text">할 일</label><textarea id="dev-text" rows="6" maxlength="2000" aria-describedby="dev-warning dev-remaining"></textarea>
 		<p id="dev-remaining" class="muted">2000자 남음</p><button id="dev-write" class="apply-button" disabled>초안 쓰기</button>
 	</div>

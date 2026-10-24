@@ -139,6 +139,22 @@ class OfficeActionsTest(ActionCase):
 				self.assertEqual(self.apply("run_apply", self.rid)[1]["restart_needed"], expected)
 				self.assertEqual(run.call_args_list[-1].args[0], ["git", "diff", "--name-only", "-z", "a" * 40, "HEAD", "--", "office/"])
 
+	def test_run_apply_appends_only_final_redacted_restart_notice_without_restarting(self):
+		for output, expected in (("합성 보고서\n재기동 필요: 승인 뒤 직접 재기동\n", "승인 뒤 직접 재기동"),
+				("재기동 필요: 앞줄 안내\n합성 보고서\n", None),
+				("재기동 필요: password=" + "private-payload", "[보안값]")):
+			with self.subTest(output=output), mock.patch.object(actions, "git", return_value=""), \
+					mock.patch.object(actions.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as command:
+				status, value = self.apply("run_apply", self.rid)
+				self.assertEqual(status, 200)
+				self.assertEqual("재기동 필요: " in value["message"], expected is not None)
+				if expected:
+					self.assertIn(expected, value["message"])
+				self.assertNotIn("private-payload", value["message"])
+				self.assertFalse(value["restart_needed"])
+				command.assert_called_once()
+				self.assertEqual(command.call_args.args[0], [sys.executable, "-m", "orchestrator", "apply", self.rid])
+
 	def test_lock_blocks_second_caller_and_is_released_after_failure(self):
 		started, release = threading.Event(), threading.Event()
 		def wait(*args, **kwargs):

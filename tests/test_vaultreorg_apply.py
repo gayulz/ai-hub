@@ -1,6 +1,7 @@
 """합성 Git 볼트에서 폴더 승인·재실행·실패 복구를 검사한다."""
 
 import json
+import os
 import subprocess
 import unicodedata
 from pathlib import Path
@@ -301,3 +302,14 @@ class ApplyTest(ReorgCase):
 		self.assertIn("파일 1개", self.git("log", "-1", "--format=%s").decode())
 		self.assertNotIn(b"acme", self.git("ls-files"))
 		self.assertTrue(fm.split(risky.read_bytes()).lines)  # 노트에는 머리말이 들어갔다
+
+	def test_original_modification_time_is_kept(self):
+		# 블로그 에이전트·Obsidian 이 수정 시각으로 최근 노트를 고르므로 머리말만 더해도 시각은 그대로여야 한다
+		note = self.write("💼 Career/261024-p01.md", "본문 p01\n")
+		self.init_git("💼 Career")
+		old = 1_700_000_000_000_000_000
+		os.utime(note, ns=(old, old))
+		self.assertEqual(self.command("report"), 0, self.stderr.getvalue())
+		self.assertEqual(self.command("apply", "--folder", "Career"), 0, self.stderr.getvalue())
+		self.assertIn(b"type: career", note.read_bytes())
+		self.assertEqual(note.stat().st_mtime_ns, old)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -59,6 +60,7 @@ def apply_note(vault: Path, note: dict, mapping: dict) -> bool:
 	path = rules.target(vault, note["path"])
 	with locked("vault:" + str(path.absolute())):
 		path = rules.target(vault, note["path"])
+		original = path.stat()
 		before = path.read_bytes()
 		if note["status"] == "applied":
 			if sha(before) != note["after"] or sha(frontmatter.split(before).body) != note["body_hash"]:
@@ -76,14 +78,19 @@ def apply_note(vault: Path, note: dict, mapping: dict) -> bool:
 		temporary = path.with_name(f".{path.name}.tmp")
 		if temporary.is_symlink() or temporary.exists():
 			raise frontmatter.NoteError("기존 임시 파일이 있어 쓰기를 보류함")
+		# 수정 시각은 원래대로 둔다. 블로그 에이전트·Obsidian 이 수정 시각으로 '최근 노트'를 고르는데,
+		# 머리말만 더한 노트가 최근 노트로 보이면 안 된다(10-24 확인)
+		times = (original.st_atime_ns, original.st_mtime_ns)
 		try:
 			vault_io.atomic_write(path, after.decode("utf-8"))
+			os.utime(path, ns=times)
 			written = path.read_bytes()
 			if sha(written) != note["after"] or frontmatter.split(written).body != body:
 				raise frontmatter.NoteError("반영 후 해시 또는 본문 바이트 대조 실패")
 		except (OSError, ValueError) as exc:
 			try:
 				vault_io.atomic_write(path, before.decode("utf-8"))
+				os.utime(path, ns=times)
 				if path.read_bytes() != before:
 					raise OSError
 			except (OSError, ValueError):

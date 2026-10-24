@@ -164,7 +164,7 @@ class ChatReply:
 
 
 def _chat_session(tool: str, stdout: str) -> str | None:
-	key = {"codex": "thread_id", "claude": "session_id", "agy": "conversation_id"}[tool]
+	key = {"codex": "thread_id", "claude": "session_id"}[tool]
 	for line in stdout.splitlines() if tool == "codex" else [stdout]:
 		try:
 			event = json.loads(line)
@@ -206,17 +206,12 @@ def chat_call(plan: Plan, prompt: str, cwd: Path, schema: dict, timeout: float, 
 				argv += ["--model", plan.model]
 			if session is not None:
 				argv += ["--resume", session]
-		elif plan.tool == "agy":
-			argv = ["agy", "-p", prompt, "--output-format", "json", "--json-schema", json.dumps(schema), "--mode", "plan"]
-			if plan.model:
-				argv += ["--model", plan.model]
-			if session is not None:
-				argv += ["--conversation", session]
 		else:
+			# AGY 는 --mode plan(과 --sandbox)을 줘도 파일을 실제로 만들었다(2026-10-25 시험 6회 중 6회). 쓰기를 막지 못하는 도구는 대화에 쓰지 않는다.
 			raise ProviderError("missing", "대화에 허용되지 않은 도구입니다")
 		started = time.monotonic()
 		try:
-			result = subprocess.run(argv, input=None if plan.tool == "agy" else prompt, cwd=cwd,
+			result = subprocess.run(argv, input=prompt, cwd=cwd,
 				capture_output=True, text=True, timeout=timeout)
 		except subprocess.TimeoutExpired:
 			raise ProviderError("timeout", "대화 호출 시간이 초과됐습니다") from None

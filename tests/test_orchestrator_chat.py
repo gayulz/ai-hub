@@ -221,7 +221,7 @@ class ChatFlowTest(ChatCase):
 				("p04", "codex", "company", "personal"), ("p05", "claude", "personal", "study"), ("p06", "ollama", "personal", "personal")):
 			rows.append(f'[[plans]]\nid="{identity}"\ntool="{tool}"\nowner="{owner}"\nallow=["{allow}"]\nmodel="model-01"\n')
 		self.write_plans("\n".join(rows))
-		self.assertEqual(self.engine.plans(), [{"id": "p01", "tool": "codex"}, {"id": "p02", "tool": "claude"}, {"id": "p03", "tool": "agy"}])
+		self.assertEqual(self.engine.plans(), [{"id": "p01", "tool": "codex"}, {"id": "p02", "tool": "claude"}])
 		state = self.new()
 		for plan in ("p04", "p05", "p06", "missing"):
 			with self.assertRaises(chat.ChatError):

@@ -19,7 +19,8 @@ from . import chat_prompts as prompts, question_cards as cards
 ID = re.compile(r"c-[a-f0-9]{32}")
 SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,199}")
 SOURCES = ("office", "telegram", "cli")
-TOOLS = ("codex", "claude", "agy")
+# 읽기 전용이 실제로 지켜지는 도구만 둔다(AGY 는 plan 모드에서도 파일을 만들어 뺐다).
+TOOLS = ("codex", "claude")
 FIELDS = ("version", "id", "created", "target", "plan", "tool", "session", "status", "turns", "cards",
 	"dev_draft", "needs_user", "calls", "seconds", "failure")
 

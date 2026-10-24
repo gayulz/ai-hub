@@ -1,4 +1,4 @@
-"""세 도구의 새 대화·이어 가기 인자를 완전히 비교한다. 실제 AI는 부르지 않는다."""
+"""Codex·Claude 의 새 대화·이어 가기 인자를 완전히 비교하고 AGY 는 거부하는지 본다. 실제 AI는 부르지 않는다."""
 
 import json
 import subprocess
@@ -41,16 +41,15 @@ class ChatProviderTest(unittest.TestCase):
 				stdout = "읽을 수 없는 사건 한 줄\n" + json.dumps({"type": "thread.started", **({"thread_id": "thread-01"} if session_present else {})})
 				stdout += "\n" + json.dumps({"type": "turn.completed", "usage": self.usage})
 			else:
-				key = "session_id" if tool == "claude" else "conversation_id"
 				stdout = json.dumps({"structured_output": self.data, "usage": self.usage,
-					**({key: "thread-01"} if session_present else {})})
+					**({"session_id": "thread-01"} if session_present else {})})
 			return subprocess.CompletedProcess(argv, 0, stdout, "출력하지 않을 원문")
 		with mock.patch.object(providers.subprocess, "run", side_effect=fake):
 			reply = providers.chat_call(self.plan(tool, model), "합성 질문", cwd, self.schema, 600, session)
 		return reply, calls, cwd
 
 	def test_exact_argv_for_all_tools_new_resume_models_and_git_modes(self):
-		for tool in ("codex", "claude", "agy"):
+		for tool in ("codex", "claude"):
 			for session in (None, "thread-00"):
 				for model in (None, "model-01"):
 					for git in ((True, False) if tool == "codex" else (True,)):
@@ -76,14 +75,8 @@ class ChatProviderTest(unittest.TestCase):
 									expected += ["--model", model]
 								if session:
 									expected += ["--resume", session]
-							else:
-								expected = ["agy", "-p", "합성 질문", "--output-format", "json", "--json-schema", json.dumps(self.schema), "--mode", "plan"]
-								if model:
-									expected += ["--model", model]
-								if session:
-									expected += ["--conversation", session]
 							self.assertEqual(argv, expected)
-							self.assertEqual(kwargs, {"input": None if tool == "agy" else "합성 질문", "cwd": cwd,
+							self.assertEqual(kwargs, {"input": "합성 질문", "cwd": cwd,
 								"capture_output": True, "text": True, "timeout": 600})
 							for flag in ("--ephemeral", "--no-session-persistence", "workspace-write", "acceptEdits", "accept-edits", "danger", "yolo", "--danger", "--yolo"):
 								self.assertNotIn(flag, argv)
@@ -92,20 +85,18 @@ class ChatProviderTest(unittest.TestCase):
 							self.assertGreaterEqual(reply.seconds, 0)
 
 	def test_no_session_id_is_none_even_after_resume(self):
-		for tool in ("codex", "claude", "agy"):
+		for tool in ("codex", "claude"):
 			for session in (None, "thread-00"):
 				with self.subTest(tool=tool, session=session):
 					reply, _, _ = self.run_call(tool, session, session_present=False)
 					self.assertIsNone(reply.session)
 
 	def test_unwrap_reuses_fenced_and_nested_results_and_ignores_session_paths(self):
-		for tool in ("claude", "agy"):
-			key = "session_id" if tool == "claude" else "conversation_id"
-			outer = {"result": "```json\n" + json.dumps(self.data) + "\n```", key: str(self.root / "session.json")}
-			with mock.patch.object(providers.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(outer))):
-				reply = providers.chat_call(self.plan(tool), "질문", self.plain, self.schema, 600, None)
-			self.assertEqual(reply.data, self.data)
-			self.assertIsNone(reply.session)
+		outer = {"result": "```json\n" + json.dumps(self.data) + "\n```", "session_id": str(self.root / "session.json")}
+		with mock.patch.object(providers.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(outer))):
+			reply = providers.chat_call(self.plan("claude"), "질문", self.plain, self.schema, 600, None)
+		self.assertEqual(reply.data, self.data)
+		self.assertIsNone(reply.session)
 
 	def test_failures_keep_provider_error_kinds_without_echoing_output(self):
 		for result, kind in ((subprocess.TimeoutExpired("합성 원문", 600), "timeout"),
@@ -133,7 +124,7 @@ class ChatProviderTest(unittest.TestCase):
 			self.assertEqual(caught.exception.kind, kind)
 
 	def test_unsupported_tool_and_invalid_session_never_start_a_process(self):
-		for tool, session in (("ollama", None), ("codex", "--yolo"), ("claude", "../session"), ("agy", "")):
+		for tool, session in (("ollama", None), ("codex", "--yolo"), ("claude", "../session"), ("agy", None), ("agy", "conv-01")):
 			with mock.patch.object(providers.subprocess, "run") as run, self.assertRaises(providers.ProviderError):
 				providers.chat_call(self.plan(tool), "질문", self.plain, self.schema, 600, session)
 			run.assert_not_called()

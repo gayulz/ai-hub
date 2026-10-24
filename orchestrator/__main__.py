@@ -3,6 +3,7 @@
 사용:
 	python3 -m orchestrator run <요청서.toml>          새 실행(구현 → 검증 → 독립 검토 → 보완)
 	python3 -m orchestrator draft --role <역할> --target <대상> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
+	python3 -m orchestrator meeting --help               읽기 전용 회의(분석·확인·문답·재개)
 	python3 -m orchestrator resume <run_id> [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
@@ -183,6 +184,9 @@ def cmd_apply(run_id: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+	if argv[:1] == ["meeting"]:
+		from .meeting_cli import main as meeting_main
+		return meeting_main(argv[1:])
 	if argv[:1] == ["draft"]:
 		from .draft import main as draft_main
 		return draft_main(argv[1:])

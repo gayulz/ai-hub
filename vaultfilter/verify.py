@@ -140,8 +140,11 @@ def main(argv: list[str]) -> int:
 		count = check_encrypted(argv[1] if len(argv) > 1 else "HEAD")
 	elif argv[:1] == ["messages"]:
 		count = check_messages(argv[1] if len(argv) > 1 else "HEAD")
+	elif argv[:1] == ["public"] and len(argv) >= 2:
+		from .public import check_public
+		count = check_public(argv[1:])
 	else:
-		print("사용법: verify encrypted [rev-range] | verify messages <rev-range> | verify message-file <파일>", file=sys.stderr)
+		print("사용법: verify encrypted [rev-range] | verify messages <rev-range> | verify message-file <파일> | verify public <rev-list 인자>", file=sys.stderr)
 		return 2
 	print("검사 통과" if count == 0 else f"검사 실패: {count}건")
 	return 0 if count == 0 else 1

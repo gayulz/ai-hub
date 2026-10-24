@@ -1,0 +1,16 @@
+#!/bin/bash
+# ai-hub(공개 저장소) push 전 검사: 보낼 커밋의 새 줄·경로·작성자·메시지에서 회사 이름과 비밀값을 찾는다.
+# 연결: git config core.hooksPath .githooks (SETUP.md). 실패하면 push를 거부한다.
+root="$(git rev-parse --show-toplevel)" || exit 1
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+	[ "$local_sha" = "$zero" ] && continue
+	if [ "$remote_sha" = "$zero" ]; then
+		set -- "$local_sha" --not --remotes
+	else
+		set -- "$remote_sha..$local_sha"
+	fi
+	PYTHONPATH="$root" python3 -m vaultfilter verify public "$@" \
+		|| { echo "push 거부: 공개 저장소 검사 실패(위 커밋·파일 순번 확인)" >&2; exit 1; }
+done
+exit 0

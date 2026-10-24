@@ -67,6 +67,8 @@ python3 -m hubsetup check
 - 기본 launchd 라벨 접두어는 `com.`과 로그인 사용자명을 이은 값이다. 바꾸려면 install과 check 모두 같은 `--label-prefix com.acme`를 준다.
 - 예약 PATH는 기존 설치의 홈 부분을 현재 홈으로 바꾼 값이다: `~/.nvm/versions/node/v22.22.1/bin`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/bin`, `/bin`. 필요한 AI CLI와 런타임을 이 경로에서 사용할 수 있게 준비한다. 새 PC의 셸 PATH와 예약 PATH는 다를 수 있다.
 
+ai-hub 저장소 자체의 push 전 검사(공개 저장소용: 새 줄·경로·작성자·메시지의 회사 이름과 비밀값)는 저장소에 들어 있다. 새 PC에서 한 번 `git config core.hooksPath .githooks`로 연결한다.
+
 작성자는 `sources.toml`의 다음 항목에서 읽는다. 예시 값은 합성 값이므로 본인에게 맞게 바꾼다.
 
 ```toml

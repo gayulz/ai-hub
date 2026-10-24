@@ -3,27 +3,30 @@
 	python3 -m vaultfilter add 값 종류         사전에 항목 추가(종류: 회사명, 서비스명, 사람이름 ...)
 	python3 -m vaultfilter verify encrypted|messages <범위>   푸시 전 누출 검사(위치·종류만 출력)
 	python3 -m vaultfilter verify message-file 파일          커밋 메시지 검사(commit-msg 훅 용)
+	python3 -m vaultfilter verify public <rev-list 인자>     공개 저장소 push 전 검사(새 줄·경로·작성자·메시지)
 """
 
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from pathlib import Path
+
+from collector.config import load_sources
 
 from . import candidates
 from .store import KINDS, Dictionary
 
-NEWPOC = Path.home() / "NEWPOC"
-LEGACYPOC = Path.home() / "LEGACYPOC"
-
 
 def cmd_candidates() -> int:
-	names = candidates.scan_names([NEWPOC, LEGACYPOC])
+	# 회사 저장소 목록은 저장소에 적지 않고 ~/.ai-hub/sources.toml 에서 읽는다
+	roots = [Path(repo.path) for repo in load_sources().repos if repo.cls == "company"]
+	names = candidates.scan_names(roots)
 	print("## 폴더·파일 이름에서 나온 후보 (출현 수)")
 	for word, count in names.most_common(120):
 		print(f"{count}\t{word}")
 	print("## 커밋 작성자 (커밋 수)")
-	authors = candidates.commit_authors(NEWPOC) + candidates.commit_authors(LEGACYPOC)
+	authors = sum((candidates.commit_authors(root) for root in roots), Counter())
 	for name, count in authors.most_common():
 		print(f"{count}\t{name}")
 	return 0

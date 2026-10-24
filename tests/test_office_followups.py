@@ -3,7 +3,8 @@
 import json
 import sqlite3
 
-from office import ledger
+from office import agents, ledger
+from office.common import text
 from test_office_roles import RoleCase
 
 
@@ -50,6 +51,29 @@ class OfficeFollowupsTest(RoleCase):
 		company_queries = [q for q in queries if "cls='company'" in q]
 		self.assertTrue(company_queries)
 		self.assertTrue(all("sentence" not in q for q in company_queries))
+
+	def test_run_goal_is_sanitized_and_exported_only_for_public_classification(self):
+		path = self.hub / "runs/2026-10-23-006/run.json"
+		data = json.loads(path.read_text())
+		token = "ghp_" + "a" * 36
+		goal = "  합성\n 목표 /w/private/material " + token
+		for repo, public in ((self.user, True), (self.company_paths[0], False), (self.root / "unknown", False)):
+			data.update(repo=str(repo), request={"goal": goal}, started=self.now.isoformat())
+			path.write_text(json.dumps(data))
+			before = self.snapshot()
+			item = agents.read_runs(self.hub)["items"][0]
+			self.assertEqual(item["public"], public)
+			if public:
+				self.assertEqual(item["goal"], text(goal))
+				self.assertNotIn(token, item["goal"])
+				self.assertNotIn("/w/private/material", item["goal"])
+				self.assertEqual(item["started"], self.now.isoformat())
+			else:
+				self.assertNotIn("goal", item)
+				self.assertNotIn("goal_hash", item)
+				self.assertNotIn("repo", item)
+				self.assertNotIn("합성 목표", json.dumps(self.state(), ensure_ascii=False))
+			self.assertEqual(before, self.snapshot())
 
 	def test_missing_followups_only_marks_schedule_unavailable(self):
 		self.conn.execute("drop table followups")

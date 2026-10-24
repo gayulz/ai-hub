@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 from collector.config import ConfigError
@@ -85,6 +86,10 @@ def metadata(root: Path, identity: str) -> dict:
 		raise ValueError("초안 정보 형식 오류")
 	string(row["text"], "사용자 글", 2000)
 	stamp(row["created"])
+	if "origin" in row and type(row["origin"]) is not int:
+		raise ValueError("초안 지시 역할 형식 오류")
+	if "started" in row:
+		stamp(row["started"])
 	if row["previous"]:
 		action_id("dev_run", row["previous"])
 	identifier(row["summary"]["plan"])
@@ -141,7 +146,33 @@ def read_drafts(root: Path) -> dict:
 		return unavailable("개발 지시 초안을 읽을 수 없습니다", items=[])
 
 
-def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path, target_id: str = "ai-hub") -> dict:
+def read_started(root: Path, now: datetime) -> list[dict]:
+	try:
+		folder = root / "office-drafts"
+		if folder.is_symlink():
+			raise ValueError
+		if not folder.exists():
+			return []
+		rows = []
+		for path in sorted(folder.iterdir()):
+			if path.suffix != ".json":
+				continue
+			row = metadata(root, path.stem)
+			if row["status"] != "실행 시작" or "origin" not in row or "started" not in row:
+				continue
+			started = datetime.fromisoformat(row["started"])
+			created = datetime.fromisoformat(row["created"])
+			if (started.tzinfo and created.tzinfo and 0 <= (now - started).total_seconds() <= 3 * 86400
+					and 0 <= (now - created).total_seconds() <= 3 * 86400):
+				goal = string(row["summary"]["goal"], "목표", 300)
+				rows.append({"origin": row["origin"], "started": started, "goal_hash": sha256(goal.encode("utf-8")).hexdigest(),
+					"repo": str(targets.target(row["target"]).path)})
+		return rows
+	except (OSError, ValueError, TypeError, KeyError, ConfigError, RecursionError):
+		return []
+
+
+def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path, target_id: str = "ai-hub", origin: int | None = None) -> dict:
 	folder = directory(root, "office-drafts")
 	identity = "d-" + datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(4)
 	path = folder / (identity + ".toml")
@@ -164,6 +195,10 @@ def generate(root: Path, role: str, text: str, previous: dict | None, repo: Path
 		raise ValueError("초안 명령의 요약을 확인할 수 없습니다")
 	row = {"id": identity, "role": role, "target": target_id, "text": text, "created": datetime.now().astimezone().isoformat(timespec="seconds"),
 		"summary": value, "status": "초안", "previous": previous["id"] if previous else ""}
+	if previous is not None:
+		origin = previous.get("origin")
+	if origin is not None:
+		row["origin"] = origin
 	save(root, row)
 	if previous:
 		save(root, {**previous, "status": "버림"})
@@ -177,7 +212,7 @@ def start(root: Path, row: dict, repo: Path) -> None:
 	with os.fdopen(fd, "w", encoding="utf-8") as output:
 		os.fchmod(output.fileno(), 0o600)
 		# 먼저 예약해 두면 프로세스 시작 뒤 저장 실패로 같은 실행을 다시 띄우지 않는다.
-		save(root, {**row, "status": "실행 시작"})
+		save(root, {**row, "status": "실행 시작", "started": datetime.now().astimezone().isoformat(timespec="seconds")})
 		try:
 			subprocess.Popen([sys.executable, "-m", "orchestrator", "run",
 				str(root / "office-drafts" / (row["id"] + ".toml"))], cwd=repo,
@@ -189,12 +224,12 @@ def start(root: Path, row: dict, repo: Path) -> None:
 			raise
 
 
-def execute(root: Path, action: str, identity: str, text: str | None, audit, repo: Path, target_id: str = "ai-hub") -> tuple[int, dict]:
+def execute(root: Path, action: str, identity: str, text: str | None, audit, repo: Path, target_id: str = "ai-hub", origin: int | None = None) -> tuple[int, dict]:
 	started = time.monotonic()
 	status, code, value = 200, 0, None
 	try:
 		if action == "dev_draft":
-			value = generate(root, identity, text, None, repo, target_id)
+			value = generate(root, identity, text, None, repo, target_id, origin)
 			message = "개발 지시 초안을 썼습니다. 내용을 확인해 주세요."
 		else:
 			if action == "dev_discard":

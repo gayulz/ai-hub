@@ -21,6 +21,7 @@ from . import drafts
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
+from .scene import scene
 
 REPO = Path(__file__).resolve().parent.parent
 COMMANDS = {"c4_apply": ("collector", "backfill", "--apply"),
@@ -119,13 +120,15 @@ def apply(payload) -> tuple[int, dict]:
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
-			keys.add("target")
+			keys.update(("target", "origin"))
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
 		if "text" in keys:
 			drafts.string(payload["text"], "사용자 글", 2000)
 		if action == "dev_draft":
+			if type(payload["origin"]) is not int or not any(person["id"] == payload["origin"] for person in scene()["people"]):
+				raise ValueError
 			targets.target(payload["target"])
 	except (ValueError, TypeError, ConfigError):
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
@@ -138,7 +141,7 @@ def apply(payload) -> tuple[int, dict]:
 				return 409, result(False, "이미 실행 중")
 			if action in drafts.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
-					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO, payload.get("target", "ai-hub"))
+					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO, payload.get("target", "ai-hub"), payload.get("origin"))
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

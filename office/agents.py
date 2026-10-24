@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 from datetime import datetime
+from hashlib import sha256
 from http.client import HTTPException
 from pathlib import Path
 from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
@@ -69,6 +70,12 @@ def read_runs(root: Path) -> dict:
 				"public": rule is not None and rule.cls in ("personal", "study", "career"), "at": stamp(data["started"]) if data.get("started") else None}
 			if item["public"]:
 				item["text"] = text(data.get("handoff", {}).get("summary", ""))
+				goal = data.get("request", {}).get("goal", "")
+				item["goal"] = text(goal)
+				# 표시용 정제로 다른 목표가 같아져도 지시한 역할을 잘못 연결하지 않는다.
+				item["goal_hash"] = sha256(goal.encode("utf-8")).hexdigest()
+				item["repo"] = data.get("repo")
+				item["started"] = item["at"]
 		except (OSError, ValueError, TypeError, KeyError, AttributeError):
 			items.append(unavailable("실행 상태·잠금을 읽을 수 없습니다", id=folder.name, active=active, role="backend"))
 			continue

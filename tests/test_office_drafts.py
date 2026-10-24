@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -40,7 +41,7 @@ class OfficeDraftTest(DraftCase):
 
 	def generate(self, role="backend", text="합성 사용자 원문은 기록에 남기지 않습니다"):
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft) as command:
-			status, value = actions.apply({"action": "dev_draft", "id": role, "text": text, "target": "ai-hub"})
+			status, value = actions.apply({"action": "dev_draft", "id": role, "text": text, "origin": 11, "target": "ai-hub"})
 		self.assertEqual(status, 200, value)
 		command.assert_called_once()
 		return value["draft"]
@@ -54,6 +55,7 @@ class OfficeDraftTest(DraftCase):
 		self.assertEqual(action_id("dev_run", identity), identity)
 		self.assertEqual(self.meta(identity)["status"], "초안")
 		self.assertEqual(self.meta(identity)["role"], "frontend")
+		self.assertEqual(self.meta(identity)["origin"], 11)
 		self.assertEqual(drafts.read_drafts(self.hub)["items"], [{"id": identity, "role": "frontend", "target": "ai-hub", "goal": value["goal"],
 			"done": len(value["done"]), "owned_paths": value["owned_paths"], "created": value["created"]}])
 		additional = "완료 조건을 한 개 더 적어 주세요"
@@ -65,6 +67,7 @@ class OfficeDraftTest(DraftCase):
 		second = redraft["draft"]["id"]
 		self.assertEqual(self.meta(second)["previous"], identity)
 		self.assertEqual(self.meta(second)["text"], additional)
+		self.assertEqual(self.meta(second)["origin"], 11)
 		self.assertEqual(self.meta(identity)["status"], "버림")
 		self.assertEqual([row["id"] for row in drafts.read_drafts(self.hub)["items"]], [second])
 		before = (self.hub / "office-drafts" / (second + ".toml")).read_bytes()
@@ -97,6 +100,8 @@ class OfficeDraftTest(DraftCase):
 			status, value = actions.apply({"action": "dev_run", "id": identity})
 			self.assertEqual(status, 200, value)
 			self.assertEqual(self.meta(identity)["status"], "실행 시작")
+			self.assertEqual(self.meta(identity)["origin"], 11)
+			self.assertLessEqual(datetime.fromisoformat(self.meta(identity)["started"]), datetime.now().astimezone())
 			self.assertEqual(drafts.read_drafts(self.hub)["items"], [])
 			for action in ("dev_run", "dev_redraft", "dev_discard"):
 				payload = {"action": action, "id": identity}
@@ -114,27 +119,37 @@ class OfficeDraftTest(DraftCase):
 		row = self.meta(identity)
 		del row["target"]
 		del row["summary"]["target"]
+		del row["origin"]
 		drafts.save(self.hub, row)
 		path = self.hub / "office-drafts" / (identity + ".json")
 		before = path.read_bytes()
 		row, data = drafts.load(self.hub, identity)
 		self.assertEqual(row["target"], "ai-hub")
 		self.assertEqual(drafts.card(row, data)["target"], "ai-hub")
+		self.assertNotIn("origin", row)
 		self.assertEqual(path.read_bytes(), before)
+		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft):
+			status, value = actions.apply({"action": "dev_redraft", "id": identity, "text": "추가 합성 지시"})
+		self.assertEqual(status, 200, value)
+		self.assertNotIn("origin", self.meta(value["draft"]["id"]))
 
 	def test_exact_payload_role_id_text_validation_never_reaches_subprocess(self):
-		bad = [{"action": "dev_draft", "id": role, "text": "합성", "target": "ai-hub"} for role in ("qa", "xyz", "../backend", [], None)]
-		bad += [{"action": "dev_draft", "id": "plan", "text": text, "target": "ai-hub"} for text in ("", " ", "a" * 2001, "a\x00b", [], 3, None)]
-		bad += [{"action": "dev_draft", "id": "plan", "text": "합성", "target": value}
+		bad = [{"action": "dev_draft", "id": role, "text": "합성", "origin": 11, "target": "ai-hub"} for role in ("qa", "xyz", "../backend", [], None)]
+		bad += [{"action": "dev_draft", "id": "plan", "text": text, "origin": 11, "target": "ai-hub"} for text in ("", " ", "a" * 2001, "a\x00b", [], 3, None)]
+		bad += [{"action": "dev_draft", "id": "plan", "text": "합성", "origin": 11, "target": value}
 			for value in ([], 1, None, "", "Blog-x", "../xyz", "missing")]
 		bad += [{"action": "dev_draft", "id": "plan", "text": "합성"},
-			{"action": "dev_draft", "id": "plan", "text": "합성", "target": "ai-hub", "repo": "/tmp/xyz"}]
+			{"action": "dev_draft", "id": "plan", "text": "합성", "origin": 11, "target": "ai-hub", "repo": "/tmp/xyz"}]
 		bad += [{"action": "dev_draft", "id": "plan"}, {"action": "dev_draft", "id": "plan", "text": "합성", "extra": "xyz"}]
 		for action in ("dev_redraft", "dev_run", "dev_discard"):
 			for identity in ("../xyz", "d-20261324-100000-12345678", "d-20260230-100000-12345678",
 					"d-20261024-246060-12345678", "d-20261024-100000-xyz", "d-20261024-100000-12345678/"):
 				bad.append({"action": action, "id": identity, **({"text": "합성"} if action == "dev_redraft" else {})})
 		bad.append({"action": "dev_run", "id": "d-20261024-100000-12345678", "text": "합성"})
+		valid = {"action": "dev_draft", "id": "backend", "text": "합성", "target": "ai-hub", "origin": 11}
+		bad += [{k: v for k, v in valid.items() if k != "origin"}]
+		bad += [{**valid, "origin": origin} for origin in (None, True, False, "11", 11.0, [], {}, -1, 999)]
+		bad += [{"action": "dev_redraft", "id": "d-20261024-100000-12345678", "text": "합성", "origin": 11}]
 		with mock.patch.object(drafts.subprocess, "run") as run, mock.patch.object(drafts.subprocess, "Popen") as popen:
 			for payload in bad:
 				with self.subTest(payload=repr(payload)[:80]):
@@ -142,6 +157,15 @@ class OfficeDraftTest(DraftCase):
 			run.assert_not_called()
 			popen.assert_not_called()
 		self.assertFalse((self.hub / "logs/office-actions.jsonl").exists())
+
+	def test_origin_is_checked_against_scene_people_not_a_numeric_range(self):
+		with mock.patch.object(actions, "scene", return_value={"people": [{"id": 42}]}), \
+				mock.patch.object(drafts, "execute", return_value=(200, actions.result(True, "합성 초안"))) as execute:
+			payload = {"action": "dev_draft", "id": "backend", "text": "합성", "target": "ai-hub", "origin": 11}
+			self.assertEqual(actions.apply(payload)[0], 400)
+			execute.assert_not_called()
+			self.assertEqual(actions.apply({**payload, "origin": 42})[0], 200)
+			self.assertEqual(execute.call_args.args[-1], 42)
 
 	def test_recheck_rejects_tampered_request_metadata_budget_and_other_repositories(self):
 		identity = self.generate()["id"]
@@ -189,7 +213,7 @@ class OfficeDraftTest(DraftCase):
 			(draft.FAILURE + "앞 줄\n사용자 글 원문", "사용자 글·요금제 설정을 확인하세요."))
 		for stderr, expected in cases:
 			with mock.patch.object(drafts.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", stderr)):
-				status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 개발 지시", "target": "ai-hub"})
+				status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 개발 지시", "origin": 11, "target": "ai-hub"})
 			self.assertEqual(status, 500, value)
 			if expected:
 				self.assertTrue(value["message"].endswith(expected), value)
@@ -226,10 +250,10 @@ class OfficeDraftTest(DraftCase):
 			self.assertTrue(release.wait(5))
 			return self.fake_draft(argv, **options)
 		with mock.patch.object(drafts.subprocess, "run", side_effect=wait) as command, ThreadPoolExecutor() as pool:
-			first = pool.submit(actions.apply, {"action": "dev_draft", "id": "backend", "text": "합성 지시", "target": "ai-hub"})
+			first = pool.submit(actions.apply, {"action": "dev_draft", "id": "backend", "text": "합성 지시", "origin": 11, "target": "ai-hub"})
 			try:
 				self.assertTrue(started.wait(5))
-				self.assertEqual(actions.apply({"action": "dev_draft", "id": "plan", "text": "다음 지시", "target": "ai-hub"})[0], 409)
+				self.assertEqual(actions.apply({"action": "dev_draft", "id": "plan", "text": "다음 지시", "origin": 11, "target": "ai-hub"})[0], 409)
 			finally:
 				release.set()
 			self.assertEqual(first.result(timeout=5)[0], 200)
@@ -240,6 +264,7 @@ class OfficeDraftTest(DraftCase):
 		with mock.patch.object(drafts.subprocess, "Popen", side_effect=OSError("합성 실패")):
 			self.assertEqual(actions.apply({"action": "dev_run", "id": identity})[0], 409)
 		self.assertEqual(self.meta(identity)["status"], "초안")
+		self.assertNotIn("started", self.meta(identity))
 		self.assertFalse((self.hub / "logs/office-runs" / (identity + ".log")).exists())
 		with mock.patch.object(drafts.subprocess, "Popen") as launch:
 			self.assertEqual(actions.apply({"action": "dev_run", "id": identity})[0], 200)
@@ -249,7 +274,7 @@ class OfficeDraftTest(DraftCase):
 		folder = self.hub / "office-drafts"
 		folder.symlink_to(self.root, target_is_directory=True)
 		with mock.patch.object(drafts.subprocess, "run") as command:
-			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 지시", "target": "ai-hub"})[0], 409)
+			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성 지시", "origin": 11, "target": "ai-hub"})[0], 409)
 			command.assert_not_called()
 		folder.unlink()
 		identity = self.generate()["id"]

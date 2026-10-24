@@ -6,8 +6,9 @@ from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from office import signals
+from office import drafts, signals
 from office.scene import scene
+from orchestrator import targets
 from test_office import OfficeCase
 
 
@@ -47,6 +48,23 @@ class RoleCase(OfficeCase):
 
 
 class OfficeRolesTest(RoleCase):
+	def test_public_goal_is_shortened_to_24_characters_for_implementation_and_qa(self):
+		self.hold()
+		path = self.hub / "runs/2026-10-23-006/run.json"
+		data = json.loads(path.read_text())
+		for goal in ("가" * 24, "가" * 25, "", None):
+			data["request"] = {"goal": goal} if goal is not None else {}
+			path.write_text(json.dumps(data))
+			title = goal[:24] + ("…" if len(goal) > 24 else "") if goal else "2026-10-23-006"
+			for role, name, phase in (("implement", "백엔드", "구현 중"), ("review", "QA", "검토 중")):
+				path.with_name("events.jsonl").write_text(json.dumps({"at": self.now.isoformat(), "event": "call", "role": role, "plan": "acme-codex"}) + "\n")
+				self.assertEqual(self.roles()[name]["task"], title + " · " + phase)
+		data.update(repo=str(self.company_paths[0]), request={"goal": "비공개 합성 목표"})
+		path.write_text(json.dumps(data))
+		state = self.state()
+		self.assertEqual(self.roles(state)["QA"]["task"], "2026-10-23-006 · 검토 중")
+		self.assertNotIn("비공개 합성 목표", json.dumps(state, ensure_ascii=False))
+
 	def test_23_roles_keep_design_appearance_department_seat_and_coordinates(self):
 		state = self.state()
 		self.assertEqual((len(state["people"]), len(state["rooms"]), len(state["engines"])), (23, 8, 8))
@@ -224,4 +242,89 @@ class OfficeRolesTest(RoleCase):
 		path = self.blog_path / ".blogops/daemon.json"
 		path.parent.mkdir(parents=True)
 		path.write_text(json.dumps({"pid": os.getpid(), "status": "running", "updated": self.now.isoformat()}))
+		self.assertEqual(self.roles()["티스토리"]["status"], "대기")
+
+
+class OfficeOriginRolesTest(RoleCase):
+	def setUp(self):
+		super().setUp()
+		self.lock = self.hold()
+		patch = mock.patch.object(targets, "targets", return_value={"ai-hub": targets.Target("ai-hub", self.user)})
+		patch.start()
+		self.addCleanup(patch.stop)
+		self.run_path = self.hub / "runs/2026-10-23-006/run.json"
+		self.run_data = json.loads(self.run_path.read_text())
+		self.run_data.update(started=(self.now - timedelta(seconds=30)).isoformat(), request={"goal": "합성 개발 목표", "repo": str(self.user)})
+		self.run_path.write_text(json.dumps(self.run_data))
+		self.row = {"id": "d-20261023-120000-abcdef01", "role": "backend", "target": "ai-hub", "text": "합성 지시",
+			"created": (self.now - timedelta(minutes=2)).isoformat(), "started": (self.now - timedelta(minutes=1)).isoformat(),
+			"origin": 11, "summary": {"plan": "acme-codex", "goal": "합성 개발 목표"}, "status": "실행 시작", "previous": ""}
+		drafts.save(self.hub, self.row)
+
+	def test_matching_instruction_marks_blog_roles_and_neighbor_without_changing_other_signals(self):
+		for origin in (8, 9, 10, 11, 19, 22):
+			drafts.save(self.hub, {**self.row, "origin": origin})
+			before = self.snapshot()
+			people = {p["id"]: p for p in self.state()["people"]}
+			self.assertEqual((people[origin]["status"], people[origin]["task"], people[origin]["engine"]),
+				("작업 중", "개발 지시 · 구현 중", "Codex"))
+			self.assertEqual(people[4]["task"], "합성 개발 목표 · 구현 중")
+			self.assertEqual(before, self.snapshot())
+
+	def test_review_engine_and_task_follow_actual_call(self):
+		self.run_path.with_name("events.jsonl").write_text(json.dumps({"at": self.now.isoformat(), "event": "call", "role": "review", "plan": "acme-agy"}) + "\n")
+		people = self.roles()
+		self.assertEqual((people["티스토리"]["status"], people["티스토리"]["task"], people["티스토리"]["engine"]),
+			("작업 중", "개발 지시 · 검토 중", "AGY"))
+		self.assertEqual(people["QA"]["task"], "합성 개발 목표 · 검토 중")
+
+	def test_busy_original_signal_wins_and_developer_origins_keep_their_own_tasks(self):
+		signal = {"status": "작업 중", "engine": "로컬", "task": "별도 합성 작업", "updated": self.now.isoformat()}
+		with mock.patch.object(signals, "tistory", return_value=signal):
+			person = self.roles()["티스토리"]
+		self.assertEqual({k: person[k] for k in signal}, signal)
+		for origin in (3, 4, 5, 6, 7):
+			drafts.save(self.hub, {**self.row, "origin": origin})
+			person = next(p for p in self.state()["people"] if p["id"] == origin)
+			self.assertNotIn("개발 지시", person["task"])
+
+	def test_only_recent_started_public_runs_with_matching_goal_repo_and_start_time_are_linked(self):
+		cases = [({"summary": {**self.row["summary"], "goal": "다른 합성 목표"}}, {}),
+			({}, {"request": {"goal": "합성  개발 목표", "repo": str(self.user)}}),
+			({}, {"repo": str(self.user / "other")}), ({}, {"started": (self.now - timedelta(minutes=2)).isoformat()}),
+			({"started": (self.now - timedelta(days=3, seconds=1)).isoformat()}, {}),
+			({"started": (self.now + timedelta(seconds=1)).isoformat()}, {}),
+			({"created": (self.now - timedelta(days=3, seconds=1)).isoformat()}, {}),
+			({"created": (self.now + timedelta(seconds=1)).isoformat()}, {}),
+			({"status": "초안"}, {}), ({"status": "버림"}, {}), ({"origin": 999}, {}),
+			({}, {"status": "완료"}), ({}, {"calls": []}), ({}, {"repo": str(self.company_paths[0])}),
+			({}, {"started": None})]
+		for draft_change, run_change in cases:
+			with self.subTest(draft=draft_change, run=run_change):
+				drafts.save(self.hub, {**self.row, **draft_change})
+				self.run_path.write_text(json.dumps({**self.run_data, **run_change}))
+				self.assertEqual(self.roles()["티스토리"]["status"], "대기")
+		for missing in ("origin", "started"):
+			drafts.save(self.hub, {k: v for k, v in self.row.items() if k != missing})
+			self.run_path.write_text(json.dumps(self.run_data))
+			self.assertEqual(self.roles()["티스토리"]["status"], "대기")
+		drafts.save(self.hub, self.row)
+		self.lock.close()
+		self.assertEqual(self.roles()["티스토리"]["status"], "대기")
+
+	def test_three_day_boundary_and_start_timestamp_are_inclusive(self):
+		drafts.save(self.hub, {**self.row, "created": (self.now - timedelta(days=3)).isoformat(), "started": (self.now - timedelta(days=3)).isoformat()})
+		self.assertEqual(self.roles()["티스토리"]["status"], "작업 중")
+		drafts.save(self.hub, {**self.row, "started": self.run_data["started"]})
+		self.assertEqual(self.roles()["티스토리"]["status"], "작업 중")
+
+	def test_unreadable_metadata_only_skips_origin_and_keeps_execution_and_original_signals(self):
+		path = self.hub / "office-drafts" / (self.row["id"] + ".json")
+		for value in ("[]", "[" * 1500):
+			path.write_text(value)
+			people = self.roles()
+			self.assertEqual(people["백엔드"]["status"], "작업 중")
+			self.assertEqual(people["티스토리"]["status"], "대기")
+		drafts.save(self.hub, self.row)
+		self.run_path.with_name("events.jsonl").write_text("[]")
 		self.assertEqual(self.roles()["티스토리"]["status"], "대기")

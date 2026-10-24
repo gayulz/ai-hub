@@ -13,14 +13,29 @@ from office.server import STATIC
 HARNESS = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const root=process.argv[1],scene=JSON.parse(fs.readFileSync(root+'/scene.json','utf8'));
+const bubbleMode=process.argv[2]==='bubbles';
+if(bubbleMode){
+	scene.width=1000;scene.height=650;
+	const positions={0:[300,300],1:[310,300],2:[700,300],3:[700,450],4:[850,450],5:[850,300],6:[320,300],7:[330,300],8:[5,300],9:[500,60],10:[-100,300],11:[1005,300],12:[500,800],15:[700,200]};
+	scene.people.forEach(p=>[p.x,p.y]=positions[p.id]||[-1000,-1000]);
+}
 const mobileMode=process.argv[2]==='mobile',sessionOK=process.argv[2]!=='no-session';
 const labels=new Map(),events=new Map(),windowEvents=new Map(),elements=new Map(),classes=new Set(),openedLinks=[];
-let frame,interval,apiOK=true,requests=[],actionResponse,actionReject,actionCount=0,actionBody;
-const context2d=id=>new Proxy({measureText:text=>({width:text.length*7}),fillText:(text,x,y)=>{if(id==='map')labels.set(text,[x,y])}},
-	{get:(object,key)=>key in object?object[key]:(()=>{}),set:(object,key,value)=>{object[key]=value;return true}});
+let frame,interval,resize,reducedMode=false,viewport={width:1000,height:650,left:0,top:0},apiOK=true,requests=[],actionResponse,actionReject,actionCount=0,actionBody;
+const drawCalls=[];
+const context2d=id=>{
+	let points=[],curves=0;
+	return new Proxy({measureText:text=>({width:Array.from(text).length*7}),
+		fillText(text,x,y){if(id==='map'){labels.set(text,[x,y]);drawCalls.push({kind:'text',text,x,y,color:this.fillStyle})}},
+		beginPath(){points=[];curves=0},moveTo(x,y){points.push([x,y])},lineTo(x,y){points.push([x,y])},
+		quadraticCurveTo(...coords){curves++;points.push(coords.slice(0,2),coords.slice(2))},
+		stroke(){if(id==='map')drawCalls.push({kind:'bubble',points,curves,color:this.strokeStyle,fill:this.fillStyle,
+			left:Math.min(...points.map(p=>p[0])),right:Math.max(...points.map(p=>p[0])),top:Math.min(...points.map(p=>p[1])),bottom:Math.max(...points.map(p=>p[1]))})}},
+		{get:(object,key)=>key in object?object[key]:(()=>{}),set:(object,key,value)=>{object[key]=value;return true}});
+};
 class Element{
 	constructor(id='',tagName='DIV'){this.id=id;this.tagName=tagName;this.hidden=id==='side'||id==='nearby';this.open=false;this.disabled=false;this.dataset={};this.style={setProperty(){}};this.innerHTML='';this.textContent='';this.value='';this.scrollTop=0;this.ctx=context2d(id);this.listeners=new Map();this.attributes={};this.children=[];this.isConnected=true}
-	getContext(){return this.ctx}getBoundingClientRect(){return {width:1000,height:650,left:0,top:0}}
+	getContext(){return this.ctx}getBoundingClientRect(){return viewport}
 	setAttribute(name,value){this.attributes[name]=value}append(...children){this.children.push(...children)}setPointerCapture(){}querySelectorAll(){return []}
 	replaceChildren(...children){this.children=children;this.textContent=''}
 	click(){openedLinks.push({href:this.href,target:this.target,rel:this.rel})}
@@ -40,8 +55,8 @@ let state={updated:'2026-10-24T12:00:00+09:00',blog_dashboard:'켜짐',dev_targe
 	activity:[],board:{status:'정상',items:[{kind:'chat',title:'결정',text:'합성 결정',at:'2026-10-24T12:00:00+09:00'}],progress:{items:[]}},engines:[]};
 let draftView={id:'d-20261024-120000-abcdef01',target:'blog-x',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
 const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,target:value.target,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
-const sandbox={document,window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},matchMedia:query=>({matches:mobileMode&&query.includes('900px')}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
-	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{observe(){}},AbortController,
+const sandbox={document,window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},matchMedia:query=>({get matches(){return query.includes('reduce')?reducedMode:mobileMode&&query.includes('900px')}}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
+	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{constructor(fn){resize=fn}observe(){}},AbortController,
 	console,setTimeout:()=>1,clearTimeout(){},setInterval:(fn,ms)=>{interval=fn;assert.equal(ms,10000)},
 	fetch:async(url,options)=>{
 		requests.push(url);
@@ -62,8 +77,48 @@ const click=data=>{const button=new Element();button.dataset=data;events.get('cl
 const html=fs.readFileSync(root+'/index.html','utf8'),blogLink=html.match(/<a\b[^>]*\bid="blog-link"[^>]*>/);
 if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLink[0].match(new RegExp(name+'="([^"]*)"'))?.[1];
 (async()=>{
+	const longTask='😀'+'합성진행'.repeat(12),shortTask='오류 합성 작업';
+	if(bubbleMode)state.people=state.people.map(p=>({...p,status:p.id===1?'오류':[0,5,8,9,10,11,12,15].includes(p.id)?'작업 중':p.id===3?'쉬는 중':p.id===4?'확인 불가':'대기',
+		task:p.id===0?longTask:p.id===1?shortTask:p.id===5?'':'숨길 합성 작업 '+p.id}));
 	await vm.runInContext(fs.readFileSync(root+'/office.js','utf8'),sandbox);
 	assert.deepEqual(requests,['/scene.json','/api/session','/api/state']);
+	if(bubbleMode){
+		const cut=limit=>Array.from(longTask).slice(0,limit-1).join('')+'…';
+		const paint=()=>{drawCalls.length=0;frame(200);return {bubbles:drawCalls.filter(c=>c.kind==='bubble'),texts:drawCalls.filter(c=>c.kind==='text')}};
+		let drawing=paint();assert.equal(drawing.bubbles.length,2);
+		assert(drawing.texts.some(c=>c.text===cut(14)));assert(drawing.texts.some(c=>c.text===shortTask));
+		assert(!drawing.texts.some(c=>c.text.startsWith('숨길 합성 작업')));
+		assert.equal(Array.from(cut(14)).length,14);
+		assert(drawing.bubbles[1].bottom<drawing.bubbles[0].top);
+		for(const [i,bubble] of drawing.bubbles.entries()){
+			assert.equal(bubble.color,i===0?'#5d9973':'#dd6d76');assert.equal(bubble.fill,scene.palette.paper);assert.equal(bubble.curves,4);
+			assert(bubble.left>=0&&bubble.right<=viewport.width&&bubble.top>=0&&bubble.bottom<=viewport.height);
+			assert(bubble.points.some(([x,y])=>x===300+i*10&&y===bubble.bottom));
+		}
+		for(const c of drawing.texts.filter(c=>[cut(14),shortTask].includes(c.text)))assert.equal(c.color,scene.palette.ink);
+		const normal=drawing;reducedMode=true;assert.deepEqual(paint(),normal);reducedMode=false;
+		state.people[6].status=state.people[7].status='작업 중';await interval();drawing=paint();
+		assert.equal(drawing.bubbles.length,3);assert(!drawing.texts.some(c=>c.text==='숨길 합성 작업 7'));
+		assert.equal(drawing.bubbles[0].top-drawing.bubbles[2].top,2*(24+5+4));
+		element('map').listeners.get('pointermove')({clientX:300,clientY:270,pointerId:1});
+		assert(paint().texts.some(c=>c.text===cut(40)));assert.equal(Array.from(cut(40)).length,40);
+		element('map').listeners.get('pointerleave')();assert(paint().texts.some(c=>c.text===cut(14)));
+		click({person:'0'});assert(paint().texts.some(c=>c.text===cut(40)));
+		await interval();assert(paint().texts.some(c=>c.text===cut(40)));
+		click({room:'blog'});assert(paint().texts.some(c=>c.text===cut(14)));
+		click({person:'0'});element('close-panel').onclick();assert(paint().texts.some(c=>c.text===cut(14)));
+		state.people[6].status=state.people[7].status='대기';await interval();
+		viewport={width:549,height:650*.549,left:0,top:0};resize();drawing=paint();
+		assert.equal(drawing.bubbles.length,2);assert.equal(drawing.texts.filter(c=>c.text==='…').length,2);
+		assert(!drawing.texts.some(c=>[cut(14),shortTask].includes(c.text)));
+		for(const c of drawing.texts.filter(c=>c.text==='…'))assert.equal(c.color,scene.palette.muted);
+		reducedMode=true;assert.deepEqual(paint(),drawing);reducedMode=false;
+		viewport={width:550,height:650*.55,left:0,top:0};resize();assert(paint().texts.some(c=>c.text===cut(14)));
+		viewport={width:1000,height:650,left:0,top:0};resize();
+		state.people[0].task='가'.repeat(14);await interval();assert(paint().texts.some(c=>c.text==='가'.repeat(14)));
+		state.people[0].task='나'.repeat(40);await interval();click({person:'0'});assert(paint().texts.some(c=>c.text==='나'.repeat(40)));
+		return;
+	}
 	for(const person of scene.people){
 		click({person:String(person.id)});
 		const body=element('panel-body').innerHTML;
@@ -177,16 +232,16 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	assert(element('action-status').textContent.includes('활동 기록과 상태를 확인'));
 	assert(!element('action-cancel').disabled);element('action-cancel').onclick();
 	for(const [id,role] of [['3','plan'],['4','backend'],['5','frontend'],['6','design']]){
-		click({person:id});assert(element('panel-body').innerHTML.includes('data-dev="'+role+'"'));
+		click({person:id});assert(element('panel-body').innerHTML.includes('data-dev="'+role+'"'));assert(element('panel-body').innerHTML.includes('data-origin="'+id+'"'));
 	}
 	click({person:'7'});assert(!element('panel-body').innerHTML.includes('data-dev='));
 	for(const id of ['8','9','10','11','22']){
-		click({person:id});assert(element('panel-body').innerHTML.includes('data-team="blog"'));
+		click({person:id});assert(element('panel-body').innerHTML.includes('data-team="blog"'));assert(element('panel-body').innerHTML.includes('data-origin="'+id+'"'));
 	}
 	click({dev:'backend',team:'blog'});assert.equal(element('dev-target').value,'blog-x');element('dev-close').onclick();
 	const savedTargets=state.dev_targets;state.dev_targets=[savedTargets[0]];
 	click({dev:'backend',team:'blog'});assert.equal(element('dev-target').value,'ai-hub');element('dev-close').onclick();state.dev_targets=savedTargets;
-	click({dev:'frontend'});assert(element('dev-dialog').open);assert.equal(element('dev-role').value,'frontend');
+	click({dev:'frontend',origin:'11'});assert(element('dev-dialog').open);assert.equal(element('dev-role').value,'frontend');
 	assert.equal(element('dev-target').value,'ai-hub');assert(element('dev-target').innerHTML.includes('blog-x'));
 	element('dev-target').value='blog-x';element('dev-target').onchange();assert(element('dev-warning').textContent.includes('blog-x 저장소'));
 	assert.equal(document.activeElement,element('dev-text'));assert(element('dev-write').disabled);
@@ -197,7 +252,7 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	element('dev-text').value='합성 지시';element('dev-text').oninput();
 	const beforeDraft=actionCount,drafting=element('dev-write').onclick();
 	assert.equal(actionBody.action,'dev_draft');assert.equal(actionBody.id,'frontend');assert.equal(actionBody.text,'합성 지시');
-	assert.equal(actionBody.target,'blog-x');assert.deepEqual(Object.keys(actionBody).sort(),['action','id','target','text']);
+	assert.equal(actionBody.target,'blog-x');assert.equal(actionBody.origin,11);assert.deepEqual(Object.keys(actionBody).sort(),['action','id','origin','target','text']);
 	assert.equal(element('dev-status').textContent,'초안 쓰는 중(1~3분)');
 	assert(element('dev-write').disabled&&element('dev-text').disabled&&element('dev-close').disabled);
 	assert(element('dev-target').disabled);
@@ -307,7 +362,7 @@ class OfficeStaticTest(unittest.TestCase):
 
 	@unittest.skipUnless(shutil.which("node"), "JavaScript 실행기 없음")
 	def test_fetch_refresh_panel_retention_error_and_fixed_actor_positions_without_browser(self):
-		for mode in ("desktop", "mobile", "no-session"):
+		for mode in ("desktop", "mobile", "no-session", "bubbles"):
 			with self.subTest(mode=mode):
 				result = subprocess.run([shutil.which("node"), "-e", HARNESS, str(STATIC), mode], capture_output=True, text=True, timeout=10)
 				self.assertEqual(result.returncode, 0, result.stderr)

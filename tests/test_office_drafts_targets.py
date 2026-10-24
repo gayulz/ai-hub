@@ -29,12 +29,13 @@ class OfficeDraftTargetsTest(DraftCase):
 
 	def test_draft_exact_target_argv_metadata_and_redraft_keeps_previous_target(self):
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft) as command:
-			status, value = actions.apply({"action": "dev_draft", "id": "frontend", "text": "합성 개발 지시", "target": "blog-x"})
+			status, value = actions.apply({"action": "dev_draft", "id": "frontend", "text": "합성 개발 지시", "origin": 11, "target": "blog-x"})
 		self.assertEqual(status, 200, value)
 		self.assertEqual(command.call_args.args[0][4:8], ["--role", "frontend", "--target", "blog-x"])
 		identity = value["draft"]["id"]
 		row, data = drafts.load(self.hub, identity)
 		self.assertEqual(row["target"], "blog-x")
+		self.assertEqual(row["origin"], 11)
 		self.assertEqual(data["request"]["repo"], str(self.other))
 		self.assertEqual(drafts.read_drafts(self.hub)["items"][0]["target"], "blog-x")
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft) as command:
@@ -43,6 +44,7 @@ class OfficeDraftTargetsTest(DraftCase):
 		self.assertEqual(command.call_args.args[0][4:8], ["--role", "frontend", "--target", "blog-x"])
 		self.assertEqual(value["draft"]["target"], "blog-x")
 		identity = value["draft"]["id"]
+		self.assertEqual(drafts.metadata(self.hub, identity)["origin"], 11)
 		with mock.patch.object(drafts.subprocess, "run") as command, mock.patch.object(drafts.subprocess, "Popen") as launch:
 			self.assertEqual(actions.apply({"action": "dev_redraft", "id": identity, "text": "추가", "target": "ai-hub"})[0], 400)
 			command.assert_not_called()
@@ -52,12 +54,12 @@ class OfficeDraftTargetsTest(DraftCase):
 
 	def test_unknown_target_broken_list_and_target_metadata_tampering_do_not_execute(self):
 		with mock.patch.object(drafts.subprocess, "run") as command:
-			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "target": "missing"})[0], 400)
+			self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "origin": 11, "target": "missing"})[0], 400)
 			with mock.patch.object(targets, "targets", side_effect=ConfigError("repos.toml:1: 형식 오류")):
-				self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "target": "blog-x"})[0], 400)
+				self.assertEqual(actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "origin": 11, "target": "blog-x"})[0], 400)
 			command.assert_not_called()
 		with mock.patch.object(drafts.subprocess, "run", side_effect=self.fake_draft):
-			status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "target": "blog-x"})
+			status, value = actions.apply({"action": "dev_draft", "id": "backend", "text": "합성", "origin": 11, "target": "blog-x"})
 		self.assertEqual(status, 200)
 		identity = value["draft"]["id"]
 		row, data = drafts.load(self.hub, identity)

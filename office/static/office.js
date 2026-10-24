@@ -22,7 +22,46 @@ function zoomAt(value,x=cw/2,y=ch/2){const wx=camera.x+x/S,wy=camera.y+y/S;S=Mat
 D.rooms.forEach(r=>{const b=document.createElement('button');b.className='room-label';b.innerHTML='<span>'+esc(r.name)+'</span>';b.setAttribute('aria-label',r.name+' 부서 보기');b.dataset.room=r.id;$('labels').append(b);r.button=b});
 const boards=D.props.filter(p=>p.type==='meetingboard');boards.forEach(p=>{const b=document.createElement('button');b.className='board-control';b.dataset.meeting='all';b.setAttribute('aria-label','중앙 보드: 대화와 회의 요약 보기');b.innerHTML='<span>대화·회의 요약</span>';$('labels').append(b);p.button=b});
 function labelAt(e,x,y){const px=(x-camera.x)*S,py=(y-camera.y)*S;e.style.left=px+'px';e.style.top=py+'px';const hide=S<.43||px<20||px>cw-20||py<20||py>ch-25;e.hidden=hide;e.tabIndex=hide?-1:0}
-function draw(t){ctx.fillStyle=P.grass;ctx.fillRect(0,0,cw,ch);ctx.save();ctx.scale(S,S);ctx.translate(-camera.x,-camera.y);ctx.drawImage(art.background,0,0);const sceneTime=reduced.matches?0:t;[...actors,player].sort((a,b)=>a.y-b.y).forEach(a=>art.drawActor(ctx,a,sceneTime));if(player.path.length){const d=player.path[player.path.length-1];ctx.strokeStyle=P.accent;ctx.lineWidth=2;ctx.strokeRect(d.x-5,d.y-4,10,7)}ctx.restore();D.rooms.forEach(r=>labelAt(r.button,r.labelX??r.x+r.w/2,r.labelY??r.y+r.h-26));boards.forEach(p=>{labelAt(p.button,p.x+72,p.y+40);p.button.style.width=Math.max(90,144*S)+'px';p.button.style.height=Math.max(56,80*S+20)+'px';p.button.hidden=(p.x+144<camera.x||p.x>camera.x+cw/S||p.y+100<camera.y||p.y>camera.y+ch/S)});[player,...actors].forEach(a=>{const x=(a.x-camera.x)*S,y=(a.y-camera.y)*S-54*S;if(x<0||x>cw||y<0||y>ch)return;ctx.font='600 11px "Apple SD Gothic Neo",sans-serif';const text=a.name,w=Math.max(26,ctx.measureText(text).width+14);ctx.fillStyle=a.id==='me'?P.accent:P.paper;ctx.fillRect(x-w/2,y-15,w,17);ctx.fillStyle=a.id==='me'?(D.ground==='night'?'#243c37':'#fff'):P.ink;ctx.textAlign='center';ctx.fillText(text,x,y-3);if(a.id!=='me'){ctx.fillStyle=a.status==='오류'?'#dd6d76':a.status==='작업 중'?'#5d9973':a.status==='쉬는 중'?'#a07bc2':'#8f9fb1';ctx.fillRect(x-w/2-4,y-15,4,17)}});D.props.filter(p=>p.spare===true).forEach(p=>{const x=(p.x+(p.w||64)/2-camera.x)*S,y=(p.y+(p.h||0)/2-camera.y)*S-10;ctx.font='600 10px sans-serif';ctx.textAlign='center';ctx.fillStyle=P.paper;ctx.fillRect(x-24,y-12,48,16);ctx.fillStyle=P.muted;ctx.fillText('여유 자리',x,y)});const r=D.rooms.find(r=>contains(r,player.x,player.y));$('location').textContent=(r?.name||'공용 산책로')+' · '+(mobile.matches?'바닥을 눌러 이동':'클릭 / 방향키로 이동')}
+function drawTask(a,x,y,bubbles,color){
+	if(!['작업 중','오류'].includes(a.status)||!a.task)return;
+	const limit=hovered===a||selected===a?40:14,chars=Array.from(a.task);
+	const text=S<.55?'…':chars.length>limit?chars.slice(0,limit-1).join('')+'…':a.task;
+	const w=Math.max(22,ctx.measureText(text).width+16),h=S<.55?18:24,tail=5,left=x-w/2,right=x+w/2;
+	let top=y-20-h-tail;
+	const overlaps=()=>bubbles.some(b=>left<b.right&&right>b.left&&top<b.bottom&&top+h+tail>b.top);
+	for(let level=0;level<2&&overlaps();level++)top-=h+tail+4;
+	if(left<0||right>cw||top<0||top+h+tail>ch||overlaps())return;
+	bubbles.push({left,right,top,bottom:top+h+tail});
+	ctx.fillStyle=P.paper;ctx.strokeStyle=color;ctx.lineWidth=1;
+	ctx.beginPath();ctx.moveTo(left+5,top);ctx.lineTo(right-5,top);ctx.quadraticCurveTo(right,top,right,top+5);
+	ctx.lineTo(right,top+h-5);ctx.quadraticCurveTo(right,top+h,right-5,top+h);
+	ctx.lineTo(x+4,top+h);ctx.lineTo(x,top+h+tail);ctx.lineTo(x-4,top+h);
+	ctx.lineTo(left+5,top+h);ctx.quadraticCurveTo(left,top+h,left,top+h-5);
+	ctx.lineTo(left,top+5);ctx.quadraticCurveTo(left,top,left+5,top);ctx.closePath();ctx.fill();ctx.stroke();
+	ctx.fillStyle=S<.55?P.muted:P.ink;ctx.fillText(text,x,top+h/2+4);
+}
+function draw(t){
+	ctx.fillStyle=P.grass;ctx.fillRect(0,0,cw,ch);ctx.save();ctx.scale(S,S);ctx.translate(-camera.x,-camera.y);ctx.drawImage(art.background,0,0);
+	const sceneTime=reduced.matches?0:t;
+	[...actors,player].sort((a,b)=>a.y-b.y).forEach(a=>art.drawActor(ctx,a,sceneTime));
+	if(player.path.length){const d=player.path[player.path.length-1];ctx.strokeStyle=P.accent;ctx.lineWidth=2;ctx.strokeRect(d.x-5,d.y-4,10,7)}
+	ctx.restore();D.rooms.forEach(r=>labelAt(r.button,r.labelX??r.x+r.w/2,r.labelY??r.y+r.h-26));
+	boards.forEach(p=>{labelAt(p.button,p.x+72,p.y+40);p.button.style.width=Math.max(90,144*S)+'px';p.button.style.height=Math.max(56,80*S+20)+'px';p.button.hidden=(p.x+144<camera.x||p.x>camera.x+cw/S||p.y+100<camera.y||p.y>camera.y+ch/S)});
+	const bubbles=[];
+	[player,...actors].forEach(a=>{
+		const x=(a.x-camera.x)*S,y=(a.y-camera.y)*S-54*S;if(x<0||x>cw||y<0||y>ch)return;
+		ctx.font='600 11px "Apple SD Gothic Neo",sans-serif';
+		const text=a.name,w=Math.max(26,ctx.measureText(text).width+14);
+		ctx.fillStyle=a.id==='me'?P.accent:P.paper;ctx.fillRect(x-w/2,y-15,w,17);
+		ctx.fillStyle=a.id==='me'?(D.ground==='night'?'#243c37':'#fff'):P.ink;ctx.textAlign='center';ctx.fillText(text,x,y-3);
+		if(a.id!=='me'){
+			const color=a.status==='오류'?'#dd6d76':a.status==='작업 중'?'#5d9973':a.status==='쉬는 중'?'#a07bc2':'#8f9fb1';
+			ctx.fillStyle=color;ctx.fillRect(x-w/2-4,y-15,4,17);drawTask(a,x,y,bubbles,color);
+		}
+	});
+	D.props.filter(p=>p.spare===true).forEach(p=>{const x=(p.x+(p.w||64)/2-camera.x)*S,y=(p.y+(p.h||0)/2-camera.y)*S-10;ctx.font='600 10px sans-serif';ctx.textAlign='center';ctx.fillStyle=P.paper;ctx.fillRect(x-24,y-12,48,16);ctx.fillStyle=P.muted;ctx.fillText('여유 자리',x,y)});
+	const r=D.rooms.find(r=>contains(r,player.x,player.y));$('location').textContent=(r?.name||'공용 산책로')+' · '+(mobile.matches?'바닥을 눌러 이동':'클릭 / 방향키로 이동');
+}
 function tick(t){const dt=Math.min(.04,(t-last)/1000||0);last=t;player.walking=false;if(!(mobile.matches&&document.body.classList.contains('panel-open'))){const dx=(keys.has('arrowright')||keys.has('d')?1:0)-(keys.has('arrowleft')||keys.has('a')?1:0),dy=(keys.has('arrowdown')||keys.has('s')?1:0)-(keys.has('arrowup')||keys.has('w')?1:0);if(dx||dy){player.path=[];const norm=Math.hypot(dx,dy),mx=dx/norm*105*dt,my=dy/norm*105*dt;if(walkable(player.x+mx,player.y))player.x+=mx;if(walkable(player.x,player.y+my))player.y+=my;player.face=Math.abs(dx)>Math.abs(dy)?dx<0?'left':'right':dy<0?'up':'down';player.walking=true;follow=!fitMode}else if(player.path.length){const p=player.path[0],vx=p.x-player.x,vy=p.y-player.y,d=Math.hypot(vx,vy),amount=105*dt;if(d<=amount){player.x=p.x;player.y=p.y;player.path.shift()}else{player.x+=vx/d*amount;player.y+=vy/d*amount}player.face=Math.abs(vx)>Math.abs(vy)?vx<0?'left':'right':vy<0?'up':'down';player.walking=true}if(follow)center();}near=actors.filter(a=>Math.hypot(a.x-player.x,a.y-player.y)<64).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0]||null;$('nearby').hidden=!near;if(near)$('nearby').textContent=near.name+' 살펴보기';if(document.visibilityState!=='hidden')draw(t);requestAnimationFrame(tick)}
 let press=null,moved=false,pinchDistance=0;const pointers=new Map();map.addEventListener('pointerdown',e=>{map.focus({preventScroll:true});map.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1){press={x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY};moved=false}else{moved=true;const a=[...pointers.values()];pinchDistance=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)}});
 map.addEventListener('pointermove',e=>{const b=map.getBoundingClientRect();if(pointers.has(e.pointerId)){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2){const a=[...pointers.values()],d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);if(pinchDistance)zoomAt(S*d/pinchDistance,(a[0].x+a[1].x)/2-b.left,(a[0].y+a[1].y)/2-b.top);pinchDistance=d;return}if(press){if(Math.hypot(e.clientX-press.x,e.clientY-press.y)>6)moved=true;if(moved){camera.x-=(e.clientX-press.lastX)/S;camera.y-=(e.clientY-press.lastY)/S;fitMode=false;follow=false;clampCamera()}press.lastX=e.clientX;press.lastY=e.clientY}}else{const x=camera.x+(e.clientX-b.left)/S,y=camera.y+(e.clientY-b.top)/S;hovered=actors.find(a=>Math.abs(a.x-x)<18&&y>a.y-54&&y<a.y+7)||null;map.style.cursor=hovered?'pointer':'crosshair'}});
@@ -31,10 +70,10 @@ window.addEventListener('keydown',e=>{if($('action-dialog').open||$('dev-dialog'
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
 let currentPanel=()=>overview(),refreshing=false,state=null;
 let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
-let devBusy=false,devDraft=null,devFocus=null;
+let devBusy=false,devDraft=null,devFocus=null,devOrigin=null;
 const actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
-function panel(title,html,view='status'){previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
-function closePanel(){world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
+function panel(title,html,view='status'){selected=null;previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
+function closePanel(){selected=null;world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
 
 const items=group=>Array.isArray(group?.items)?group.items:[];
 const empty=message=>'<p class="muted">'+esc(message)+'</p>';
@@ -156,7 +195,7 @@ function renderDraft(value){
 }
 function openDev(role,button,blog=false){
 	if(devBusy||applying||!officeToken||$('dev-dialog').open||$('action-dialog').open)return;
-	devDraft=null;devFocus=button;keys.clear();$('dev-title').textContent='개발 지시';$('dev-role').value=role;
+	devDraft=null;devFocus=button;devOrigin=Number(button?.dataset.origin);keys.clear();$('dev-title').textContent='개발 지시';$('dev-role').value=role;
 	$('dev-target').innerHTML=devTargets().map(item=>'<option value="'+esc(item.id)+'">'+esc(item.label)+'</option>').join('');
 	$('dev-target').value=(blog?devTargets().find(item=>item.id!=='ai-hub')?.id:null)||'ai-hub';
 	$('dev-text').value='';$('dev-text-label').textContent='할 일';$('dev-status').textContent='';$('dev-write').textContent='초안 쓰기';
@@ -184,7 +223,7 @@ async function submitDev(action){
 	if(devBusy||applying||!officeToken)return;
 	const payload={action,id:action==='dev_draft'?$('dev-role').value:devDraft?.id};
 	if(action!=='dev_discard')payload.text=$('dev-text').value;
-	if(action==='dev_draft')payload.target=$('dev-target').value;
+	if(action==='dev_draft'){payload.target=$('dev-target').value;payload.origin=devOrigin}
 	devBusy=true;devControls();refreshPanel();$('dev-status').textContent=action==='dev_discard'?'버림으로 표시 중':'초안 쓰는 중(1~3분)';
 	try{
 		const response=await fetch('/api/action',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Office-Token':officeToken},body:JSON.stringify(payload)}),data=await response.json();
@@ -252,14 +291,15 @@ function showDepartment(id,focus=true){
 	if(focus&&!fitMode){center(r.x+r.w/2,r.y+r.h/2);follow=false}
 }
 function showPerson(id,focus=true){
-	const a=actors[Number(id)];if(!a)return;selected=a;
+	const a=actors[Number(id)];if(!a)return;
 	currentPanel=()=>showPerson(id,false);
 	const r=D.rooms.find(r=>r.id===a.department);
 	const info=a.department==='company'?'<div class="row"><span>프로젝트</span><span>'+esc(a.project||'미지정')+'</span></div><div class="row"><span>작업 시간</span><span>'+esc(a.duration==null?'미측정':Math.floor(a.duration/60)+'분 '+a.duration%60+'초')+'</span></div>':'<div class="section"><h3>지금 하고 있는 일</h3><p class="intro">'+esc(a.task||'다음 작업 대기')+'</p></div>';
 	panel(a.name,'<div class="detail-portrait"><canvas class="portrait" id="portrait" width="90" height="100"></canvas><div><h3>'+esc(a.name)+'</h3><p>'+esc(r?.name||'공용 공간')+'</p><span class="state">'+esc(a.status)+'</span></div></div><div class="row"><span>내 책상</span><span>'+a.seat+'번 자리</span></div>'+info+'<div class="row"><span>담당 AI</span><span>'+esc(a.engine||'담당 없음')+'</span></div><div class="row"><span>신호 시각</span><span>'+esc(when(a.updated))+'</span></div><button class="outline-button" data-room="'+a.department+'">부서 전체 보기</button>');
+	selected=a;
 	const role=Object.keys(devRoles).find(key=>devRoles[key]===a.name);
-	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
-	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
+	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
+	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
 	$('panel-body').innerHTML+=blogButton(a.blog_path,a.name);
 	const c=$('portrait').getContext('2d');c.imageSmoothingEnabled=false;c.scale(1.6,1.6);art.drawActor(c,{...a,x:28,y:56,walking:false},0);
 	if(focus&&!fitMode){center(a.x,a.y);follow=false}

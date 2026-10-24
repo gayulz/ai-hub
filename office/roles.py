@@ -1,11 +1,12 @@
 """23개 역할의 자리·외형은 고정하고 해당 역할의 신호만 상태로 바꾼다."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from collector.config import ConfigError
 
-from . import signals
+from . import drafts, signals
 from .common import unavailable
 from .scene import scene
 
@@ -87,7 +88,9 @@ def build_people(root, user_home, now, runs, plans, ledger, jobs):
 		if tool is None:
 			update(name, unavailable("실행 도구 설정을 읽을 수 없습니다"))
 		else:
-			update(name, {"status": "작업 중", "engine": signals.ENGINES[tool], "task": item["id"] + " · " + ("검토 중" if name == "QA" else "구현 중"), "updated": call.get("at")})
+			goal = item.get("goal", "") if item.get("public") else ""
+			title = goal[:24] + ("…" if len(goal) > 24 else "") if goal else item["id"]
+			update(name, {"status": "작업 중", "engine": signals.ENGINES[tool], "task": title + " · " + ("검토 중" if name == "QA" else "구현 중"), "updated": call.get("at")})
 	if runs["status"] == "확인 불가":
 		for name in (*ROLE_NAMES.values(), "QA"):
 			update(name, unavailable("실행 기록 폴더를 읽을 수 없습니다"))
@@ -117,6 +120,23 @@ def build_people(root, user_home, now, runs, plans, ledger, jobs):
 				update(name, {"status": "작업 중", "engine": "Codex", "task": "보조 작업 중", "updated": shorts["auxiliary"]})
 			elif name in ("편집", "음악"):
 				update(name, {"status": "쉬는 중", "task": "다음 보조 작업 대기"})
+	for row in drafts.read_started(root, now):
+		origin = next((person for person in people if person["id"] == row["origin"]), None)
+		if origin is None or origin["name"] in (*ROLE_NAMES.values(), "QA") or origin["status"] == "작업 중":
+			continue
+		for item in runs["items"]:
+			call = item.get("call")
+			if (not item.get("public") or not item["active"] or item["status"] != "작업 중" or not call
+					or item.get("events", {}).get("status") == "확인 불가" or not item.get("started")
+					or not item.get("goal") or item.get("goal_hash") != row["goal_hash"] or item.get("repo") != row["repo"]):
+				continue
+			if datetime.fromisoformat(item["started"]) < row["started"]:
+				continue
+			tool = plans["tools"].get(call["plan"])
+			if tool in signals.ENGINES:
+				update(origin["name"], {"status": "작업 중", "engine": signals.ENGINES[tool],
+					"task": "개발 지시 · " + ("검토 중" if call["role"] == "review" else "구현 중"), "updated": call.get("at")})
+				break
 	for person in people:
 		if person["status"] == "작업 중" and person["updated"] is None:
 			person["updated"] = now.isoformat(timespec="seconds")

@@ -1,7 +1,7 @@
 """태일스케일 같은 사설망에서 들어오는 요청의 허용 규칙. 설정이 없으면 아무것도 허용하지 않는다.
 
 ~/.ai-hub/office.toml 의 [remote] 표:
-	hosts  = ["<기기 이름>.<tailnet 이름>.ts.net"]   허용할 Host 이름(포트 없이, `tailscale serve` 가 443 으로 받는다)
+	hosts  = ["<기기 이름>.<tailnet 이름>.ts.net:8790"]   허용할 Host(브라우저가 보내는 그대로: HTTP serve 는 포트가 붙고 HTTPS serve 는 붙지 않는다)
 	logins = ["<태일스케일 로그인>"]                  허용할 사용자(serve 가 요청에 붙이는 Tailscale-User-Login 머리글과 비교)
 서버는 계속 127.0.0.1 에만 열려 있고, 두 조건을 모두 맞춘 요청만 원격으로 인정한다.
 """
@@ -16,7 +16,7 @@ from collector.config import home
 
 from .common import read_toml
 
-HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.ts\.net")
+HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.ts\.net(?::[0-9]{1,5})?")
 LOGIN = re.compile(r"[^\s<>\"',;]{1,120}")
 
 

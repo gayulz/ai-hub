@@ -74,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond_json(code, actions.result(False, message))
 		port = self.server.server_port
 		origins = self.headers.get_all("Origin", [])
-		allowed_origins = (f"http://127.0.0.1:{port}", f"http://localhost:{port}") + ((f"https://{self.remote_host}",) if self.remote_host else ())
+		allowed_origins = (f"http://127.0.0.1:{port}", f"http://localhost:{port}") + ((f"https://{self.remote_host}", f"http://{self.remote_host}") if self.remote_host else ())
 		if len(origins) != 1 or origins[0] not in allowed_origins:
 			reject(403, "같은 출처의 화면에서만 반영할 수 있습니다.")
 			return

@@ -10,7 +10,7 @@ from unittest import mock
 from office import remote, server
 from test_office import OfficeCase
 
-HOST = "box-acme.tail1234.ts.net"
+HOST = "box-acme.tail1234.ts.net:8790"
 LOGIN = "owner@example.invalid"
 
 
@@ -66,7 +66,7 @@ class OfficeRemoteTest(OfficeCase):
 		self.good()
 		self.assertEqual(self.request()[0], 200)
 		self.assertEqual(self.request(login=LOGIN.upper())[0], 200)
-		for kwargs in ({"host": "other.tail1234.ts.net"}, {"host": HOST + ":8790"}, {"host": "box-acme.tail1234.ts.net.evil.com"},
+		for kwargs in ({"host": "other.tail1234.ts.net:8790"}, {"host": "box-acme.tail1234.ts.net"}, {"host": "box-acme.tail1234.ts.net:9999"}, {"host": "box-acme.tail1234.ts.net.evil.com:8790"},
 				{"login": None}, {"login": "other@example.invalid"}, {"peer": "10.0.0.5"}):
 			with self.subTest(kwargs=kwargs):
 				self.assertEqual(self.request(**kwargs)[0], 403)
@@ -84,6 +84,8 @@ class OfficeRemoteTest(OfficeCase):
 		self.assertEqual(status, 403)
 		self.assertIn("세션 비밀값", json.loads(body)["message"])
 		status, body = self.request(post=True, origin=f"http://{HOST}")
+		self.assertIn("세션 비밀값", json.loads(body)["message"])
+		status, body = self.request(post=True, origin="http://box-acme.tail1234.ts.net")
 		self.assertIn("같은 출처", json.loads(body)["message"])
 		status, body = self.request(post=True, origin="https://other.tail1234.ts.net")
 		self.assertIn("같은 출처", json.loads(body)["message"])

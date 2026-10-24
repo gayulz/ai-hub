@@ -42,11 +42,11 @@ def read_plans(root: Path) -> dict:
 				raise ValueError
 			result["limit"] = normal(daily_limit_calls=limit)
 		except (ValueError, KeyError, TypeError):
-			result["limit"] = unavailable("C4 하루 호출 한도 설정이 없습니다")
+			result["limit"] = unavailable("기록 정리 하루 호출 한도 설정이 없습니다")
 		return result
 	except (OSError, ValueError, TypeError, KeyError, AttributeError):
 		return unavailable("요금제 설정이 없거나 형식이 잘못됐습니다", tools={},
-			limit=unavailable("C4 하루 호출 한도를 확인할 수 없습니다"))
+			limit=unavailable("기록 정리 하루 호출 한도를 확인할 수 없습니다"))
 
 
 def read_decisions(root: Path, today: date) -> dict:

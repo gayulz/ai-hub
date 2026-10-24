@@ -171,8 +171,8 @@
 			}
 		}
 		window.officeMeeting={
-			approvals:()=>cards().map(c=>({...c,id:c.card,kind:'question',label:'질문 대기',title:(meetings().find(m=>m.id===c.meeting)?.agenda||'회의 질문')+' · 질문 '+c.questions.length+'개 · '+c.meeting.slice(0,8)})),
-			summary:()=>'<button data-filter="question">질문 대기 <b>'+(!state()||state()?.approvals?.questions?.status==='확인 불가'?'?':esc(state()?.approvals?.questions?.count??0))+'</b></button>',
+			approvals:()=>cards().map(c=>({...c,id:c.card,kind:'question',label:'AI 질문',title:(meetings().find(m=>m.id===c.meeting)?.agenda||'회의 질문')+' · 질문 '+c.questions.length+'개 · '+c.meeting.slice(0,8)})),
+			summary:()=>'<button data-filter="question"><b>'+(!state()||state()?.approvals?.questions?.status==='확인 불가'?'?':esc(state()?.approvals?.questions?.count??0))+'</b>AI 질문</button>',
 			button:row=>'<button class="apply-button" data-question-card="'+esc(row.card)+'" data-question-meeting="'+esc(row.meeting)+'"'+(unavailable()?' disabled':'')+'>답하기</button>'
 		};
 		body.onclick=e=>{

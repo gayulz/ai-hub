@@ -168,12 +168,12 @@ class OfficeMeetingUITest(unittest.TestCase):
 
 	def test_question_todos_count_filter_and_existing_dialog_exclusion(self):
 		self.run_js(r"""
-		state.approvals.questions.count=7;await boot();click(button('[data-view="office"]'));assert($('panel-body').textContent.includes('질문 대기 7'));click(button('[data-filter="question"]'));assert($('panel-body').textContent.includes('합성 안건 · 질문 3개 · '+MID.slice(0,8)));assert.equal(document.querySelectorAll('[data-question-card]').length,1);
+		state.approvals.questions.count=7;await boot();click(button('[data-view="office"]'));assert($('panel-body').innerHTML.includes('<b>7</b>AI 질문'));click(button('[data-filter="question"]'));assert($('panel-body').textContent.includes('합성 안건 · 질문 3개 · '+MID.slice(0,8)));assert.equal(document.querySelectorAll('[data-question-card]').length,1);
 		for(const id of ['dev-dialog','action-dialog','blog-dialog']){$(id).showModal();click(button('[data-question-card]'));document.dispatchEvent(new Event('office-meeting-room',{detail:{x:100,y:100}}));assert(!$('meeting-dialog').open);assert($('meeting-popover').hidden);$(id).close()}
 		openQuestions();const text=$('meeting-body').innerHTML;window.dispatchEvent(new Event('keydown',{key:'w',target:$('meeting-submit')}));await interval();assert.equal($('meeting-body').innerHTML,text);assert.equal(document.querySelectorAll('dialog[open]').length,1);
 		window.dispatchEvent(new Event('keydown',{key:'Escape',target:$('meeting-close')}));assert(!$('meeting-dialog').open);assert.equal(requests.length,0);
 		state.questions.items=[];state.approvals.questions.count=0;await refresh();click(button('[data-filter="question"]'));assert.equal(document.querySelectorAll('[data-question-card]').length,0);
-		apiOK=false;await refresh();if(!$('side').hidden)click(button('[data-view="office"]'));click(button('[data-view="office"]'));assert($('panel-body').textContent.includes('질문 대기 ?'));
+		apiOK=false;await refresh();if(!$('side').hidden)click(button('[data-view="office"]'));click(button('[data-view="office"]'));assert($('panel-body').innerHTML.includes('<b>?</b>AI 질문'));
 		""")
 
 	def test_module_loaded_after_state_refreshes_question_badge(self):

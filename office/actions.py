@@ -26,7 +26,7 @@ from .scene import scene
 REPO = Path(__file__).resolve().parent.parent
 COMMANDS = {"c4_apply": ("collector", "backfill", "--apply"),
 	"run_apply": ("orchestrator", "apply"), "r1_apply": ("vaultreorg", "apply", "--folder")}
-LABELS = {"c4_apply": "C4 묶음", "run_apply": "오케스트레이션 실행", "r1_apply": "R1 폴더"}
+LABELS = {"c4_apply": "대화 기록 정리", "run_apply": "AI 작업 결과", "r1_apply": "볼트 노트 정리"}
 
 
 def result(ok: bool, message: str, output: str = "", restart_needed: bool = False) -> dict:

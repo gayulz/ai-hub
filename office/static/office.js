@@ -74,7 +74,7 @@ function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTi
 let currentPanel=()=>overview(),refreshing=false,state=null;
 let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
 let devBusy=false,devDraft=null,devFocus=null,devOrigin=null;
-const actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
+const filterHelp={all:'아래는 모두 사용자의 승인이나 답을 기다리는 일입니다.',c4:'지난 AI 대화를 정리한 노트를 볼트에 써도 되는지 승인합니다.',apply:'AI가 만들고 검토까지 마친 코드 변경을 저장소에 반영해도 되는지 승인합니다.',r1:'볼트 노트의 머리말(종류·공개 범위·날짜) 정리를 폴더 단위로 승인합니다.',draft:'기획 AI가 쓴 개발 지시 초안을 보고 실행할지 확인합니다.',decision:'계획 문서에서 사용자의 선택을 기다리는 결정입니다.',question:'회의 AI가 정보가 모자라 묻는 질문입니다. 텔레그램에서도 답할 수 있습니다.'},actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
 function panel(title,html,view='status'){selected=null;previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
 function closePanel(){selected=null;world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
 
@@ -84,7 +84,7 @@ const note=group=>group?.status==='확인 불가'?empty('일부 자료를 확인
 const when=value=>value?new Date(value).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'시각 미확인';
 const stat=(label,value)=>'<div class="stat"><span>'+esc(label)+'</span><b>'+esc(value??'확인 불가')+'</b></div>';
 function approvals(){
-	return [['c4','C4 승인',state?.approvals?.c4],['apply','실행 반영',state?.approvals?.runs],['r1','R1 폴더',state?.approvals?.r1],['draft','개발 지시 초안',state?.approvals?.drafts],['decision','결정 대기',state?.approvals?.decisions]]
+	return [['c4','대화 기록 정리',state?.approvals?.c4],['apply','AI 작업 결과',state?.approvals?.runs],['r1','볼트 노트 정리',state?.approvals?.r1],['draft','개발 지시 확인',state?.approvals?.drafts],['decision','결정할 일',state?.approvals?.decisions]]
 		.flatMap(([kind,label,group])=>items(group).map(row=>({...row,kind,label,title:row.title||row.goal||[row.project,row.id].filter(Boolean).join(' · ')}))).concat(window.officeMeeting?.approvals()||[]);
 }
 const activityHTML=()=>state?'<ol class="timeline">'+(state.activity||[]).map(row=>'<li>'+esc(row.text)+'<time>'+esc(when(row.at))+'</time></li>').join('')+'</ol>':empty('활동 자료 조회 중');
@@ -97,15 +97,15 @@ function usageHTML(){
 	const usage=state?.usage;
 	if(!usage)return empty('사용량을 확인할 수 없습니다.');
 	const c4=usage.c4,limit=usage.limit,plans=usage.plans;
-	return '<h3>오늘 사용량</h3>'+stat('C4 구독 호출',c4?.status==='정상'?c4.subscription+'회':'확인 불가')
-		+(c4?.status==='정상'&&limit?.status==='정상'?meter('C4 구독 호출',c4.subscription,limit.daily_limit_calls):'')
-		+stat('C4 하루 구독 한도',limit?.status==='정상'?limit.daily_limit_calls+'회':'확인 불가')
-		+stat('C4 로컬 호출',c4?.status==='정상'?c4.local+'회':'확인 불가')
+	return '<h3>오늘 사용량</h3>'+stat('기록 정리 구독 AI 호출',c4?.status==='정상'?c4.subscription+'회':'확인 불가')
+		+(c4?.status==='정상'&&limit?.status==='정상'?meter('기록 정리 구독 AI 호출',c4.subscription,limit.daily_limit_calls):'')
+		+stat('기록 정리 하루 구독 한도',limit?.status==='정상'?limit.daily_limit_calls+'회':'확인 불가')
+		+stat('기록 정리 로컬 AI 호출',c4?.status==='정상'?c4.local+'회':'확인 불가')
 		+stat('매일 기록 호출',plans?.status==='정상'?items(plans).reduce((sum,row)=>sum+row.count,0)+'회':'확인 불가')
 		+stat('NotebookLM',usage.notebooklm?.count==null?'미측정':usage.notebooklm.count+'회')+note(c4)+note(plans);
 }
 function approvalButtons(){
-	return '<div class="approval-grid">'+[['c4','C4 승인','c4'],['apply','실행 반영','runs'],['r1','R1 폴더','r1'],['draft','개발 지시 초안','drafts'],['decision','결정 대기','decisions']].map(([kind,label,key])=>'<button data-filter="'+kind+'"><b>'+(!state||state.approvals?.[key]?.status==='확인 불가'?'?':approvals().filter(a=>a.kind===kind).length)+'</b>'+label+'</button>').join('')+(window.officeMeeting?.summary()||'')+'</div>';
+	return '<div class="approval-grid">'+[['c4','대화 기록 정리','c4'],['apply','AI 작업 결과','runs'],['r1','볼트 노트 정리','r1'],['draft','개발 지시 확인','drafts'],['decision','결정할 일','decisions']].map(([kind,label,key])=>'<button data-filter="'+kind+'"><b>'+(!state||state.approvals?.[key]?.status==='확인 불가'?'?':approvals().filter(a=>a.kind===kind).length)+'</b>'+label+'</button>').join('')+(window.officeMeeting?.summary()||'')+'</div>';
 }
 function scheduleHTML(list){
 	let undated=false;
@@ -127,9 +127,9 @@ function overview(){
 function showApprovals(filter='all'){
 	currentPanel=()=>showApprovals(filter);
 	const list=approvals().filter(row=>filter==='all'||row.kind===filter);
-	panel('확인이 필요한 일','<p class="intro">'+(state?approvals().length+'건':'확인 불가')+' · '+(applying?'반영 중':'반영 전에 변경 내용을 확인합니다.')+'</p><div class="subtabs">'+[['all','전체'],['c4','C4'],['apply','실행'],['r1','R1'],['draft','개발 지시 초안'],['decision','결정'],['question','질문']].map(([id,label])=>'<button data-filter="'+id+'" aria-pressed="'+(id===filter)+'">'+label+'</button>').join('')+'</div>'
-		+(!officeToken?empty('반영 세션을 읽지 못했습니다. 화면을 다시 열어 주세요.'):'' )
-		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+(row.kind==='c4'?' · 준비 '+esc(row.prepared)+'건 · 보류 '+esc(row.held)+'건':row.kind==='r1'?' · 노트 '+esc(row.pending)+'개':row.kind==='draft'?' · '+esc(devRoles[row.role])+' · 대상 저장소 '+esc(row.target)+' · 완료 조건 '+esc(row.done)+'개 · '+esc(when(row.created)):'')+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+(row.kind==='draft'?'<code>'+esc(row.owned_paths.join(', '))+'</code><small>'+esc(devPlanText())+'</small>':'')+'</div>'+(row.kind==='question'?window.officeMeeting.button(row):actionFor[row.kind]?'<button class="apply-button" '+(row.kind==='draft'?'data-draft="'+esc(row.id):'data-action="'+row.kind)+'" data-id="'+esc(row.id)+'"'+(applying||devBusy||!officeToken?' disabled':'')+'>'+ (applying?'반영 중':row.kind==='draft'?'초안 보기':'반영')+'</button>':'<span class="state">대기</span>')+'</div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
+	panel('확인이 필요한 일','<p class="intro">'+(state?approvals().length+'건':'확인 불가')+' · '+(applying?'반영 중':'반영 전에 변경 내용을 확인합니다.')+'</p><div class="subtabs">'+[['all','전체'],['c4','기록 정리'],['apply','작업 결과'],['r1','노트 정리'],['draft','개발 지시'],['decision','결정'],['question','AI 질문']].map(([id,label])=>'<button data-filter="'+id+'" aria-pressed="'+(id===filter)+'">'+label+'</button>').join('')+'</div>'
+		+'<p class="intro">'+esc(filterHelp[filter]||'')+'</p>'+(!officeToken?empty('반영 세션을 읽지 못했습니다. 화면을 다시 열어 주세요.'):'' )
+		+(list.map(row=>'<div class="row"><div>'+esc(row.title)+'<small>'+esc(row.label)+(row.kind==='c4'?' · 볼트에 쓸 노트 '+esc(row.prepared)+'건 · 보류 '+esc(row.held)+'건':row.kind==='r1'?' · 노트 '+esc(row.pending)+'개':row.kind==='draft'?' · '+esc(devRoles[row.role])+' · 대상 저장소 '+esc(row.target)+' · 완료 조건 '+esc(row.done)+'개 · '+esc(when(row.created)):'')+'</small>'+(row.reply?'<code>'+esc(row.reply)+'</code>':'')+(row.kind==='draft'?'<code>'+esc(row.owned_paths.join(', '))+'</code><small>'+esc(devPlanText())+'</small>':'')+'</div>'+(row.kind==='question'?window.officeMeeting.button(row):actionFor[row.kind]?'<button class="apply-button" '+(row.kind==='draft'?'data-draft="'+esc(row.id):'data-action="'+row.kind)+'" data-id="'+esc(row.id)+'"'+(applying||devBusy||!officeToken?' disabled':'')+'>'+ (applying?'반영 중':row.kind==='draft'?'초안 보기':'반영')+'</button>':'<span class="state">대기</span>')+'</div>').join('')||empty(state?'대기 항목이 없습니다.':'할 일 자료를 확인할 수 없습니다.'))
 		+Object.values(state?.approvals||{}).map(note).join(''),'approvals');
 }
 function openAction(kind,id,button){
@@ -139,7 +139,7 @@ function openAction(kind,id,button){
 	if(kind==='draft'&&devDraft?.id!==id)return;
 	chosenAction={action:actionFor[kind],id};actionFocus=button;keys.clear();
 	$('action-title').textContent=row.label+' 반영 확인';
-	const description=kind==='c4'?'준비 '+row.prepared+'건을 볼트에 반영합니다. 보류 '+row.held+'건은 남습니다.\n기록: 볼트 노트·일지와 원장.\n되돌리기: 볼트 커밋이 생긴 뒤 해당 커밋을 되돌리고 원장 상태를 확인하세요.':kind==='r1'?'폴더의 노트 '+row.pending+'개에 메타데이터·태그 변경을 반영합니다.\n기록: 로컬 볼트 커밋 한 개와 사무실 활동 기록.\n되돌리기: 해당 볼트 커밋을 되돌리세요.':'검토된 실행의 변경을 저장소에 반영합니다.\n기록: 로컬 squash 커밋 한 개와 볼트 일지.\n되돌리기: 해당 저장소 커밋을 되돌리세요.';
+	const description=kind==='c4'?'지난 AI 대화를 정리한 노트 '+row.prepared+'건을 볼트에 씁니다. 보류 '+row.held+'건은 남습니다.\n기록: 볼트 노트·일지와 원장.\n되돌리기: 볼트 커밋이 생긴 뒤 해당 커밋을 되돌리고 원장 상태를 확인하세요.':kind==='r1'?'폴더의 노트 '+row.pending+'개에 머리말(종류·공개 범위·날짜)과 태그 정리를 반영합니다.\n기록: 로컬 볼트 커밋 한 개와 사무실 활동 기록.\n되돌리기: 해당 볼트 커밋을 되돌리세요.':'AI가 만들고 검토까지 마친 변경을 저장소에 한 커밋으로 반영합니다.\n기록: 로컬 squash 커밋 한 개와 볼트 일지.\n되돌리기: 해당 저장소 커밋을 되돌리세요.';
 	$('action-description').textContent=id+'\n'+description;
 	if(kind==='draft'){
 		$('action-title').textContent='개발 지시 실행 확인';

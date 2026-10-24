@@ -201,7 +201,7 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	assert.equal((element('panel-body').innerHTML.match(/class="apply-button"/g)||[]).length,3);
 	click({action:'c4',id:'c4-'+'a'.repeat(16)});
 	assert(element('action-dialog').open);assert.equal(document.activeElement,element('action-cancel'));
-	assert(element('action-description').textContent.includes('준비 3건'));
+	assert(element('action-description').textContent.includes('노트 3건'));
 	assert(element('action-description').textContent.includes('보류 1건'));
 	assert(element('action-description').textContent.includes('되돌리기'));
 	element('action-cancel').onclick();assert(!element('action-dialog').open);assert.equal(actionCount,0);
@@ -283,7 +283,7 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 	assert(element('action-description').textContent.includes('반영은 따로 승인'));
 	for(const text of ['대상 저장소: blog-x','구현 요금제: p01','검토 요금제: p02'])assert(element('action-description').textContent.includes(text));
 	element('action-cancel').onclick();assert.equal(actionCount,beforeRun);
-	click({filter:'draft'});assert(element('panel-body').innerHTML.includes('개발 지시 초안'));
+	click({filter:'draft'});assert(element('panel-body').innerHTML.includes('개발 지시 확인'));
 	assert(element('panel-body').innerHTML.includes('완료 조건 1개'));
 	assert(element('panel-body').innerHTML.includes('대상 저장소 blog-x'));
 	click({draft:draftView.id});await new Promise(resolve=>setImmediate(resolve));assert(element('dev-dialog').open);

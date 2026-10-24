@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from collector.backfill_store import Store
-from office import agents, ledger
+from office import agents, ledger, telegram_bridge
 from orchestrator import targets
 from office.common import text
 from test_office import OfficeCase
@@ -21,6 +21,15 @@ class OfficeStateTest(OfficeCase):
 		patch = mock.patch("socket.create_connection", side_effect=OSError("합성 연결 거부"))
 		patch.start()
 		self.addCleanup(patch.stop)
+
+	def test_telegram_state_exposes_only_status_and_last_poll_without_writing(self):
+		before = self.snapshot()
+		with mock.patch.object(telegram_bridge, "_runtime", None):
+			self.assertEqual(self.state()["telegram"], {"status": "설정 없음", "last_poll": None})
+		self.assertEqual(before, self.snapshot())
+		for status in ("켜짐", "꺼짐", "확인 불가", "권한 확인 필요"):
+			with mock.patch.object(telegram_bridge, "status", return_value={"status": status, "last_poll": self.now.isoformat()}):
+				self.assertEqual(self.state()["telegram"], {"status": status, "last_poll": self.now.isoformat()})
 
 	def test_blog_dashboard_uses_only_bounded_tcp_and_does_not_change_other_sections(self):
 		off = self.state()

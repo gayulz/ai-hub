@@ -51,6 +51,24 @@ class MeetingCliTest(MeetingCase):
 		code, output, errors = self.command("resume", state["id"], "--confirm-answers", card["id"])
 		self.assertEqual((code, errors), (0, ""))
 		self.assertEqual(json.loads(output)["status"], "participants_pending")
+		self.assertEqual(json.loads(output)["cards"][-1]["confirmed_source"], "cli")
+
+	def test_source_options_preserve_answers_and_confirmation_sources(self):
+		for source in ("office", "telegram"):
+			self.ai.analysis_questions = [question()]
+			state = self.analyze()
+			card = state["cards"][-1]
+			path = self.root / "answers.json"
+			path.write_text(json.dumps([answer()]))
+			code, output, errors = self.command("answer", state["id"], "--card", card["id"], "--answers-file", str(path), "--source", source)
+			self.assertEqual((code, errors), (0, ""))
+			self.assertEqual(json.loads(output)["cards"][-1]["answers"][0]["source"], source)
+			code, output, errors = self.command("resume", state["id"], "--confirm-answers", card["id"], "--source", source)
+			self.assertEqual((code, errors), (0, ""))
+			self.assertEqual(json.loads(output)["cards"][-1]["confirmed_source"], source)
+			self.assertEqual(len(state["calls"]), 1)
+		with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+			cli.main(["meeting", "resume", state["id"], "--source", "unknown"])
 
 	def test_safe_error_and_legacy_dispatch(self):
 		code, output, errors = self.command("status", "../invalid")

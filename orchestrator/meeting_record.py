@@ -19,6 +19,8 @@ from collector.config import home, load_sources
 
 ID = re.compile(r"m-[a-f0-9]{32}")
 FILES = ("meeting.json", "minutes.md", ".lock")
+STATUSES = ("analyzing", "participants_pending", "questions_pending", "answers_pending", "running",
+	"completed", "failed", "budget_exhausted", "questions_exhausted", "record_pending")
 
 
 def identity(value):
@@ -132,6 +134,75 @@ class Record:
 
 
 class Store:
+	def read(self, meeting_id):
+		"""잠금 생성·권한 수정·중단 복구 없이 원자 교체된 상태만 읽는다."""
+		root_fd = folder_fd = None
+		try:
+			identity(meeting_id)
+			root_fd = directory(home() / "meetings")
+			folder_fd = os.open(meeting_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+			for name in FILES:
+				try:
+					info = os.stat(name, dir_fd=folder_fd, follow_symlinks=False)
+				except FileNotFoundError:
+					continue
+				if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+					return None
+			fd = os.open("meeting.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
+			with os.fdopen(fd, "r", encoding="utf-8") as stream:
+				info = os.fstat(stream.fileno())
+				if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 1_000_000:
+					return None
+				state = json.load(stream)
+			if (not isinstance(state, dict) or state.get("id") != meeting_id or state.get("version") != 1
+					or state.get("status") not in STATUSES or not isinstance(state.get("agenda"), str)
+					or not isinstance(state.get("calls"), list) or len(state["calls"]) > 10
+					or type(state.get("active_seconds")) not in (int, float)
+					or not math.isfinite(state["active_seconds"]) or state["active_seconds"] < 0
+					or not isinstance(state.get("cards"), list) or len(state["cards"]) > 5
+					or (state.get("summary") is not None and not isinstance(state["summary"], dict))):
+				return None
+			datetime.fromisoformat(state["created"])
+			for card in state["cards"]:
+				if (not isinstance(card, dict) or not re.fullmatch(r"q-[a-f0-9]{32}", card.get("id", ""))
+						or card.get("status") not in ("waiting", "answered", "confirmed")
+						or not isinstance(card.get("questions"), list) or not 1 <= len(card["questions"]) <= 3
+						or not isinstance(card.get("answers"), list) or not isinstance(card.get("summary"), str)):
+					return None
+				if any(not isinstance(a, dict) or not isinstance(a.get("source"), str) for a in card["answers"]):
+					return None
+				for question in card["questions"]:
+					if (not isinstance(question, dict) or not isinstance(question.get("id"), str)
+							or not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", question["id"])
+							or not isinstance(question.get("text"), str) or not isinstance(question.get("reason"), str)
+							or type(question.get("allow_delegate")) is not bool
+							or not isinstance(question.get("options"), list) or not 2 <= len(question["options"]) <= 3):
+						return None
+					for option in question["options"]:
+						if not isinstance(option, dict) or any(not isinstance(option.get(k), str) for k in ("id", "label", "difference", "reply")):
+							return None
+					if question.get("recommended") not in {option["id"] for option in question["options"]}:
+						return None
+			return state
+		except (OSError, ValueError, TypeError, KeyError, RecursionError):
+			return None
+		finally:
+			for fd in (folder_fd, root_fd):
+				if fd is not None:
+					os.close(fd)
+
+	def list_states(self):
+		"""안전한 회의 ID와 상태 JSON 목록. 잘못된 항목은 다른 회의와 격리한다."""
+		try:
+			fd = directory(home() / "meetings")
+			try:
+				names = sorted(name for name in os.listdir(fd) if ID.fullmatch(name))
+			finally:
+				os.close(fd)
+		except (OSError, ValueError):
+			return []
+		return [state for name in names if (state := self.read(name)) is not None]
+
 	@contextmanager
 	def locked(self, meeting_id, *, create=False):
 		identity(meeting_id)

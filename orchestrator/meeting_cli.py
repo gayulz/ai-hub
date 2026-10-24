@@ -3,13 +3,13 @@
 meeting analyze --target ai-hub --text-file agenda.txt
 meeting status <id>
 meeting start <id> --participants backend qa
-meeting answer <id> --card <card-id> --answers-file answers.json
-meeting resume <id> [--confirm-answers <card-id>]
+meeting answer <id> --card <card-id> --answers-file answers.json [--source cli|office|telegram]
+meeting resume <id> [--confirm-answers <card-id>] [--source cli|office|telegram]
 
 답변 파일: [{"question_id":"scope","kind":"choice","value":"a"}]
 직접 답변은 kind=text, 명시 위임은 kind=delegate와 구체적인 value 또는 알아서를 쓴다.
 실제 설정은 만들지 않는다. orchestration.meeting 표의 역할 값은 기존 개인
-요금제 ID 목록이다. 화면·텔레그램·개발 초안·숏폼 접수 연결은 후속 단계다.
+요금제 ID 목록이다. 화면·개발 초안·숏폼 접수 연결은 후속 단계다.
 """
 
 from __future__ import annotations
@@ -50,6 +50,8 @@ def main(argv):
 	for command in ("status", "start", "answer", "resume"):
 		item = sub.add_parser(command)
 		item.add_argument("id")
+		if command in ("answer", "resume"):
+			item.add_argument("--source", choices=("cli", "office", "telegram"), default="cli")
 		if command == "start":
 			item.add_argument("--participants", nargs="+", required=True)
 		elif command == "answer":
@@ -65,9 +67,9 @@ def main(argv):
 		elif args.command == "start":
 			state = engine.start(args.id, args.participants)
 		elif args.command == "answer":
-			state = engine.answer(args.id, args.card, json.loads(read_input(args.answers_file, 10000)), source="cli")
+			state = engine.answer(args.id, args.card, json.loads(read_input(args.answers_file, 10000)), source=args.source)
 		elif args.command == "resume":
-			state = engine.resume(args.id, confirm_card=args.confirm_answers)
+			state = engine.resume(args.id, confirm_card=args.confirm_answers, source=args.source)
 		else:
 			state = engine.status(args.id)
 		print(json.dumps(state, ensure_ascii=False, allow_nan=False))

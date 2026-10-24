@@ -1,4 +1,4 @@
-"""읽기 전용 3b-1 회의 엔진. 화면·텔레그램·다른 제작 흐름은 후속 연결이다.
+"""읽기 전용 회의 엔진. 답변 출처를 기록하고 요약을 명시 확인한다.
 
 analyze → start(참석자 확인) → answer → resume(답변 요약 확인).
 분석·상태 조회·무응답만으로 토론을 시작하지 않는다. 실행과 반영 기능은 없다.
@@ -82,7 +82,9 @@ class Engine:
 			record.save(state)
 			return state
 
-	def resume(self, meeting_id: str, *, confirm_card: str | None = None) -> dict:
+	def resume(self, meeting_id: str, *, confirm_card: str | None = None, source: str = "cli") -> dict:
+		if source not in ("cli", "office", "telegram"):
+			raise ValueError("답변 확인 출처가 잘못됐습니다")
 		with self.store.locked(meeting_id) as record:
 			state = record.load()
 			if state["status"] in TERMINAL:
@@ -97,7 +99,7 @@ class Engine:
 				if state["status"] != "answers_pending" or not state["cards"]:
 					raise ValueError("답변 요약 확인 대기 중이 아닙니다")
 				cards.confirm(state["cards"][-1], confirm_card)
-				state["cards"][-1]["confirmed_source"] = "cli"
+				state["cards"][-1]["confirmed_source"] = source
 				state["status"] = "running" if state["confirmed"] else "participants_pending"
 				if session.questions():
 					return state

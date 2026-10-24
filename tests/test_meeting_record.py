@@ -5,10 +5,42 @@ import os
 import stat
 from unittest import mock
 
-from test_meeting import MeetingCase
+from test_meeting import MeetingCase, question
 
 
 class MeetingRecordTest(MeetingCase):
+	def test_readonly_listing_skips_bad_ids_links_and_shapes_without_chmod_or_locking(self):
+		self.ai.analysis_questions = [question()]
+		state = self.analyze()
+		root = self.hub / "meetings"
+		folder = root / state["id"]
+		(folder / "meeting.json").chmod(0o400)
+		folder.chmod(0o500)
+		before = {str(p): (p.stat().st_mode, p.stat().st_mtime_ns, p.read_bytes()) for p in folder.iterdir()}
+		with self.engine.store.locked(state["id"]) as record:
+			# 목록 조회는 이미 잡힌 회의 잠금을 다시 요청하지 않는다.
+			self.assertEqual(self.engine.store.list_states(), [state])
+		folder.chmod(0o500)
+		(folder / "meeting.json").chmod(0o400)
+		self.assertEqual(self.engine.store.read(state["id"]), state)
+		after = {str(p): (p.stat().st_mode, p.stat().st_mtime_ns, p.read_bytes()) for p in folder.iterdir()}
+		self.assertEqual(before, after)
+		folder.chmod(0o700)
+		(root / "invalid-id").mkdir()
+		bad = root / ("m-" + "e" * 32)
+		bad.mkdir()
+		(bad / "meeting.json").write_text("[]")
+		linked = root / ("m-" + "f" * 32)
+		linked.symlink_to(folder, target_is_directory=True)
+		self.assertEqual(self.engine.store.list_states(), [state])
+		for data in ("[" * 2000, "{}", json.dumps({**state, "cards": "bad"}),
+				json.dumps({**state, "summary": "bad"})):
+			(bad / "meeting.json").write_text(data)
+			self.assertEqual(self.engine.store.list_states(), [state])
+		(bad / "meeting.json").unlink()
+		(bad / "meeting.json").symlink_to(folder / "meeting.json")
+		self.assertEqual(self.engine.store.list_states(), [state])
+
 	def test_private_modes_and_self_contained_minutes(self):
 		state = self.start(self.analyze())
 		folder = self.hub / "meetings" / state["id"]

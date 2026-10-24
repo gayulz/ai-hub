@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from collector.config import ConfigError, home
 from orchestrator import targets
 
-from . import agents, drafts, roles
+from . import agents, drafts, roles, telegram_bridge
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_action_activity, read_ledger, read_r1
@@ -149,7 +149,7 @@ def build_state(now: datetime | None = None) -> dict:
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
-		"blog_dashboard": blog_dashboard(),
+		"blog_dashboard": blog_dashboard(), "telegram": telegram_bridge.status(),
 		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),

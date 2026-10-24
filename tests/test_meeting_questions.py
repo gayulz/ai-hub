@@ -17,6 +17,17 @@ class MeetingQuestionsTest(MeetingCase):
 		self.ai.analysis_questions = [question()]
 		return self.analyze()
 
+	def test_confirmation_source_is_validated_before_changing_a_card(self):
+		state = self.pending()
+		card = state["cards"][-1]
+		state = self.engine.answer(state["id"], card["id"], [answer()], source="telegram")
+		with self.assertRaises(ValueError):
+			self.engine.resume(state["id"], confirm_card=card["id"], source="unknown")
+		self.assertEqual(self.engine.store.read(state["id"]), state)
+		state = self.engine.resume(state["id"], confirm_card=card["id"], source="telegram")
+		self.assertEqual(state["cards"][-1]["confirmed_source"], "telegram")
+		self.assertEqual(state["status"], "participants_pending")
+
 	def test_common_card_choice_direct_delegate_and_summary_confirmation(self):
 		for reply in (answer(), answer(kind="text", value="검색 화면부터 진행"),
 				answer(kind="delegate", value="범위 선택을 명시적으로 위임"), answer(kind="delegate", value="알아서")):

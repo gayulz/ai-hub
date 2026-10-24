@@ -5,7 +5,7 @@ const sceneResponse=await fetch('/scene.json',{cache:'no-store'});
 if(!sceneResponse.ok)throw new Error('장면 조회 실패');
 const sceneData=await sceneResponse.json();
 const D=sceneData,$=id=>document.getElementById(id),P=D.palette,W=D.width||1600,H=D.height||1000,world=$('world'),map=$('map'),ctx=map.getContext('2d'),art=createPixelArt(D),mobile=matchMedia('(max-width:900px)'),reduced=matchMedia('(prefers-reduced-motion:reduce)'),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-for(const k of ['ink','paper','accent','muted','line'])document.documentElement.style.setProperty('--'+k,P[k]);document.documentElement.style.setProperty('--ground',P.grass);document.documentElement.style.setProperty('--soft',D.ground==='night'?'#263b3c':'#edf1e6');document.documentElement.style.setProperty('--on-accent',D.ground==='night'?'#243c37':'#fff');$('brand-name').textContent=D.name;$('brand-caption').textContent='역할 22개 · 로컬 상태 · 10초마다 갱신';
+for(const k of ['ink','paper','accent','muted','line'])document.documentElement.style.setProperty('--'+k,P[k]);document.documentElement.style.setProperty('--ground',P.grass);document.documentElement.style.setProperty('--soft',D.ground==='night'?'#263b3c':'#edf1e6');document.documentElement.style.setProperty('--on-accent',D.ground==='night'?'#243c37':'#fff');$('brand-name').textContent=D.name;$('brand-caption').textContent='역할 '+D.people.length+'개 · 로컬 상태 · 10초마다 갱신';
 const player={id:'me',name:'나',x:D.spawn.x,y:D.spawn.y,shirt:'#70b957',hair:'#202b27',appearance:{hairstyle:'long',outfit:'jacket',accessory:'glasses',headwear:'cap',skin:'#efc8ac',trousers:'#89bc65',shoes:'#385c38'},walking:false,face:'down',path:[]},actors=D.people.map((p,i)=>({...p,id:i,status:'확인 불가',engine:'',updated:null,walking:false,face:'down'})),camera={x:0,y:0},keys=new Set();let S=1,cw=1,ch=1,fitMode=innerWidth>600,last=0,selected=null,hovered=null,near=null,toastTimer,follow=false,previousFocus=null;
 const propSize={desk:[64,38],table:[80,48],sofa:[76,38],bookshelf:[64,38],counter:[96,44],tree:[64,80],bamboo:[40,96],pine:[56,90],plant:[28,38],rug:[80,50],flower:[24,24],server:[30,48],lamp:[18,46],board:[50,44],meetingboard:[144,80],chair:[24,30],bench:[64,28],coffee:[44,48],campfire:[56,48],crate:[32,30],umbrella:[80,72],fountain:[64,60],bike:[50,30]};
 const contains=(b,x,y,pad=0)=>x>b.x-pad&&x<b.x+b.w+pad&&y>b.y-pad&&y<b.y+b.h+pad;
@@ -76,7 +76,7 @@ function scheduleHTML(list){
 function overview(){
 	currentPanel=overview;
 	panel('오늘의 오피스','<span class="state">'+actors.length+'개 역할 · '+actors.filter(a=>a.status==='작업 중').length+'개 작업 중</span>'
-		+stat('책상',D.props.filter(p=>p.type==='desk').length+'개')
+		+stat('자리',D.props.filter(p=>p.seat||p.spare).length+'개')
 		+'<button class="outline-button" data-meeting="all">중앙 보드 · 대화와 회의 보기</button><button class="outline-button" data-directory="true">부서와 직원 찾아보기</button><button class="outline-button" data-characters="true">캐릭터 23명 한눈에 보기</button>'
 		+'<div class="section"><h3>확인이 필요한 일</h3>'+approvalButtons()+'</div><div class="section">'+usageHTML()+'</div>'
 		+'<div class="section"><h3>다음 일정</h3>'+scheduleHTML(items(state?.schedule).slice(0,3))+'</div><div class="section"><h3>방금 일어난 일</h3>'+activityHTML()+'</div>','office');
@@ -205,7 +205,7 @@ async function loadState(){
 		$('updated').textContent='상태 조회 실패 · 다음 갱신 대기';$('approval-count').textContent='?';
 	}finally{clearTimeout(timeout);refreshPanel()}
 }
-console.assert(actors.length===22&&D.props.filter(p=>p.type==='desk').length===25,'역할과 책상 수 확인');
+console.assert(actors.length===D.people.length&&D.props.filter(p=>p.seat||p.spare).length>=D.people.length,'역할과 자리 수 확인');
 console.assert(actors.filter(a=>a.department==='company').every(a=>!a.task),'회사 역할의 내용 숨김');
 if(!mobile.matches)overview();else{S=1.15;follow=true}
 new ResizeObserver(resize).observe(world);resize();requestAnimationFrame(tick);

@@ -15,6 +15,10 @@ NAME_KINDS = ("회사명", "서비스명", "사람이름")
 DEFAULT_TEST = "python3 -m unittest discover -s tests"
 
 
+class CommitRejected(RuntimeError):
+	"""대상 저장소의 커밋 전 검사 등이 작업 가지 커밋을 거부했다. 메시지는 출력의 끝부분이다."""
+
+
 def git(cwd: Path | str, *args: str, check: bool = True) -> str:
 	result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 	if check and result.returncode != 0:
@@ -61,7 +65,11 @@ def commit_owned(worktree: Path, patterns: list[str], message: str) -> tuple[lis
 			git(worktree, "add", f"--pathspec-from-file={listing}", "--pathspec-file-nul")
 		finally:
 			listing.unlink(missing_ok=True)
-		git(worktree, "commit", "-q", "-m", message)
+		# 훅 출력은 표준 출력으로도 나오므로 둘 다 모아 끝부분을 보완 지적으로 넘긴다
+		result = subprocess.run(["git", "-C", str(worktree), "commit", "-q", "-m", message], capture_output=True, text=True)
+		if result.returncode != 0:
+			tail = "\n".join((result.stdout + result.stderr).strip().splitlines()[-20:])
+			raise CommitRejected(tail[-2000:] or "git commit 실패")
 	return inside, outside
 
 

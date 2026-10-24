@@ -56,7 +56,11 @@ class Flow:
 		steps = {"prepare": self.prepare, "implement": self.implement, "verify": self.verify,
 			"review": self.review, "fix": self.fix}
 		while self.run.status == "작업 중":
-			steps[self.run.step]()
+			step = self.run.step
+			try:
+				steps[step]()
+			except Exception as exc:  # 단계 오류로 실행이 '작업 중'에 멈춰 남지 않게 실패로 기록한다
+				self.run.finish("실패", f"{step} 단계 오류: {type(exc).__name__}: {str(exc)[-200:]}")
 		self.save()
 		return self.run
 
@@ -107,7 +111,8 @@ class Flow:
 	def _schema(self) -> dict:
 		return prompts.ANALYST_SCHEMA if self.run.kind == "analysis" else prompts.WORKER_SCHEMA
 
-	def absorb(self, data: dict) -> None:
+	def absorb(self, data: dict) -> bool:
+		"""구현 결과를 받아 작업 가지에 커밋한다. 커밋 전 검사가 거부하면 그 출력을 열린 지적으로 남기고 False."""
 		r = self.run
 		if r.kind == "analysis":
 			r.document = data.get("document", "")
@@ -116,17 +121,36 @@ class Flow:
 		else:
 			keys = ("summary", "changed_files", "verification", "blockers", "next_required_step")
 			r.handoff = {key: data.get(key) for key in keys}
-			_, outside = checks.commit_owned(Path(r.worktree), r.request.get("owned_paths", []),
-				f"orchestrator {r.run_id} 시도 {r.fixes + 1}")
+			try:
+				_, outside = checks.commit_owned(Path(r.worktree), r.request.get("owned_paths", []),
+					f"orchestrator {r.run_id} 시도 {r.fixes + 1}")
+			except checks.CommitRejected as exc:
+				r.open_findings = [{"id": "commit", "severity": "blocker", "file": "", "line": 0,
+					"problem": "작업 가지 커밋이 대상 저장소의 커밋 전 검사에 막혔습니다", "evidence": str(exc),
+					"suggestion": "검사 출력대로 고쳐 커밋이 통과하게 한다"}]
+				r.event("commit_rejected", attempt=r.fixes)
+				return False
 			r.handoff["outside_paths"] = outside
 		r.event("implemented", attempt=r.fixes, summary=str(data.get("summary", ""))[:300])
+		return True
+
+	def commit_rejected(self) -> None:
+		r = self.run
+		if r.fixes >= r.budget["fixes"]:
+			last = r.open_findings[0]["evidence"].strip().splitlines()[-1:] or [""]
+			r.finish("실패", f"보완 {r.fixes}회 뒤에도 커밋 전 검사를 통과하지 못했습니다: {last[0][:150]}")
+		else:
+			r.step = "fix"
+			self.save()
 
 	def implement(self) -> None:
 		r = self.run
 		data = self.ask("implement", prompts.implement(r.request, r.kind), self._schema(), r.kind == "code")
 		if data is None:
 			return
-		self.absorb(data)
+		if not self.absorb(data):
+			self.commit_rejected()
+			return
 		r.step = "verify"
 		self.save()
 
@@ -176,6 +200,8 @@ class Flow:
 		if data is None:
 			return
 		r.fixes += 1
-		self.absorb(data)
+		if not self.absorb(data):
+			self.commit_rejected()
+			return
 		r.step = "verify"
 		self.save()

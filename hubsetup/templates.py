@@ -51,8 +51,9 @@ def render(ctx: Context, include_records: bool = True) -> list[Item]:
 			("vf", ctx.hub_home / "tools"), ("continue-in-codex", ctx.hub_home / "tools")):
 		text = Template((TEMPLATES / name).read_text(encoding="utf-8")).substitute(values)
 		items.append(Item(folder / name, text, 0o755))
+	# /usr/local/bin: 다른 저장소의 git 훅이 부르는 도구(예: 커밋 전 검사)가 여기 설치된다(10-24 확인)
 	path = (f"{ctx.user_home}/.nvm/versions/node/v22.22.1/bin:{ctx.user_home}/.local/bin:"
-		"/opt/homebrew/bin:/usr/bin:/bin")
+		"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
 	values = {name: escape(str(getattr(ctx, name))) for name in ("user_home", "hub_home", "repo", "python", "label_prefix")}
 	values["path"] = escape(path)
 	values["hub_environment"] = ("\t\t<key>AI_HUB_HOME</key>\n"

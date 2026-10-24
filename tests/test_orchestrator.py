@@ -305,6 +305,34 @@ class OrchestratorTest(unittest.TestCase):
 		journal = next((self.vault / "📥 Inbox" / "AI").glob("*.md")).read_text(encoding="utf-8")
 		self.assertIn(f"run:{run_id}", journal)
 
+	def hook(self, body):
+		path = self.repo / ".git" / "hooks" / "pre-commit"
+		path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+		path.chmod(0o755)
+
+	def test_commit_hook_rejection_goes_to_fix_with_hook_output(self):
+		marker = Path(self.tmp.name) / "hook-ran"
+		self.hook(f'if [ ! -f "{marker}" ]; then touch "{marker}"; echo "합성 검사 실패: 줄 끝 공백"; exit 1; fi\n')
+		run = self.flow(self.new_run(), FakeAI([PASS], {"src/a.py": "VALUE = 2\n"}))
+		self.assertEqual(run.status, "승인 필요")
+		self.assertEqual(run.fixes, 1)
+		events = [json.loads(line)["event"] for line in (run.folder / "events.jsonl").read_text().splitlines()]
+		self.assertIn("commit_rejected", events)
+
+	def test_commit_hook_rejection_without_fix_budget_fails_with_reason(self):
+		self.hook('echo "합성 검사 실패: 규칙 위반"; exit 1\n')
+		run = self.flow(self.new_run(fixes=0), FakeAI([], {"src/a.py": "VALUE = 2\n"}))
+		self.assertEqual(run.status, "실패")
+		self.assertIn("합성 검사 실패: 규칙 위반", run.end_reason)
+		self.assertIn("합성 검사 실패", run.open_findings[0]["evidence"])
+
+	def test_unexpected_step_error_is_recorded_as_failure(self):
+		with mock.patch.object(checks, "verify", side_effect=RuntimeError("합성 오류")):
+			run = self.flow(self.new_run(), FakeAI([PASS], {"src/a.py": "VALUE = 2\n"}))
+		self.assertEqual(run.status, "실패")
+		self.assertIn("verify 단계 오류: RuntimeError: 합성 오류", run.end_reason)
+		self.assertEqual(Run.load(run.run_id).status, "실패")
+
 	def test_extract_json_accepts_fenced_and_rejects_garbage(self):
 		self.assertEqual(extract_json('```json\n{"a": 1}\n```'), {"a": 1})
 		self.assertEqual(extract_json('앞말 {"a": 2} 뒷말'), {"a": 2})

@@ -176,7 +176,7 @@ class HubSetupInstallTest(HubSetupCase):
 		for name in ("StandardOutPath", "StandardErrorPath"):
 			self.assertEqual(office[name], str(self.hub / "logs/office.log"))
 		self.assertEqual(backup["EnvironmentVariables"]["PATH"],
-			f"{self.user}/.nvm/versions/node/v22.22.1/bin:{self.user}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+			f"{self.user}/.nvm/versions/node/v22.22.1/bin:{self.user}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
 
 	def test_default_install_changes_nothing_including_git_config(self):
 		before = self.snapshot()

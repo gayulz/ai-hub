@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collector.config import home
 
-from . import actions, drafts, meetings, remote
+from . import actions, chats, drafts, meetings, remote
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
@@ -128,6 +128,17 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(404, {"message": "회의 기록이 없습니다."})
 			except Exception:
 				self.respond_json(503, {"message": "회의 기록을 읽지 못했습니다. 잠시 뒤 다시 확인해 주세요."})
+		elif target == "/api/chat" or target.startswith("/api/chat?"):
+			match = re.fullmatch(r"/api/chat\?id=(c-[a-f0-9]{32})", target)
+			if not match:
+				self.respond_json(400, {"message": "대화 ID 형식이 올바르지 않습니다."})
+				return
+			try:
+				self.respond_json(200, chats.detail(match[1]))
+			except chats.MissingChat:
+				self.respond_json(404, {"message": "대화 기록이 없습니다."})
+			except Exception:
+				self.respond_json(503, {"message": "대화 기록을 읽지 못했습니다. 잠시 뒤 다시 확인해 주세요."})
 		elif target.startswith("/api/draft/"):
 			try:
 				row, data = drafts.load(home(), target[len("/api/draft/"):])

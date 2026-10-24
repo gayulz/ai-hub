@@ -31,13 +31,16 @@ def action_id(action: str, value) -> str:
 		valid = re.fullmatch(r"d-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}", value)
 		if valid:
 			datetime.strptime(value[2:17], "%Y%m%d-%H%M%S")
-	elif action == "meeting_analyze":
+	elif action in ("meeting_analyze", "chat_new"):
 		from orchestrator.targets import ID
 		valid = ID.fullmatch(value)
+	elif action in ("chat_send", "chat_answer", "chat_confirm", "chat_close"):
+		from orchestrator.chat_record import identity
+		return identity(value)
 	elif action in ("meeting_start", "meeting_answer", "meeting_confirm"):
 		from orchestrator.meeting_record import identity
 		return identity(value)
-	elif action == "meeting_card":
+	elif action in ("meeting_card", "chat_card"):
 		valid = re.fullmatch(r"q-[a-f0-9]{32}", value)
 	else:
 		raise ValueError("허용하지 않는 동작")

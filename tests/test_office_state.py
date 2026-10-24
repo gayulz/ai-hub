@@ -29,7 +29,8 @@ class OfficeStateTest(OfficeCase):
 		(folder / "dictionary.json").write_text(json.dumps({"entries": [{"value": "acme", "kind": "회사명", "token": "company01"}]}))
 		write_meeting(self.hub, meeting_state())
 		before = self.snapshot()
-		with mock.patch.object(meetings, "candidates", return_value=[{"key": "qa", "name": "QA"}]):
+		with mock.patch.object(meetings, "candidates", return_value=[{"key": "qa", "name": "QA"}]), \
+				mock.patch("office.chat_state.Engine.plans", return_value=[]):
 			state = self.state()
 		self.assertEqual(state["meetings"]["status"], "정상")
 		self.assertEqual(len(state["meetings"]["items"]), 1)
@@ -38,6 +39,44 @@ class OfficeStateTest(OfficeCase):
 		self.assertEqual(state["meeting_roles"], [{"key": "qa", "name": "QA"}])
 		self.assertEqual(state["approvals"]["questions"], {"status": "정상", "count": 1})
 		self.assertEqual(before, self.snapshot())
+
+	def test_chat_questions_join_meeting_questions_with_kind_and_approval_count(self):
+		from test_office_chats import chat_state, write_chat
+		from test_office_meetings import meeting_state, write_meeting
+		folder = self.hub / "redaction"
+		folder.mkdir()
+		(folder / "dictionary.json").write_text(json.dumps({"entries": [{"value": "acme", "kind": "회사명", "token": "company01"}]}))
+		write_meeting(self.hub, meeting_state())
+		write_chat(self.hub, chat_state(card="waiting"))
+		write_chat(self.hub, chat_state("closed", "c-" + "c" * 32, "waiting"))
+		write_chat(self.hub, chat_state(identity="c-" + "d" * 32, card="answered"))
+		before = self.snapshot()
+		with mock.patch("office.chat_state.Engine.plans", return_value=[{"id": "p01", "tool": "codex"}]):
+			state = self.state()
+		self.assertEqual(state["approvals"]["questions"], {"status": "정상", "count": 2})
+		self.assertEqual([q["kind"] for q in state["questions"]["items"]], ["meeting", "chat"])
+		self.assertEqual(len(state["chats"]["items"]), 3)
+		self.assertEqual(state["chat_plans"], [{"id": "p01", "tool": "codex"}])
+		self.assertEqual(before, self.snapshot())
+		bad = self.hub / "chats" / ("c-" + "d" * 32) / "chat.json"
+		bad.write_text("{")
+		with mock.patch("office.chat_state.Engine.plans", return_value=[]):
+			state = self.state()
+		self.assertEqual(state["approvals"]["questions"], {"status": "확인 불가", "count": 2})
+		self.assertEqual(state["meetings"]["status"], "정상")
+
+	def test_chat_approval_counts_waiting_cards_beyond_the_twenty_item_list(self):
+		from test_office_chats import chat_state, write_chat
+		folder = self.hub / "redaction"
+		folder.mkdir()
+		(folder / "dictionary.json").write_text(json.dumps({"entries": [{"value": "acme", "kind": "회사명", "token": "company01"}]}))
+		for number in range(25):
+			write_chat(self.hub, chat_state(identity="c-" + format(number, "032x"), card="waiting"))
+		with mock.patch("office.chat_state.Engine.plans", return_value=[]):
+			state = self.state()
+		self.assertEqual(len(state["chats"]["items"]), 20)
+		self.assertEqual(len(state["questions"]["items"]), 25)
+		self.assertEqual(state["approvals"]["questions"], {"status": "정상", "count": 25})
 
 	def test_unreadable_meetings_do_not_hide_healthy_existing_state_sections(self):
 		folder = self.hub / "meetings" / ("m-" + "a" * 32)

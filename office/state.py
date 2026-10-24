@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from collector.config import ConfigError, home
 from orchestrator import targets
 
-from . import agents, drafts, meetings, roles, telegram_bridge
+from . import agents, chats, drafts, meetings, roles, telegram_bridge
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_action_activity, read_ledger, read_r1
@@ -145,17 +145,21 @@ def build_state(now: datetime | None = None) -> dict:
 		"notebooklm": {"status": "미측정", "count": None}}
 	schedule = build_schedule(root, decisions["schedule"], jobs, ledger["followups"])
 	meeting_state = meetings.read_state(root)
+	chat_state, chat_questions = chats.snapshot(root)
+	question_items = [{**item, "kind": "meeting"} for item in meeting_state["questions"]["items"]]
+	question_items += [{**item, "kind": "chat"} for item in chat_questions]
+	question_status = "확인 불가" if "확인 불가" in (meeting_state["questions"]["status"], chat_state["chats"]["status"]) else "정상"
 	board_items = ledger["records"]["items"] + [{"kind": "meeting", "title": item["id"],
 		"text": item.get("text") or "오케스트레이션 · " + item["status"], "at": item["at"]}
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
-		**meeting_state,
+		**meeting_state, **chat_state, "questions": {**meeting_state["questions"], "status": question_status, "items": question_items},
 		"blog_dashboard": blog_dashboard(), "telegram": telegram_bridge.status(),
 		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),
-			"questions": {"status": meeting_state["questions"]["status"], "count": len(meeting_state["questions"]["items"])},
+			"questions": {"status": question_status, "count": len(question_items)},
 			"drafts": drafts.read_drafts(root), "decisions": decisions["decisions"]},
 		"board": {"items": board_items[:20], "status": "확인 불가" if runs["status"] == "확인 불가" else ledger["records"]["status"],
 			"progress": ledger["progress"], "usage": usage,

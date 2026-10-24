@@ -392,6 +392,8 @@ class Bridge:
 				try:
 					process = subprocess.Popen([sys.executable, "-m", "orchestrator", "chat" if kind == "chat_confirm" else "meeting", *arguments], shell=False,
 						stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+						# 사무실 서비스를 재시작해도 진행 중인 회의·대화 작업이 함께 죽지 않게 별도 세션으로 띄운다.
+						start_new_session=True,
 						cwd=Path(__file__).resolve().parents[1], env={**os.environ, "AI_HUB_HOME": str(self.root)})
 				except Exception:
 					with self._jobs_lock:

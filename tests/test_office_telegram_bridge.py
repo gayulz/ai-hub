@@ -232,6 +232,7 @@ class TelegramBridgeTest(BridgeCase):
 			self.assertEqual(popen.call_args.args[0], [sys.executable, "-m", "orchestrator", "meeting", "resume", state["id"],
 				"--confirm-answers", card["id"], "--source", "telegram"])
 			self.assertIs(popen.call_args.kwargs["shell"], False)
+			self.assertIs(popen.call_args.kwargs["start_new_session"], True)
 			self.assertEqual(popen.call_args.kwargs["stdout"], telegram_bridge.subprocess.DEVNULL)
 			self.assertEqual(popen.call_args.kwargs["stderr"], telegram_bridge.subprocess.DEVNULL)
 			self.assertEqual(popen.call_args.kwargs["env"]["AI_HUB_HOME"], str(self.hub))

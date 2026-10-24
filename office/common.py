@@ -25,6 +25,12 @@ def action_id(action: str, value) -> str:
 			and not any(c in value for c in ("/", "\\", ".."))
 			and not any(unicodedata.category(c).startswith("C") or c in "\u2028\u2029" for c in value)
 			and unicodedata.category(value[0])[0] not in "SMZ")
+	elif action == "dev_draft":
+		valid = value in ("plan", "backend", "frontend", "design")
+	elif action in ("dev_redraft", "dev_run", "dev_discard"):
+		valid = re.fullmatch(r"d-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}", value)
+		if valid:
+			datetime.strptime(value[2:17], "%Y%m%d-%H%M%S")
 	else:
 		raise ValueError("허용하지 않는 동작")
 	if not valid:

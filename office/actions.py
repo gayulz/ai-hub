@@ -16,6 +16,7 @@ from collector.config import home
 from collector.redact import redact
 from collector.redact_pii import redact_pii
 
+from . import drafts
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -107,12 +108,17 @@ def execute(action: str, identity: str, audit) -> tuple[int, dict]:
 
 def apply(payload) -> tuple[int, dict]:
 	try:
-		if not isinstance(payload, dict) or set(payload) != {"action", "id"}:
+		if not isinstance(payload, dict):
 			raise ValueError
-		action = payload["action"]
-		if not isinstance(action, str) or action not in COMMANDS:
+		action = payload.get("action")
+		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS):
+			raise ValueError
+		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
+		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
+		if "text" in keys:
+			drafts.string(payload["text"], "사용자 글", 2000)
 	except (ValueError, TypeError):
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
 	root = home()
@@ -122,6 +128,9 @@ def apply(payload) -> tuple[int, dict]:
 				fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 			except BlockingIOError:
 				return 409, result(False, "이미 실행 중")
+			if action in drafts.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO)
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

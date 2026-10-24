@@ -18,7 +18,7 @@ from . import checks, prompts
 from .providers import ProviderError, call
 from .record import Run, now
 
-ROLE_KEYS = {"implement": "implementer", "review": "reviewer"}
+ROLE_KEYS = {"implement": "implementer", "review": "reviewer", "draft": "planner"}
 BLOCKING = ("blocker", "major")
 
 
@@ -26,7 +26,8 @@ def role_plans(plans: Plans, orchestration: dict, role: str) -> list[Plan]:
 	"""역할 담당 요금제 순서. [orchestration.models] 로 요약용 모델(예: 저가 모델) 대신 쓸 모델을 정한다("" 는 CLI 기본값)."""
 	models = orchestration.get("models", {})
 	found = []
-	for plan_id in orchestration.get(ROLE_KEYS[role], []):
+	key = "implementer" if role == "draft" and not orchestration.get("planner") else ROLE_KEYS[role]
+	for plan_id in orchestration.get(key, []):
 		plan = plans.plans.get(plan_id)
 		if plan is None or "personal" not in plan.allow:
 			continue

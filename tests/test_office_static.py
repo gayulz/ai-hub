@@ -19,7 +19,7 @@ let frame,interval,apiOK=true,requests=[],actionResponse,actionReject,actionCoun
 const context2d=id=>new Proxy({measureText:text=>({width:text.length*7}),fillText:(text,x,y)=>{if(id==='map')labels.set(text,[x,y])}},
 	{get:(object,key)=>key in object?object[key]:(()=>{}),set:(object,key,value)=>{object[key]=value;return true}});
 class Element{
-	constructor(id=''){this.id=id;this.hidden=id==='side'||id==='nearby';this.open=false;this.disabled=false;this.dataset={};this.style={setProperty(){}};this.innerHTML='';this.textContent='';this.scrollTop=0;this.ctx=context2d(id);this.listeners=new Map()}
+	constructor(id=''){this.id=id;this.hidden=id==='side'||id==='nearby';this.open=false;this.disabled=false;this.dataset={};this.style={setProperty(){}};this.innerHTML='';this.textContent='';this.value='';this.scrollTop=0;this.ctx=context2d(id);this.listeners=new Map()}
 	getContext(){return this.ctx}getBoundingClientRect(){return {width:1000,height:650,left:0,top:0}}
 	setAttribute(){}append(){}setPointerCapture(){}querySelectorAll(){return []}
 	addEventListener(name,fn){this.listeners.set(name,fn)}focus(){document.activeElement=this}
@@ -32,16 +32,19 @@ const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Ele
 let state={updated:'2026-10-24T12:00:00+09:00',people:scene.people.map(p=>({...p,status:'작업 중',engine:'Codex',task:'합성 작업',updated:null,project:p.department==='company'?'p01':'',duration:60})),
 	approvals:{c4:{status:'정상',items:[{id:'c4-'+'a'.repeat(16),prepared:3,held:1,reply:'C4 합성 반영해'}]},
 		runs:{status:'정상',items:[{id:'2026-10-24-001',status:'승인 필요'}]},r1:{status:'정상',items:[{id:'AI & Prompts',pending:2}]},
-		decisions:{status:'정상',items:[{id:'d01',title:'합성 결정'}]}},
+		drafts:{status:'정상',items:[]},decisions:{status:'정상',items:[{id:'d01',title:'합성 결정'}]}},
 	usage:{c4:{status:'정상',subscription:3,local:5},limit:{status:'정상',daily_limit_calls:20},plans:{status:'정상',items:[]},notebooklm:{count:null}},
 	schedule:{status:'정상',items:[{title:'합성 후속 일정',source:'개인',due:'2026-10-26'}]},
 	activity:[],board:{status:'정상',items:[{kind:'chat',title:'결정',text:'합성 결정',at:'2026-10-24T12:00:00+09:00'}],progress:{items:[]}},engines:[]};
+let draftView={id:'d-20261024-120000-abcdef01',role:'frontend',goal:'합성 <script>목표</script>',done:['완료 조건을 검사한다'],owned_paths:['office/*.py'],forbidden:['합성 금지 사항'],budget:{calls:4,minutes:30,fixes:1},plan:'p01',created:state.updated};
+const pendingDraft=value=>{state.approvals.drafts.items=[{id:value.id,role:value.role,goal:value.goal,done:value.done.length,owned_paths:value.owned_paths,created:value.created}]};
 const sandbox={document,window:{addEventListener(){}},matchMedia:query=>({matches:mobileMode&&query.includes('900px')}),innerWidth:mobileMode?390:1200,devicePixelRatio:1,
 	performance:{now:()=>100},requestAnimationFrame:fn=>{frame=fn},ResizeObserver:class{observe(){}},AbortController,
 	console,setTimeout:()=>1,clearTimeout(){},setInterval:(fn,ms)=>{interval=fn;assert.equal(ms,10000)},
 	fetch:async(url,options)=>{
 		requests.push(url);
 		if(url==='/api/session')return {ok:sessionOK,json:async()=>({token:'xyz-session'})};
+		if(url.startsWith('/api/draft/'))return {ok:true,json:async()=>({ok:true,draft:draftView})};
 		if(url==='/api/action'){
 			actionCount++;actionBody=JSON.parse(options.body);
 			assert.equal(options.method,'POST');assert.equal(options.headers['Content-Type'],'application/json');
@@ -62,7 +65,8 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 		assert(element('panel-body').innerHTML.includes('반영 세션을 읽지 못했습니다.'));
 		assert.equal((element('panel-body').innerHTML.match(/class="apply-button"[^>]* disabled/g)||[]).length,3);
 		click({action:'c4',id:'c4-'+'a'.repeat(16)});
-		assert(!element('action-dialog').open);assert.equal(actionCount,0);return;
+		click({dev:'backend'});
+		assert(!element('action-dialog').open);assert(!element('dev-dialog').open);assert.equal(actionCount,0);return;
 	}
 	if(mobileMode)click({view:'office'});
 	assert.equal(element('panel-title').textContent,'오늘의 오피스');
@@ -125,6 +129,53 @@ const click=data=>events.get('click')({target:{closest:()=>({dataset:data})}});
 	actionReject(new Error('합성 연결 실패'));await failed;
 	assert(element('action-status').textContent.includes('활동 기록과 상태를 확인'));
 	assert(!element('action-cancel').disabled);element('action-cancel').onclick();
+	for(const [id,role] of [['3','plan'],['4','backend'],['5','frontend'],['6','design']]){
+		click({person:id});assert(element('panel-body').innerHTML.includes('data-dev="'+role+'"'));
+	}
+	click({person:'7'});assert(!element('panel-body').innerHTML.includes('data-dev='));
+	click({dev:'frontend'});assert(element('dev-dialog').open);assert.equal(element('dev-role').value,'frontend');
+	assert.equal(document.activeElement,element('dev-text'));assert(element('dev-write').disabled);
+	element('dev-text').value='합성 지시';element('dev-text').oninput();
+	assert(!element('dev-write').disabled);assert(element('dev-remaining').textContent.includes(String(2000-'합성 지시'.length)));
+	await interval();assert.equal(element('dev-text').value,'합성 지시');assert.equal(element('dev-role').value,'frontend');
+	element('dev-text').value='a'.repeat(2001);element('dev-text').oninput();assert(element('dev-write').disabled);
+	element('dev-text').value='합성 지시';element('dev-text').oninput();
+	const beforeDraft=actionCount,drafting=element('dev-write').onclick();
+	assert.equal(actionBody.action,'dev_draft');assert.equal(actionBody.id,'frontend');assert.equal(actionBody.text,'합성 지시');
+	assert.equal(element('dev-status').textContent,'초안 쓰는 중(1~3분)');
+	assert(element('dev-write').disabled&&element('dev-text').disabled&&element('dev-close').disabled);
+	element('dev-write').onclick();assert.equal(actionCount,beforeDraft+1);
+	element('dev-dialog').listeners.get('cancel')({preventDefault(){}});assert(element('dev-dialog').open);
+	await interval();assert.equal(element('dev-text').value,'합성 지시');
+	pendingDraft(draftView);actionResponse({ok:true,json:async()=>({ok:true,message:'합성 초안 완료',draft:draftView})});await drafting;
+	assert(!element('dev-card').hidden);assert(element('dev-editor').hidden);
+	assert(element('dev-card').innerHTML.includes('&lt;script&gt;'));assert(!element('dev-card').innerHTML.includes('<script>'));
+	for(const text of ['완료 조건','고칠 파일 범위','금지 사항','예산','4회 호출'])assert(element('dev-card').innerHTML.includes(text));
+	assert(!element('dev-run').hidden&&!element('dev-run').disabled);
+	element('dev-redraft').onclick();assert(!element('dev-editor').hidden);assert.equal(element('dev-text-label').textContent,'추가 지시');
+	element('dev-text').value='추가 합성 지시';element('dev-text').oninput();
+	const redrafting=element('dev-write').onclick();assert.equal(actionBody.action,'dev_redraft');assert.equal(actionBody.id,draftView.id);
+	assert.equal(actionBody.text,'추가 합성 지시');
+	draftView={...draftView,id:'d-20261024-120100-abcdef02'};pendingDraft(draftView);
+	actionResponse({ok:true,json:async()=>({ok:true,message:'합성 다시 쓰기 완료',draft:draftView})});await redrafting;
+	const beforeRun=actionCount;element('dev-run').onclick();assert(!element('dev-dialog').open);assert(element('action-dialog').open);
+	assert.equal(actionCount,beforeRun);assert.equal(element('action-confirm').textContent,'실행');
+	assert(element('action-description').textContent.includes('4회 호출 · 30분 · 보완 1회'));
+	assert(element('action-description').textContent.includes('반영은 따로 승인'));
+	element('action-cancel').onclick();assert.equal(actionCount,beforeRun);
+	click({filter:'draft'});assert(element('panel-body').innerHTML.includes('개발 지시 초안'));
+	assert(element('panel-body').innerHTML.includes('완료 조건 1개'));
+	click({draft:draftView.id});await new Promise(resolve=>setImmediate(resolve));assert(element('dev-dialog').open);
+	assert(!element('dev-card').hidden);assert.equal(element('dev-role').value,'frontend');
+	element('dev-run').onclick();const running=element('action-confirm').onclick();
+	assert.equal(actionBody.action,'dev_run');assert.equal(actionBody.id,draftView.id);assert.deepEqual(Object.keys(actionBody).sort(),['action','id']);
+	state.approvals.drafts.items=[];actionResponse({ok:true,json:async()=>({ok:true,message:'실행 시작',output:'',restart_needed:false})});await running;
+	element('action-cancel').onclick();assert(!element('panel-body').innerHTML.includes('완료 조건 1개'));
+	draftView={...draftView,id:'d-20261024-120200-abcdef03'};pendingDraft(draftView);await interval();
+	click({draft:draftView.id});await new Promise(resolve=>setImmediate(resolve));
+	const discarding=element('dev-discard').onclick();assert.equal(actionBody.action,'dev_discard');assert.deepEqual(Object.keys(actionBody).sort(),['action','id']);
+	state.approvals.drafts.items=[];actionResponse({ok:true,json:async()=>({ok:true,message:'버림'})});await discarding;
+	assert(!element('dev-dialog').open);
 	apiOK=false;await interval();click({person:'8'});
 	assert(element('panel-body').innerHTML.includes('확인 불가'));
 	assert(element('updated').textContent.includes('상태 조회 실패'));
@@ -159,6 +210,12 @@ class OfficeStaticTest(unittest.TestCase):
 		self.assertIn('<details id="action-details">', html)
 		self.assertIn('max-height:calc(100dvh - 32px)', css)
 		self.assertIn('width:min(480px,calc(100% - 24px))', css)
+		self.assertIn('<dialog id="dev-dialog"', html)
+		self.assertIn('maxlength="2000"', html)
+		self.assertIn('회사 내용·비밀값은 적지 마세요', html)
+		self.assertIn('aria-describedby="dev-warning dev-remaining"', html)
+		self.assertIn('max-width:100%', css)
+		self.assertIn('textarea:focus-visible', css)
 		for word in ("이 안 선택", "시안", "예시", 'id="choose"', 'id="copy-dialog"'):
 			self.assertNotIn(word, html)
 

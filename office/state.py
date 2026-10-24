@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from collector.config import home
 
-from . import agents, roles
+from . import agents, drafts, roles
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_action_activity, read_ledger, read_r1
@@ -127,7 +127,8 @@ def build_state(now: datetime | None = None) -> dict:
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs,
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
-		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root), "decisions": decisions["decisions"]},
+		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),
+			"drafts": drafts.read_drafts(root), "decisions": decisions["decisions"]},
 		"board": {"items": board_items[:20], "status": "확인 불가" if runs["status"] == "확인 불가" else ledger["records"]["status"],
 			"progress": ledger["progress"], "usage": usage,
 			"schedule": {"decisions": {**decisions["schedule"], "items": decisions["schedule"]["items"][:3]}, "jobs": [{"id": item["id"], "title": item["name"],

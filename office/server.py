@@ -9,7 +9,9 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import actions
+from collector.config import home
+
+from . import actions, drafts
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
@@ -76,8 +78,8 @@ class Handler(BaseHTTPRequestHandler):
 			reject(400, "올바른 본문 길이가 필요합니다.")
 			return
 		length_text = lengths[0].lstrip("0") or "0"
-		if len(length_text) > 4 or int(length_text) > 4096:
-			reject(413, "본문은 4096바이트 이하여야 합니다.")
+		if len(length_text) > 5 or int(length_text) > 16384:
+			reject(413, "본문은 16384바이트 이하여야 합니다.")
 			return
 		length = int(length_text)
 		tokens = self.headers.get_all("X-Office-Token", [])
@@ -106,6 +108,12 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond(200, payload, "application/json; charset=utf-8")
 		elif target == "/api/session":
 			self.respond_json(200, {"token": self.server.office_token})
+		elif target.startswith("/api/draft/"):
+			try:
+				row, data = drafts.load(home(), target[len("/api/draft/"):])
+				self.respond_json(200, {"ok": True, "draft": drafts.card(row, data)})
+			except (OSError, ValueError, TypeError, KeyError, RecursionError):
+				self.respond_json(409, actions.result(False, "대기 중인 초안을 확인할 수 없습니다."))
 		elif target in ("/", "/office.js", "/pixel-art.js", "/office.css", "/scene.json"):
 			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
 				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/office.css": ("office.css", "text/css"),

@@ -108,3 +108,21 @@ class OfficeServerTest(OfficeCase):
 		for port in ("0", "65536", "-1"):
 			with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
 				main(["--port", port])
+
+	def test_draft_detail_only_returns_pending_validated_card_without_user_text_or_commands(self):
+		identity = "d-20261024-100000-abcdef01"
+		request = {"role": "backend", "goal": "합성 목표", "done": ["합성 완료 조건"],
+			"owned_paths": ["office/*.py"], "forbidden": ["합성 금지 사항"]}
+		row = {"id": identity, "created": self.now.isoformat(), "text": "보내면 안 되는 사용자 원문", "summary": {"plan": "p01"}}
+		data = {"request": request, "budget": {"calls": 4, "minutes": 30, "fixes": 1}}
+		before = self.snapshot()
+		with mock.patch.object(server.drafts, "load", return_value=(row, data)) as load:
+			status, headers, content = self.request("/api/draft/" + identity)
+			self.assertEqual(status, 200)
+			self.assertEqual(json.loads(content)["draft"]["budget"], data["budget"])
+			self.assertNotIn(row["text"], content.decode())
+			self.assertNotIn("Access-Control-Allow-Origin", headers)
+			load.assert_called_once_with(self.hub, identity)
+		for target in ("/api/draft/../xyz", "/api/draft/", "/api/draft/" + identity, "/api/draft/" + identity + "?xyz"):
+			self.assertEqual(self.request(target)[0], 409)
+		self.assertEqual(before, self.snapshot())

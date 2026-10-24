@@ -1,10 +1,10 @@
 :root{--on-accent:#fff;--ink:#274234;--paper:#fcfcf4;--accent:#4f7755;--muted:#617363;--line:#d5e0d2;--ground:#a9bf87;--soft:#e8efdf}
 *{box-sizing:border-box}
 body{margin:0;overflow:hidden;color:var(--ink);background:var(--ground);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-variant-numeric:tabular-nums}
-button,input{font:inherit;color:inherit}
+button,input,textarea,select{font:inherit;color:inherit}
 button{cursor:pointer;min-width:44px;min-height:44px;border:0;background:none}
 button:hover{filter:brightness(.96)}
-button:focus-visible,canvas:focus-visible,input:focus-visible{outline:3px solid #e4a342;outline-offset:3px}
+button:focus-visible,canvas:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 [hidden]{display:none!important}
 h1,h2,h3,p{margin:0}
 svg{display:block}
@@ -172,3 +172,15 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .action-buttons{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap;margin-top:24px}
 .action-buttons .outline-button{width:auto;margin:0;min-width:88px}
 .action-buttons .apply-button{min-width:88px}
+.dev-editor{display:grid;gap:10px;min-width:0}
+.dev-editor label{font-weight:650}
+.dev-editor textarea,.dev-editor select{width:100%;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--paper);font-size:16px}
+.dev-editor textarea{resize:vertical;max-height:35dvh;min-height:100px}
+.dev-editor select{min-height:44px}
+#dev-status{margin-top:16px;font-weight:650;white-space:pre-line}
+.dev-card{margin-top:18px;border-top:1px solid var(--line);padding-top:18px;overflow-wrap:anywhere}
+.dev-card h3{margin:16px 0 8px;font-size:14px}
+.dev-card ul{padding-left:20px;margin:8px 0}
+.dev-card li{margin-bottom:8px}
+.dev-card code{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){#dev-dialog{padding:18px}.action-buttons>*{flex:1 1 40%;min-width:0}}

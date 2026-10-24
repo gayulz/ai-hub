@@ -15,6 +15,24 @@ from test_office import OfficeCase
 
 
 class OfficeStateTest(OfficeCase):
+	def test_missing_broken_or_linked_drafts_only_affect_the_drafts_group(self):
+		self.assertEqual(self.state()["approvals"]["drafts"], {"status": "정상", "items": []})
+		folder = self.hub / "office-drafts"
+		folder.mkdir(mode=0o700)
+		path = folder / "d-20261024-100000-abcdef01.json"
+		for value in ("[", "[" * 1500, "{}", "[]"):
+			with self.subTest(value=value[:10]):
+				path.write_text(value)
+				path.chmod(0o600)
+				state = self.state()
+				self.assertEqual(state["approvals"]["drafts"]["status"], "확인 불가")
+				self.assertEqual(state["approvals"]["c4"]["status"], "정상")
+				self.assertEqual(state["approvals"]["runs"]["status"], "정상")
+		path.unlink()
+		folder.rmdir()
+		folder.symlink_to(self.root, target_is_directory=True)
+		self.assertEqual(self.state()["approvals"]["drafts"]["status"], "확인 불가")
+
 	def test_r1_groups_only_pending_notes_without_reading_the_vault(self):
 		path = self.hub / "vaultreorg/r1-plan.json"
 		path.parent.mkdir()

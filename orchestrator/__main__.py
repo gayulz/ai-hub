@@ -2,6 +2,7 @@
 
 사용:
 	python3 -m orchestrator run <요청서.toml>          새 실행(구현 → 검증 → 독립 검토 → 보완)
+	python3 -m orchestrator draft --role <역할> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
 	python3 -m orchestrator resume <run_id> [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
@@ -94,10 +95,12 @@ def finish_outputs(run: Run) -> None:
 	print(text)
 
 
-def cmd_run(request_path: str) -> int:
+def read_request(request_path: str) -> dict:
 	with open(request_path, "rb") as fh:
 		data = tomllib.load(fh)
 	request = data["request"]
+	if not isinstance(request, dict):
+		raise ValueError("request는 요청서 표여야 합니다")
 	if request.get("role", "backend") not in ("plan", "backend", "frontend", "design"):
 		raise ValueError("role은 plan·backend·frontend·design 중 하나여야 합니다")
 	if not request.get("goal") or not request.get("done"):
@@ -105,6 +108,13 @@ def cmd_run(request_path: str) -> int:
 	kind = request.get("kind", "code")
 	if kind == "code" and not request.get("owned_paths"):
 		raise ValueError("코드 작업은 owned_paths(고쳐도 되는 경로)가 필요합니다")
+	return data
+
+
+def cmd_run(request_path: str) -> int:
+	data = read_request(request_path)
+	request = data["request"]
+	kind = request.get("kind", "code")
 	budget = dict(DEFAULT_BUDGET)
 	extra = data.get("budget", {})
 	budget.update({k: extra[k] for k in ("calls", "fixes") if k in extra})
@@ -162,6 +172,9 @@ def cmd_apply(run_id: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+	if argv[:1] == ["draft"]:
+		from .draft import main as draft_main
+		return draft_main(argv[1:])
 	try:
 		if argv[:1] == ["run"] and len(argv) == 2:
 			return cmd_run(argv[1])

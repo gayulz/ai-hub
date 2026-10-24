@@ -32,7 +32,7 @@ def identity(value):
 def new(agenda, target):
 	return {"version": 1, "id": "m-" + uuid.uuid4().hex, "created": datetime.now().astimezone().isoformat(),
 		"agenda": agenda, "target": target, "status": "analyzing", "phase": "analysis", "confirmed": False,
-		"analysis": None, "participants": [], "rounds": {"1": [], "2": []}, "cards": [], "question_queue": [],
+		"analysis": None, "participants": [], "absent": [], "rounds": {"1": [], "2": []}, "cards": [], "question_queue": [],
 		"calls": [], "active_seconds": 0.0, "failure": "", "summary": None, "partial": False,
 		"journal": "pending", "open_questions": []}
 
@@ -41,9 +41,12 @@ def minutes(state):
 	lines = ["# 읽기 전용 회의 " + state["id"], "", "- 안건: " + clean(state["agenda"]),
 		"- 대상: " + state["target"], "- 생성: " + state["created"], "- 상태: " + state["status"],
 		"- 현재 단계: " + state["phase"], "- 참석자 확인: " + str(state["confirmed"]),
-		f"- 호출: {len(state['calls'])}/10 · 능동 시간: {state['active_seconds']:.3f}/1200초",
+		f"- 호출: {len(state['calls'])}/14 · 능동 시간: {state['active_seconds']:.3f}/1200초",
+		f"- 재시도: {sum(bool(call.get('retry')) for call in state['calls'])}회",
 		"- 실패: " + (state["failure"] or "없음"), "- 개인 일지: " + state["journal"],
 		"- 결정 항목은 토론의 후보이며 구현·반영 승인이 아니다."]
+	lines += ["- 불참: " + ", ".join((a["role"], a["phase"], a["reason"] + ": " + a["detail"]))
+		for a in state.get("absent", [])]
 	for heading, value in (("안건 분석", state["analysis"]), ("참석자와 선택 이유", state["participants"]),
 			("참석자 확인·조정·출처", state.get("participant_confirmation")),
 			("round1", state["rounds"]["1"]), ("round2", state["rounds"]["2"]),
@@ -100,10 +103,12 @@ class Record:
 				raise ValueError("회의 기록 크기 한도입니다")
 			state = json.load(stream)
 		if (not isinstance(state, dict) or state.get("id") != self.id or state.get("version") != 1
-				or not isinstance(state.get("calls"), list) or len(state["calls"]) > 10
+				or not isinstance(state.get("calls"), list) or len(state["calls"]) > 14
+				or not isinstance(state.get("absent", []), list)
 				or type(state.get("active_seconds")) not in (int, float)
 				or not math.isfinite(state["active_seconds"]) or state["active_seconds"] < 0):
 			raise ValueError("회의 기록의 ID·버전·예산이 잘못됐습니다")
+		state.setdefault("absent", [])
 		return state
 
 	def write(self, name, value):
@@ -156,7 +161,8 @@ class Store:
 				state = json.load(stream)
 			if (not isinstance(state, dict) or state.get("id") != meeting_id or state.get("version") != 1
 					or state.get("status") not in STATUSES or not isinstance(state.get("agenda"), str)
-					or not isinstance(state.get("calls"), list) or len(state["calls"]) > 10
+					or not isinstance(state.get("calls"), list) or len(state["calls"]) > 14
+					or not isinstance(state.get("absent", []), list)
 					or type(state.get("active_seconds")) not in (int, float)
 					or not math.isfinite(state["active_seconds"]) or state["active_seconds"] < 0
 					or not isinstance(state.get("cards"), list) or len(state["cards"]) > 5
@@ -183,6 +189,7 @@ class Store:
 							return None
 					if question.get("recommended") not in {option["id"] for option in question["options"]}:
 						return None
+			state.setdefault("absent", [])
 			return state
 		except (OSError, ValueError, TypeError, KeyError, RecursionError):
 			return None
@@ -243,5 +250,5 @@ def journal(state):
 		raise ValueError("기존 개인 일지 착지점이 없거나 안전하지 않습니다")
 	body = ("- 회의: " + state["id"] + "\n- 안건: " + clean(state["agenda"]) + "\n"
 		+ "- 결론: " + clean(state["summary"]["conclusion"][0]["text"]) + "\n"
-		+ f"- 실제 호출 {len(state['calls'])}회 · 읽기 전용 2라운드 완료 · 구현·반영은 별도 승인\n")
+		+ f"- 실제 호출 {len(state['calls'])}회 · 읽기 전용 회의 완료 · 구현·반영은 별도 승인\n")
 	vault.upsert_block(path, "meeting:" + state["id"], body, "AI 회의", day, "personal")

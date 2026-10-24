@@ -9,6 +9,20 @@ from test_meeting import MeetingCase, question
 
 
 class MeetingRecordTest(MeetingCase):
+	def test_old_state_without_absent_reads_as_empty_and_can_continue(self):
+		state = self.analyze()
+		state.pop("absent", None)
+		with self.engine.store.locked(state["id"]) as record:
+			record.save(state)
+			self.assertEqual(record.load()["absent"], [])
+		path = self.hub / "meetings" / state["id"] / "meeting.json"
+		before = path.read_bytes()
+		self.assertEqual(self.engine.store.read(state["id"])["absent"], [])
+		self.assertEqual(self.engine.store.list_states()[0]["absent"], [])
+		self.assertEqual(self.engine.status(state["id"])["absent"], [])
+		self.assertEqual(path.read_bytes(), before)
+		self.assertEqual(self.start(state)["status"], "completed")
+
 	def test_readonly_listing_skips_bad_ids_links_and_shapes_without_chmod_or_locking(self):
 		self.ai.analysis_questions = [question()]
 		state = self.analyze()

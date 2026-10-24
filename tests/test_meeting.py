@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from datetime import date
@@ -43,11 +44,13 @@ class FakeAI:
 				"changes": ["점검 항목을 정한다"], "questions": copy.deepcopy(self.round_questions.get(role, []))}
 		elif "agree" in properties:
 			role = properties["role"]["enum"][0]
-			other = next(item for item in self.roles if item != role)
+			other = properties["agree"]["items"]["properties"]["role"]["enum"][0]
 			data = {"role": role, "agree": [{"role": other, "text": "작은 범위부터 점검한다"}],
-				"disagree": [], "supplement": [{"role": other, "text": "누락 가능성"}]}
+				"disagree": [], "supplement": []}
 		else:
-			item = {"text": "작은 범위부터 점검한다", "refs": ["r1:" + self.roles[0]]}
+			context = json.loads(kwargs["prompt"].split("\n담당: moderator\n", 1)[1].splitlines()[0])
+			ref = next(ref for ref in context["발언 출처"] if ref.startswith("r1:"))
+			item = {"text": "작은 범위부터 점검한다", "refs": [ref]}
 			data = {"conclusion": [item], "todos": [], "open_questions": [], "decisions": []}
 		return Reply(data, .01, {})
 
@@ -62,6 +65,7 @@ class MeetingCase(unittest.TestCase):
 		(self.hub / "redaction/dictionary.json").write_text(json.dumps({"entries": [
 			{"value": "synthetic-corp", "kind": "회사명", "token": "company01"}]}))
 		self.repo.mkdir()
+		subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
 		(self.repo / "AGENTS.md").write_text("개인 프로젝트. 루트 RULES.md가 정본이다.")
 		(self.repo / "RULES.md").write_text("원천은 읽기만 한다. 코드와 Git을 바꾸지 않는다.")
 		self.plan_text = '''[[plans]]

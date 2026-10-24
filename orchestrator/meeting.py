@@ -13,7 +13,7 @@ from vaultfilter.public import Rules
 from . import meeting_prompts as prompts, meeting_record as records, providers, targets
 from . import question_cards as cards
 
-MAX_CALLS, MAX_SECONDS = 10, 1200
+MAX_CALLS, MAX_SECONDS = 14, 1200
 # 공급자의 최소 제한 시간이 30초여서 정리 1회와 저장 여유를 함께 남긴다.
 SUMMARY_SECONDS = 35
 TERMINAL = ("completed", "budget_exhausted", "questions_exhausted")
@@ -113,6 +113,7 @@ class Engine:
 class Session:
 	def __init__(self, record, state, rules):
 		self.record, self.state, self.rules = record, state, rules
+		self.state.setdefault("absent", [])
 		self.started = time.monotonic()
 		self.prepared = None
 
@@ -151,46 +152,75 @@ class Session:
 		s = self.state
 		selected, config, rules_text = self.prepare()
 		candidates = [p["role"] for p in s["participants"]] if s["participants"] else [r for r in config if r != "moderator"]
+		if phase == "round2":
+			candidates = [row["role"] for row in s["rounds"]["1"]]
 		contract = prompts.schema(phase, candidates, role)
 		prompt = prompts.prompt(s, phase, role, rules_text, candidates)
 		cards.text(prompt, "회의 입력", prompts.MAX_PROMPT_CHARS, rules=self.rules)
-		self.save()
 		reserve = 0 if phase == "summary" else 1
-		remaining = MAX_SECONDS - s["active_seconds"]
-		if len(s["calls"]) >= MAX_CALLS - reserve or remaining < 30 + reserve * SUMMARY_SECONDS:
-			s.update(status="budget_exhausted", partial=True)
-			self.save()
-			return None
 		plan = config[role or "moderator"]
-		entry = {"phase": phase, "role": role or "moderator", "plan": plan.id, "model": plan.model,
-			"ok": None, "timeout": remaining - reserve * SUMMARY_SECONDS}
-		s["calls"].append(entry)
-		self.save()
-		self.tick()
-		timeout = min(entry["timeout"], MAX_SECONDS - s["active_seconds"] - reserve * SUMMARY_SECONDS)
-		if timeout < 30:
-			entry.update(ok=False, error="budget_before_call")
-			s.update(status="budget_exhausted", partial=True)
+		for attempt in range(2):
 			self.save()
-			return None
-		try:
-			reply = providers.call(plan, writer=False, prompt=prompt, cwd=self.record.folder,
-				schema=contract, timeout=timeout)
-			value = prompts.validate_reply(reply.data, phase, candidates, role, s, self.rules)
-			entry.update(ok=True)
-			self.tick()
-			if s["active_seconds"] >= MAX_SECONDS:
-				entry["response"] = value
+			remaining = MAX_SECONDS - s["active_seconds"]
+			if len(s["calls"]) >= MAX_CALLS - reserve or remaining < 30 + reserve * SUMMARY_SECONDS:
+				if attempt:
+					break
 				s.update(status="budget_exhausted", partial=True)
 				self.save()
 				return None
-			return value
-		except Exception as exc:
-			kind = exc.kind if isinstance(exc, providers.ProviderError) and exc.kind in ("timeout", "exit", "empty", "json", "missing") else type(exc).__name__
-			entry.update(ok=False, error=kind)
-			s.update(status="failed", failure=phase + ": " + kind)
+			cards.text(prompt, "회의 입력", prompts.MAX_PROMPT_CHARS, rules=self.rules)
+			entry = {"phase": phase, "role": role or "moderator", "plan": plan.id, "model": plan.model,
+				"ok": None, "timeout": remaining - reserve * SUMMARY_SECONDS}
+			if attempt:
+				entry["retry"] = True
+			s["calls"].append(entry)
 			self.save()
-			return None
+			self.tick()
+			timeout = min(entry["timeout"], MAX_SECONDS - s["active_seconds"] - reserve * SUMMARY_SECONDS)
+			if timeout < 30:
+				entry.update(ok=False, error="budget_before_call")
+				if attempt:
+					break
+				s.update(status="budget_exhausted", partial=True)
+				self.save()
+				return None
+			rejected = False
+			try:
+				reply = providers.call(plan, writer=False, prompt=prompt, cwd=self.record.folder,
+					schema=contract, timeout=timeout)
+				try:
+					value = prompts.validate_reply(reply.data, phase, candidates, role, s, self.rules)
+				except ValueError as exc:
+					message = "AI 응답 문자열 인코딩이 잘못됐습니다" if isinstance(exc, UnicodeError) else str(exc)
+					# 잘린 경로·토큰이 남지 않도록 가린 뒤 길이를 제한한다.
+					detail = prompts.masked_rules(" ".join(message.split()) or "응답 검사 실패", self.rules)[:160]
+					rejected = True
+					raise
+				entry.update(ok=True)
+				self.tick()
+				if s["active_seconds"] >= MAX_SECONDS:
+					entry["response"] = value
+					s.update(status="budget_exhausted", partial=True)
+					self.save()
+					return None
+				return value
+			except Exception as exc:
+				provider = isinstance(exc, providers.ProviderError) and exc.kind in ("timeout", "exit", "empty", "json", "missing")
+				kind = exc.kind if provider else type(exc).__name__
+				reason, detail = ("validation", detail) if rejected else ("provider", kind)
+				retryable = rejected or provider
+				entry.update(ok=False, error=kind, detail=detail)
+				self.save()
+				if attempt or not retryable:
+					break
+				if rejected:
+					prompt += "\n직전 응답이 검사에서 거부됐다: " + detail + ". 같은 JSON 계약을 지켜 다시 답한다"
+		if phase in ("round1", "round2") and retryable:
+			s["absent"].append({"role": role, "phase": phase, "reason": reason, "detail": detail})
+		else:
+			s.update(status="failed", failure=phase + ": " + detail)
+		self.save()
+		return None
 
 	def queue(self, questions, ref):
 		self.state["question_queue"].extend({"question": q, "ref": ref} for q in questions)
@@ -244,7 +274,12 @@ class Session:
 	def round(self, number):
 		s = self.state
 		phase, rows = "round" + number, s["rounds"][number]
-		pending = [p["role"] for p in s["participants"] if p["role"] not in {r["role"] for r in rows}]
+		if number == "2" and len(s["rounds"]["1"]) < 2:
+			s["phase"] = "summary"
+			self.save()
+			return
+		finished = {r["role"] for r in rows} | {a["role"] for a in s["absent"]}
+		pending = [p["role"] for p in s["participants"] if p["role"] not in finished]
 		if not self.budget_for_round(len(pending)):
 			return
 		for role in pending:
@@ -252,9 +287,16 @@ class Session:
 			if value is None:
 				if s["status"] == "budget_exhausted":
 					s.update(phase="summary", status="running", partial=True)
-				return
+					return
+				if s["status"] == "failed":
+					return
+				continue
 			rows.append(value)
 			self.save()
+		if not rows:
+			s.update(status="failed", failure=phase + ": 모든 참석자 불참: " + s["absent"][-1]["detail"])
+			self.save()
+			return
 		s["phase"] = "round2" if number == "1" else "summary"
 		if number == "1":
 			for row in rows:

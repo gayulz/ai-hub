@@ -270,7 +270,7 @@ function openBlog(path,name,button){
 	blogFocus=button;keys.clear();$('blog-body').replaceChildren();
 	if(available){
 		const frame=document.createElement('iframe');
-		frame.setAttribute('sandbox','allow-scripts allow-forms allow-same-origin allow-popups');
+		frame.setAttribute('sandbox','allow-scripts allow-forms allow-same-origin allow-popups allow-modals');
 		frame.setAttribute('referrerpolicy','no-referrer');frame.title=name+' 블로그 화면';frame.src=url;
 		$('blog-body').append(frame);
 	}else $('blog-body').textContent='블로그 대시보드가 꺼져 있습니다';

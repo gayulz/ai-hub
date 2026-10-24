@@ -137,7 +137,7 @@ if(blogLink)for(const name of ['target','rel'])element('blog-link')[name]=blogLi
 			const frames=element('blog-body').children;assert.equal(frames.length,1);
 			assert.equal(frames[0].tagName,'IFRAME');assert.equal(frames[0].src,url);
 			assert.equal(frames[0].title,person.name+' 블로그 화면');
-			assert.deepEqual(frames[0].attributes,{sandbox:'allow-scripts allow-forms allow-same-origin allow-popups',referrerpolicy:'no-referrer'});
+			assert.deepEqual(frames[0].attributes,{sandbox:'allow-scripts allow-forms allow-same-origin allow-popups allow-modals',referrerpolicy:'no-referrer'});
 			windowEvents.get('keydown')({key:'Escape',target:element('map')});assert(!element('side').hidden);
 			if(person.id===8){element('blog-link').click();assert.deepEqual(openedLinks.at(-1),{href:url,target:'_blank',rel:'noopener noreferrer'})}
 			if(person.id===19)element('blog-dialog').listeners.get('cancel')({preventDefault(){}});else element('blog-close').onclick();

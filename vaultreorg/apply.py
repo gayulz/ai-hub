@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from collector import vault as vault_io
@@ -89,18 +91,50 @@ def apply_note(vault: Path, note: dict, mapping: dict) -> bool:
 		return True
 
 
+def nfc(path: str) -> str:
+	return unicodedata.normalize("NFC", path)
+
+
+def git_paths(vault: Path, notes: list[dict]) -> list[str]:
+	"""반영한 노트를 git이 보고한 경로 그대로 돌려준다.
+
+	git 색인은 한글 경로를 NFD로 갖고 있을 수 있고, pathspec 파일의 글자 배열이 다르면 git은 오류 없이
+	건너뛴다(10-24 Career 88개). 그래서 상태 목록의 경로를 NFC로 맞춰 짝을 찾고, 넘길 때는 원래 바이트를 쓴다.
+	"""
+	wanted = {nfc(note["path"]) for note in notes}
+	found = [path for path in sync.changes(vault) if nfc(path) in wanted]
+	missing = wanted - {nfc(path) for path in found}
+	if missing:
+		listed = "\0".join(note["path"] for note in notes if nfc(note["path"]) in missing) + "\0"
+		ignored = subprocess.run(["git", "-C", str(vault), "check-ignore", "-z", "--stdin"], input=listed.encode("utf-8"),
+			capture_output=True).stdout.decode("utf-8").split("\0")
+		if missing - {nfc(path) for path in ignored if path}:
+			raise RuntimeError(f"git 상태에서 찾지 못한 노트가 있어 커밋을 보류했습니다: {len(missing)}개")
+		print(f"Git 무시 목록이라 커밋하지 않은 노트 {len(missing)}개")
+	return found
+
+
 def commit(vault: Path, notes: list[dict]) -> str:
+	paths = git_paths(vault, notes)
+	if not paths:
+		return sync.git(vault, "rev-parse", "HEAD").stdout.decode().strip()
 	with tempfile.NamedTemporaryFile(prefix="r1-paths-", dir=rules.base(), delete=False) as listing:
-		listing.write(b"\0".join(note["path"].encode("utf-8") for note in notes) + b"\0")
+		listing.write(b"\0".join(path.encode("utf-8") for path in paths) + b"\0")
 		path = Path(listing.name)
 	args = (f"--pathspec-from-file={path}", "--pathspec-file-nul")
 	try:
 		if sync.git(vault, "--literal-pathspecs", "add", *args).returncode != 0:
 			raise RuntimeError("git add 실패: 필터 설정을 확인하세요")
-		if sync.git(vault, "diff", "--cached", "--quiet").returncode != 0:
-			message = f"볼트 재정리 R1: 머리말 정리 · 파일 {len(notes)}개"
-			if sync.git(vault, "commit", "-q", "-m", message).returncode != 0:
-				raise RuntimeError("git commit 실패: 노트는 유지했습니다")
+		staged = sync.git(vault, "diff", "--cached", "--name-only", "-z").stdout.count(b"\0")
+		if staged != len(paths):
+			raise RuntimeError(f"스테이징한 파일 수({staged})가 반영한 노트 수({len(paths)})와 달라 커밋하지 않았습니다")
+		# 같은 노트가 NFD 삭제 + NFC 추가 두 줄로 잡힐 수 있어 노트 수는 NFC 경로로 센다
+		message = f"볼트 재정리 R1: 머리말 정리 · 파일 {len({nfc(path) for path in paths})}개"
+		if sync.git(vault, "commit", "-q", "-m", message).returncode != 0:
+			raise RuntimeError("git commit 실패: 노트는 유지했습니다")
+		left = {nfc(path) for path in sync.changes(vault)} & {nfc(path) for path in paths}
+		if left:
+			raise RuntimeError(f"커밋 뒤에도 바뀐 채 남은 노트가 있습니다: {len(left)}개")
 		result = sync.git(vault, "rev-parse", "HEAD")
 		if result.returncode != 0:
 			raise RuntimeError("커밋 해시 확인 실패")

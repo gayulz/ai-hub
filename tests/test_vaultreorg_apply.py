@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import unicodedata
 from pathlib import Path
 from unittest import mock
 
@@ -261,3 +262,29 @@ class ApplyTest(ReorgCase):
 				if header:
 					self.assertTrue(data.startswith(bom + header[:-(len(nl) + 3)]))
 		self.assertEqual(int(self.git("rev-list", "--count", "HEAD")), 2)
+
+	def test_decomposed_hangul_path_in_git_index_is_committed(self):
+		# git 색인이 NFD 경로를 갖고 있으면 pathspec 글자 배열이 달라 오류 없이 빠지던 문제(10-24)
+		name = unicodedata.normalize("NFD", "💼 Career/한글 노트.md")
+		self.write(name, "본문\n")
+		self.write("📖 Study/261024-p02.md", "본문 p02\n")
+		self.git("init", "-q", "-b", "main")
+		for key, value in (("user.name", "xyz"), ("user.email", "p01"), ("commit.gpgsign", "false")):
+			self.git("config", key, value)
+		self.git("-c", "core.precomposeunicode=false", "add", "--", name, "📖 Study")
+		self.git("commit", "-q", "-m", "합성 시작")
+		self.assertEqual(self.command("report"), 0, self.stderr.getvalue())
+		self.assertEqual(self.command("apply", "--folder", "Career"), 0, self.stderr.getvalue())
+		self.assertEqual(int(self.git("rev-list", "--count", "HEAD")), 2)
+		self.assertEqual(self.git("status", "--porcelain").strip(), b"")
+		self.assertIn("파일 1개", self.git("log", "-1", "--format=%s").decode())
+
+	def test_ignored_note_is_reported_and_others_still_commit(self):
+		self.write("💼 Career/261024-p01.md", "본문 p01\n")
+		self.write("💼 Career/261024-p02.md", "본문 p02\n")
+		self.write(".gitignore", "💼 Career/261024-p02.md\n")
+		self.init_git(".gitignore", "💼 Career/261024-p01.md")
+		self.assertEqual(self.command("report"), 0, self.stderr.getvalue())
+		self.assertEqual(self.command("apply", "--folder", "Career"), 0, self.stderr.getvalue())
+		self.assertIn("무시 목록", self.stdout.getvalue())
+		self.assertIn("파일 1개", self.git("log", "-1", "--format=%s").decode())

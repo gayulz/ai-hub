@@ -9,6 +9,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import re
+import subprocess
 import unicodedata
 from pathlib import Path
 
@@ -31,20 +32,29 @@ def _pattern(values: list[str]) -> re.Pattern | None:
 	return re.compile("|".join(parts), re.IGNORECASE) if parts else None
 
 
-def _allowed() -> set[str]:
-	"""사람이 확인한 합성 값(비밀값 꼴)의 sha256 목록. 값 자체는 저장소에 두지 않는다.
+def _allow_lines() -> list[str]:
+	"""허용 목록 파일의 줄. 지금 폴더에서 저장소 최상위(.git 이 있는 곳)까지 올라가며 찾는다(훅은 저장소 최상위에서 돈다).
 
-	지금 폴더에서 저장소 최상위(.git 이 있는 곳)까지 올라가며 찾는다(훅은 저장소 최상위에서 돈다).
-	다른 프로세스를 띄우지 않는다. 읽지 못하면 빈 집합이라 아무것도 통과시키지 않는다.
+	다른 프로세스를 띄우지 않는다. 읽지 못하면 빈 목록이라 아무것도 통과시키지 않는다.
 	"""
 	try:
 		for folder in (Path.cwd(), *Path.cwd().parents):
 			if (folder / ".git").exists():
-				lines = (folder / ALLOW_FILE).read_text(encoding="utf-8").splitlines()
-				return {line.strip().lower() for line in lines if re.fullmatch(r"\s*[0-9a-fA-F]{64}\s*", line)}
+				return (folder / ALLOW_FILE).read_text(encoding="utf-8").splitlines()
 	except (OSError, UnicodeDecodeError):
 		pass
-	return set()
+	return []
+
+
+def _allowed() -> set[str]:
+	"""사람이 확인한 합성 값(비밀값 꼴)의 sha256 목록. 값 자체는 저장소에 두지 않는다."""
+	return {line.strip().lower() for line in _allow_lines() if re.fullmatch(r"\s*[0-9a-fA-F]{64}\s*", line)}
+
+
+def _allowed_binaries() -> set[str]:
+	"""사람이 출처를 확인한 바이너리 파일 내용의 sha256 목록(`binary <sha256>` 줄). 경로가 아니라 내용 해시로만 통과한다."""
+	matches = (re.fullmatch(r"\s*binary\s+([0-9a-fA-F]{64})\s*", line) for line in _allow_lines())
+	return {match.group(1).lower() for match in matches if match}
 
 
 class Rules:
@@ -57,6 +67,7 @@ class Rules:
 		self.people = _pattern([e["value"] for e in dictionary.entries] + [user])
 		self.home = re.compile(rf"/(?:Users|home)/{re.escape(user)}(?![A-Za-z0-9])")
 		self.allowed = _allowed()
+		self.binaries = _allowed_binaries()
 
 	def kinds(self, text: str) -> list[str]:
 		text = unicodedata.normalize("NFC", text)
@@ -72,20 +83,43 @@ class Rules:
 		return found
 
 
-def _added(commit: str) -> tuple[dict[str, list[str]], int]:
-	"""파일별로 이 커밋이 새로 넣은 줄과 줄 단위로 볼 수 없는 바이너리 수. 이름 바꾸기는 바뀐 줄만 나온다."""
+def _added(commit: str) -> dict[str, list[str]]:
+	"""파일별로 이 커밋이 새로 넣은 줄. 이름 바꾸기는 바뀐 줄만 나온다."""
 	patch = verify._git("-c", "core.quotepath=false", "show", "--format=", "-U0", "--no-color", "--no-ext-diff",
 		"-M", commit).decode("utf-8", errors="replace")
-	result, current, binaries = {}, None, 0
+	result, current = {}, None
 	for line in patch.split("\n"):
-		if line.startswith("Binary files ") and not line.endswith(" and /dev/null differ"):
-			binaries += 1
-		elif line.startswith("+++ "):
+		if line.startswith("+++ "):
 			# 특수 문자가 든 경로는 git이 따옴표로 감싼다. 그래도 줄은 검사한다(파일 순번만 '?')
 			current = None if line == "+++ /dev/null" else line[6:] if line.startswith("+++ b/") else line[4:]
 		elif line.startswith("+") and current is not None:
 			result.setdefault(current, []).append(line[1:])
-	return result, binaries
+	return result
+
+
+def _unverified_binaries(commit: str, allowed: set[str]) -> int:
+	"""줄 단위로 볼 수 없는 바이너리(지운 것 제외) 중 내용 해시가 허용 목록에 없는 파일 수. numstat -z 의 경로를 그대로 쓴다."""
+	raw = verify._git("diff-tree", "--no-commit-id", "--numstat", "-r", "-z", "--root", "-M", commit)
+	tokens, paths, index = raw.split(b"\0"), [], 0
+	while index < len(tokens):
+		fields = tokens[index].split(b"\t", 2)
+		index += 1
+		if len(fields) < 3:
+			continue
+		path = fields[2]
+		if not path:  # 이름 바꾸기·복사: 다음 두 토큰이 옛 경로와 새 경로다
+			path = tokens[index + 1] if index + 1 < len(tokens) else b""
+			index += 2
+		if fields[0] == b"-" and fields[1] == b"-":
+			paths.append(path)
+	bad = 0
+	for path in paths:
+		try:
+			blob = verify._git("show", f"{commit}:{path.decode('utf-8', errors='surrogateescape')}")
+		except subprocess.CalledProcessError:
+			continue  # 이 커밋에 없는 경로 = 지운 바이너리
+		bad += hashlib.sha256(blob).hexdigest() not in allowed
+	return bad
 
 
 def check_public(revs: list[str]) -> int:
@@ -113,11 +147,11 @@ def check_public(revs: list[str]) -> int:
 			elif rules.kinds(path):
 				problems += 1
 				print(f"경로 누출 의심: {short} 파일 #{index} ({', '.join(rules.kinds(path))})")
-		added, binaries = _added(commit)
+		binaries = _unverified_binaries(commit, rules.binaries)
 		if binaries:
 			problems += binaries
 			print(f"검사할 수 없는 바이너리 {binaries}개: {short}")
-		for path, lines in added.items():
+		for path, lines in _added(commit).items():
 			kinds = rules.kinds("\n".join(lines))
 			if kinds:
 				problems += 1

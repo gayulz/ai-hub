@@ -125,6 +125,29 @@ class PublicCheckTest(unittest.TestCase):
 		self.assertIn("바이너리", output)
 		self.assertNotIn("acme", output)
 
+	def test_allow_list_passes_a_binary_only_by_exact_content_hash(self):
+		blob = b"\x00synthetic-binary-for-test"
+		digest = hashlib.sha256(blob).hexdigest()
+		(self.repo / ".githooks").mkdir()
+		allow = self.repo / ".githooks/public-allow.txt"
+		allow.write_text(f"# 합성 바이너리\nbinary {digest}\n", encoding="utf-8")
+		first = self.commit("lib/a.bin", blob)
+		self.commit("lib/a.bin", blob + b"\x01")  # 같은 경로라도 내용이 다르면 막는다
+		self.commit("other/b.bin", blob)  # 경로가 달라도 내용이 같으면 통과한다
+		self.git("mv", "other/b.bin", "other/c.bin")
+		self.git("commit", "-q", "-m", "이름 바꾸기")
+		self.git("rm", "-q", "lib/a.bin")
+		self.git("commit", "-q", "-m", "지우기")
+		self.assertEqual(self.check(first)[0], 1)  # 이 폴더(저장소 밖)의 허용 목록에는 없다
+		with contextlib.chdir(self.repo):
+			self.assertEqual(self.check(first), (0, ""))
+			count, output = self.check("HEAD~4..HEAD~3")
+			self.assertEqual((count, "바이너리 1개" in output), (1, True))
+			self.assertEqual(self.check("HEAD~3..HEAD~2"), (0, ""))
+			self.assertEqual(self.check("HEAD~2..HEAD"), (0, ""))  # 이름 바꾸기·지우기
+			allow.write_text(f"{digest}\n", encoding="utf-8")  # 값 해시 줄은 바이너리를 통과시키지 않는다
+			self.assertEqual(self.check(first)[0], 1)
+
 	def test_quoted_path_lines_are_still_checked(self):
 		self.commit('odd"name.py', "x = 'acme'\n")
 		count, output = self.check()

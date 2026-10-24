@@ -40,6 +40,9 @@ def _codex(plan: Plan, writer: bool, cwd: Path, schema_file: Path, last_file: Pa
 		"--ephemeral", "--json", "--output-schema", str(schema_file), "-o", str(last_file)]
 	if plan.model:
 		argv += ["-m", plan.model]
+	# Codex 는 git 저장소 밖 폴더에서 신뢰 확인으로 바로 거부한다(회의 기록 폴더 등). 샌드박스는 그대로 두고 확인만 건너뛴다.
+	if subprocess.run(["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode != 0:
+		argv.insert(argv.index("--ephemeral"), "--skip-git-repo-check")
 	return argv + ["-"], True
 
 

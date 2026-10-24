@@ -7,11 +7,13 @@ import re
 import subprocess
 import tempfile
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 from collector import vault as vault_io
 from collector.backfill_common import locked, sha
 from collector.config import ConfigError, home, load_sources
+from vaultfilter.store import Dictionary
 from vaultsync import sync
 
 from . import frontmatter, report, rules
@@ -111,7 +113,14 @@ def git_paths(vault: Path, notes: list[dict]) -> list[str]:
 		if missing - {nfc(path) for path in ignored if path}:
 			raise RuntimeError(f"git 상태에서 찾지 못한 노트가 있어 커밋을 보류했습니다: {len(missing)}개")
 		print(f"Git 무시 목록이라 커밋하지 않은 노트 {len(missing)}개")
-	return found
+	# 볼트 GitHub 사본은 경로를 암호화하지 않는다. 자동 기록(vaultsync)과 같은 경로 규칙을 거쳐
+	# 사전 이름이 든 경로·허용하지 않는 종류·링크는 커밋하지 않는다(노트 쓰기는 이미 끝났고 로컬에만 남는다).
+	values = [entry["value"] for entry in Dictionary().entries if len(entry["value"]) >= 2]
+	reasons = Counter(sync.problem(vault, path, values) for path in found)
+	blocked = sum(count for reason, count in reasons.items() if reason)
+	if blocked:
+		print(f"경로 규칙으로 커밋하지 않은 노트 {blocked}개(" + ", ".join(f"{reason} {count}" for reason, count in reasons.items() if reason) + ")")
+	return [path for path in found if not sync.problem(vault, path, values)]
 
 
 def commit(vault: Path, notes: list[dict]) -> str:

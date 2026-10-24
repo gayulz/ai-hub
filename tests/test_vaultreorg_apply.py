@@ -288,3 +288,16 @@ class ApplyTest(ReorgCase):
 		self.assertEqual(self.command("apply", "--folder", "Career"), 0, self.stderr.getvalue())
 		self.assertIn("무시 목록", self.stdout.getvalue())
 		self.assertIn("파일 1개", self.git("log", "-1", "--format=%s").decode())
+
+	def test_path_with_dictionary_name_is_written_but_not_committed(self):
+		# 볼트 GitHub 사본은 경로를 암호화하지 않으므로 자동 기록과 같은 경로 규칙을 따른다
+		self.write("💼 Career/261024-p01.md", "본문 p01\n")
+		risky = self.write("💼 Career/acme-notes.md", "본문 p02\n")
+		self.init_git("💼 Career/261024-p01.md")
+		self.assertEqual(self.command("report"), 0, self.stderr.getvalue())
+		self.assertEqual(self.command("apply", "--folder", "Career"), 0, self.stderr.getvalue())
+		self.assertIn("경로 규칙으로 커밋하지 않은 노트 1개", self.stdout.getvalue())
+		self.assertNotIn("acme", self.stdout.getvalue().replace("경로에 사전 이름", ""))
+		self.assertIn("파일 1개", self.git("log", "-1", "--format=%s").decode())
+		self.assertNotIn(b"acme", self.git("ls-files"))
+		self.assertTrue(fm.split(risky.read_bytes()).lines)  # 노트에는 머리말이 들어갔다

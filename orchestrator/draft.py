@@ -30,6 +30,7 @@ DEFAULT_FORBIDDEN = [
 	"git push를 하지 않는다. 반영(apply)은 사용자가 따로 승인한다.",
 ]
 FIELDS = ("goal", "done", "owned_paths", "forbidden", "details", "commit_message")
+NO_FILES = ("고칠 파일이 없는 요청입니다. 파일을 고치지 않는 조사·질문이라면 개발 지시가 아니라 PM 대화에서 대상 저장소를 맞춰 물어 주세요")
 LIMITS = {"calls": (2, 8), "minutes": (10, 120), "fixes": (0, 2)}
 # 사무실은 표준 오류의 마지막 줄이 이 머리로 시작할 때만 이유를 화면에 보인다
 FAILURE = "초안 작성 실패: "
@@ -73,6 +74,8 @@ def validate(data, role: str, rules: Rules, selected: targets.Target | None = No
 	selected = selected or targets.target("ai-hub")
 	if role not in ROLES or not isinstance(data, dict):
 		raise ValueError("역할 또는 초안 JSON 형식을 확인하세요")
+	if isinstance(data.get("owned_paths"), list) and not data["owned_paths"]:
+		raise ValueError(NO_FILES)
 	request = {"repo": str(selected.path), "kind": "code", "role": role,
 		"goal": string(data.get("goal"), "goal", 300),
 		"done": strings(data.get("done"), "done", 10),

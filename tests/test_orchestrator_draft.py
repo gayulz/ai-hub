@@ -118,6 +118,17 @@ class OrchestratorDraftTest(DraftCase):
 				self.assertTrue(errors.strip())
 				call.assert_called_once()
 
+	def test_empty_owned_paths_is_rejected_with_a_guide_to_pm_chat_and_the_prompt_asks_for_it(self):
+		code, output, errors, call = self.generate({**sample(), "owned_paths": []})
+		self.assertEqual((code, output), (2, ""))
+		self.assertFalse(self.out.exists())
+		self.assertIn("고칠 파일이 없는 요청입니다", errors)
+		self.assertIn("PM 대화", errors)
+		call.assert_called_once()
+		prompt = call.call_args.kwargs["prompt"]
+		self.assertIn("owned_paths 를 빈 목록으로 두어 곧바로 끝낸다", prompt)
+		self.assertIn("지어내지 않는다", prompt)
+
 	def test_company_service_secret_home_and_invalid_user_text_never_call_ai(self):
 		for text in ("acme 개선", "xyz 추가", "password=" + "a" * 24, "/Users/p01/data", "", "a" * 2001, "a\x00b"):
 			with self.subTest(text=text[:20]):

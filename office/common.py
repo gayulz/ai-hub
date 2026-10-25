@@ -44,6 +44,8 @@ def action_id(action: str, value) -> str:
 		valid = re.fullmatch(r"q-[a-f0-9]{32}", value)
 	elif action == "shorts_intake":
 		valid = re.fullmatch(r"s-[a-f0-9]{32}", value)
+	elif action in ("task_create", "task_update", "task_complete", "task_reopen"):
+		return identifier(value)
 	else:
 		raise ValueError("허용하지 않는 동작")
 	if not valid:

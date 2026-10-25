@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from collector.config import ConfigError, home
 from orchestrator import targets
 
-from . import agents, chats, drafts, meetings, roles, shorts, telegram_bridge
+from . import agents, chats, drafts, meetings, roles, shorts, tasks, telegram_bridge
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_action_activity, read_ledger, read_r1
@@ -114,6 +114,7 @@ def build_state(now: datetime | None = None) -> dict:
 	ledger = read_ledger(root, now.date().isoformat())
 	runs = agents.read_runs(root)
 	decisions = read_decisions(root, now.date())
+	task_state, personal_tasks, decisions["decisions"] = tasks.read_state(root, decisions["decisions"])
 	jobs = read_jobs(root, user_home, now)
 	people = agents.orchestration(runs, plans) + [{"id": "gemini", "result": "대화 내용은 읽지 않음"},
 		agents.ollama(ledger["active"]), agents.blog()]
@@ -154,14 +155,14 @@ def build_state(now: datetime | None = None) -> dict:
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
-		"shorts": shorts.read_state(root),
+		"shorts": shorts.read_state(root), "tasks": task_state,
 		**meeting_state, **chat_state, "questions": {**meeting_state["questions"], "status": question_status, "items": question_items},
 		"blog_dashboard": blog_dashboard(), "telegram": telegram_bridge.status(),
 		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),
 		"people": role_people, "rooms": roles.rooms(role_people), "engines": engines, "usage": usage, "schedule": schedule,
 		"approvals": {"c4": ledger["batches"], "runs": run_group, "r1": read_r1(root),
 			"questions": {"status": question_status, "count": len(question_items)},
-			"drafts": drafts.read_drafts(root), "decisions": decisions["decisions"]},
+			"drafts": drafts.read_drafts(root), "decisions": decisions["decisions"], "tasks": personal_tasks},
 		"board": {"items": board_items[:20], "status": "확인 불가" if runs["status"] == "확인 불가" else ledger["records"]["status"],
 			"progress": ledger["progress"], "usage": usage,
 			"schedule": {"decisions": {**decisions["schedule"], "items": decisions["schedule"]["items"][:3]}, "jobs": [{"id": item["id"], "title": item["name"],

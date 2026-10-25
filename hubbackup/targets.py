@@ -15,7 +15,7 @@ FILES = {
 	"gemini": ("GEMINI.md", "settings.json", "projects.json", "trustedFolders.json"),
 }
 TREES = {
-	"ai-hub": ("redaction", "runs", "tools", "archive"),
+	"ai-hub": ("redaction", "runs", "tools", "archive", "office-tasks"),
 	"claude": ("rules", "hooks", "agents", "skills"),
 	"codex": ("hooks",),
 	"gemini": ("rules", "skills", "hooks"),

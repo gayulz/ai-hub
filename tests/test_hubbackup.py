@@ -92,7 +92,7 @@ class HubBackupTest(HubBackupCase):
 	def test_round_trip_all_targets_and_uncheckpointed_wal(self):
 		samples = {
 			"ai-hub": ["sources.toml", "plans.toml", "redact_hosts.toml", "redaction/acme.json",
-				"runs/acme/run.json", "handoff.md", "tools/acme.sh", "archive/acme.bin"],
+				"runs/acme/run.json", "handoff.md", "tools/acme.sh", "archive/acme.bin", "office-tasks/task-acme.json"],
 			"claude": ["CLAUDE.md", "rules/acme.md", "hooks/acme.sh", "agents/acme.md",
 				"skills/acme/SKILL.md", "settings.json", "settings.local.json", "statusline-acme.sh",
 				"projects/acme/memory/MEMORY.md", "projects/acme/memory/nested/acme.md"],

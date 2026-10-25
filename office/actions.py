@@ -17,7 +17,7 @@ from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator import targets
 
-from . import chats, drafts, meetings, shorts
+from . import chats, drafts, meetings, shorts, tasks
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -116,7 +116,7 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(payload, dict):
 			raise ValueError
 		action = payload.get("action")
-		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS):
+		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS, *tasks.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
@@ -127,6 +127,9 @@ def apply(payload) -> tuple[int, dict]:
 			keys = chats.KEYS[action]
 		if action in shorts.ACTIONS:
 			keys = shorts.KEYS
+		if action in tasks.ACTIONS:
+			tasks.validate(payload)
+			keys = tasks.KEYS if action == "task_create" else tasks.KEYS | {"kind", "version"}
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
@@ -141,7 +144,7 @@ def apply(payload) -> tuple[int, dict]:
 			meetings.validate(payload)
 		if action in chats.ACTIONS:
 			chats.validate(payload)
-	except (meetings.Invalid, chats.Invalid) as exc:
+	except (meetings.Invalid, chats.Invalid, tasks.Invalid) as exc:
 		return 400, result(False, str(exc))
 	except (ValueError, TypeError, ConfigError):
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
@@ -155,6 +158,9 @@ def apply(payload) -> tuple[int, dict]:
 				fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 			except BlockingIOError:
 				return 409, result(False, "이미 실행 중")
+			if action in tasks.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return tasks.execute(root, payload, audit)
 			if action in drafts.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
 					return drafts.execute(root, action, identity, payload.get("text"), audit, REPO, payload.get("target", "ai-hub"), payload.get("origin"))

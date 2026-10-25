@@ -66,8 +66,19 @@
 	<section id="shorts-exit" class="shorts-exit" aria-label="입력 닫기 확인" hidden><p>입력 중인 접수를 닫을까요? 확정하지 않은 답은 저장되지 않습니다.</p><button id="shorts-stay" class="shorts-chip">계속 입력</button><button id="shorts-discard" class="shorts-chip">닫기</button></section>
 	<footer id="shorts-footer" class="shorts-footer"><button id="shorts-previous" class="shorts-chip" disabled>이전</button><button id="shorts-next" class="apply-button" disabled>다음</button></footer>
 </dialog>
+<dialog id="task-dialog" class="action-dialog task-dialog" aria-labelledby="task-title" aria-describedby="task-meta">
+	<h2 id="task-title">할 일 추가</h2><p id="task-meta" class="intro"></p><p id="task-source" class="task-source" hidden></p>
+	<div class="dev-editor">
+		<label for="task-name">제목 <span class="muted">필수</span></label><input id="task-name" type="text" maxlength="200" required autocomplete="off" placeholder="예: 일정 화면에 검색 추가하기">
+		<label for="task-memo">메모 <span class="muted">선택</span></label><textarea id="task-memo" rows="6" maxlength="2000" aria-describedby="task-remaining" placeholder="아이디어, 참고할 내용, 처리 결과를 적어 두세요."></textarea>
+		<p id="task-remaining" class="muted">0 / 2000자</p>
+	</div>
+	<p id="task-status" role="status" aria-live="polite"></p>
+	<div class="action-buttons"><button id="task-close" class="outline-button">닫기</button><button id="task-reload" class="outline-button" hidden>다시 읽기</button><button id="task-toggle" class="outline-button" hidden>완료 처리</button><button id="task-save" class="apply-button" disabled>등록</button></div>
+</dialog>
 <script src="/pixel-art.js" defer></script>
 <script src="/office.js" defer></script>
+<script src="/tasks.js" defer></script>
 <script src="/meeting.js" defer></script>
 <script src="/meeting_scene.js" defer></script>
 <script src="/meeting_panel.js" defer></script>

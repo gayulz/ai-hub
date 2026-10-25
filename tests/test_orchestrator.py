@@ -270,6 +270,20 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertIn("회사·서비스 이름", failed)
 		self.assertNotIn("acme", json.dumps(run.checks))
 
+	def test_name_check_looks_only_at_lines_added_by_the_change(self):
+		(self.repo / "src" / "b.py").write_text("# acme 이미 있던 이름\nVALUE = 1\n", encoding="utf-8")
+		sh(self.repo, "git", "add", "src/b.py")
+		sh(self.repo, "git", "commit", "-q", "-m", "기존 파일")
+		base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True, text=True).stdout.strip()
+		(self.repo / "src" / "b.py").write_text("# acme 이미 있던 이름\nVALUE = 2\n", encoding="utf-8")
+		sh(self.repo, "git", "commit", "-q", "-am", "값만 바꾼다")
+		results = {r["name"]: r["ok"] for r in checks.verify(self.repo, base, {"test_command": "true"}, [])}
+		self.assertTrue(results["회사·서비스 이름"])
+		(self.repo / "src" / "b.py").write_text("# acme 이미 있던 이름\nVALUE = 2  # acme 새로 넣음\n", encoding="utf-8")
+		sh(self.repo, "git", "commit", "-q", "-am", "이름을 새로 넣는다")
+		results = {r["name"]: r["ok"] for r in checks.verify(self.repo, base, {"test_command": "true"}, [])}
+		self.assertFalse(results["회사·서비스 이름"])
+
 	def test_interrupted_call_counts_and_resume_continues(self):
 		run = self.new_run(calls=2)
 		self.flow(run, FakeAI([CHANGES], {"src/a.py": "VALUE = 2\n"}))  # 예산으로 보완 단계 앞에서 멈춘다

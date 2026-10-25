@@ -6,7 +6,7 @@ import hashlib
 import os
 import stat
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 MAX_DEPTH = 8
@@ -19,6 +19,8 @@ class Snapshot:
 	files: dict[str, tuple]
 	untracked: set[str]
 	states: dict[str, bytes]
+	# .gitignore 대상(캐시·빌드·런타임 파일)은 커밋에 들어가지 않으므로 변경 비교에서 뺀다
+	ignored: frozenset[str] = field(default=frozenset(), compare=False)
 
 
 def _stamp(path: Path) -> tuple[int, int, int] | None:
@@ -56,11 +58,13 @@ def _git_snapshot(cwd: Path, root: Path) -> Snapshot:
 	present = set(_git(cwd, "ls-files", "-z", "--cached", "--others", "--full-name").split(b"\0")) - {b""}
 	if len(present | states.keys()) > MAX_ENTRIES:
 		raise ValueError("검사 항목 한도 초과")
+	ignored = {os.path.relpath(root / os.fsdecode(raw), cwd) for raw in _git(
+		cwd, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--full-name").split(b"\0") if raw}
 	files, relative_states, untracked = {}, {}, set()
 	for raw in present | states.keys():
 		path = root / os.fsdecode(raw)
 		name = os.path.relpath(path, cwd)
-		if name == ".." or name.startswith("../"):
+		if name == ".." or name.startswith("../") or name in ignored:
 			continue
 		# 중간 링크도 따라가지 않는다. Git은 링크 아래 파일을 추적하지 않는다.
 		if any(parent.is_symlink() for parent in path.parents if parent != cwd and cwd in parent.parents):
@@ -71,7 +75,7 @@ def _git_snapshot(cwd: Path, root: Path) -> Snapshot:
 		if states.get(raw) == b"??":
 			untracked.add(name)
 	return Snapshot((hashlib.sha256(status).hexdigest(), hashlib.sha256(diff).hexdigest()),
-		files, untracked, relative_states)
+		files, untracked, relative_states, frozenset(ignored))
 
 
 def _tree_snapshot(cwd: Path) -> Snapshot:
@@ -151,7 +155,7 @@ def verify(cwd: Path, before: Snapshot | None, tool: str) -> None:
 		if before.files.get(name) != after.files.get(name))
 	if not changed:
 		changed = sorted(before.states.keys() | after.states.keys())
-	_remove_new(cwd, after.untracked - before.files.keys())
+	_remove_new(cwd, after.untracked - before.files.keys() - before.ignored)
 	names = ", ".join(changed[:5]) or "변경 경로 확인 불가"
 	more = f" 외 {len(changed) - 5}개" if len(changed) > 5 else ""
 	raise ProviderError("write", "읽기 전용 호출이 파일을 바꿨습니다: " + names + more)

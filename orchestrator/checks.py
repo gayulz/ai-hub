@@ -91,6 +91,12 @@ def _names() -> list[re.Pattern]:
 	return patterns
 
 
+def _added_lines(worktree: Path, base: str, path: str) -> str:
+	"""base 에서 HEAD 까지 이 파일에 새로 들어간 줄(새 파일이면 전부)."""
+	patch = git(worktree, "-c", "core.quotepath=false", "diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--", path)
+	return "\n".join(line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++"))
+
+
 def verify(worktree: Path, base: str, request: dict, outside: list[str]) -> list[dict]:
 	"""검사 결과 목록. 값·원문은 담지 않고 파일 이름과 종류만 담는다."""
 	results = [{"name": "허용 경로", "ok": not outside, "detail": ", ".join(outside[:10])}]
@@ -100,8 +106,8 @@ def verify(worktree: Path, base: str, request: dict, outside: list[str]) -> list
 		and len((worktree / p).read_text(encoding="utf-8", errors="replace").splitlines()) > MAX_LINES]
 	results.append({"name": f"파일 {MAX_LINES}줄", "ok": not long_files, "detail": ", ".join(long_files)})
 	names = _names()
-	leaked = [p for p in existing if any(n.search(p) or n.search((worktree / p).read_text(
-		encoding="utf-8", errors="replace")) for n in names)]
+	# 파일에 원래 있던 이름은 이번 변경의 잘못이 아니다(공개 저장소 push 검사도 새 줄만 본다)
+	leaked = [p for p in existing if any(n.search(p) or n.search(_added_lines(worktree, base, p)) for n in names)]
 	results.append({"name": "회사·서비스 이름", "ok": not leaked, "detail": ", ".join(leaked)})
 	command = request.get("test_command", DEFAULT_TEST)
 	try:

@@ -70,6 +70,8 @@ class ReadonlyGuardTest(unittest.TestCase):
 			elif argv[3] == "diff":
 				output = b"".join(os.fsencode(name) + b"\0" + current.get(name, b"")
 					for name in sorted(self.tracked) if current.get(name) != self.tracked[name])
+			elif argv[3] == "ls-files" and "--ignored" in argv:
+				output = b"".join(os.fsencode(name) + b"\0" for name in sorted(self.ignored & current.keys()))
 			elif argv[3] == "ls-files":
 				output = b"".join(os.fsencode(name) + b"\0" for name in sorted(self.tracked.keys() | current.keys()))
 			else:
@@ -164,6 +166,21 @@ class ReadonlyGuardTest(unittest.TestCase):
 		self.effect = self.ignored.clear
 		self.assert_write(lambda: self.call(self.repo))
 		self.assertEqual(path.read_text(), "호출 전부터 있던 파일")
+
+	def test_changes_only_in_gitignored_files_are_not_a_write_but_other_new_files_are(self):
+		(self.repo / "cache").mkdir()
+		old = self.repo / "cache" / "old.pyc"
+		old.write_text("호출 전부터 있던 캐시")
+		self.ignored.update({"cache/old.pyc", "cache/new.pyc"})
+		def effect():
+			old.write_text("캐시가 다시 만들어졌다")
+			(self.repo / "cache" / "new.pyc").write_text("새 캐시")
+		self.effect = effect
+		self.assertEqual(self.call(self.repo).data, self.data)
+		self.assertEqual((self.repo / "cache" / "new.pyc").read_text(), "새 캐시")  # 무시 대상은 지우지 않는다
+		self.effect = lambda: (self.repo / "probe.txt").write_text("무시 대상이 아닌 새 파일")
+		self.assertIn("probe.txt", self.assert_write(lambda: self.call(self.repo)))
+		self.assertFalse((self.repo / "probe.txt").exists())
 
 	def test_unchanged_call_succeeds_for_all_tools_and_folders(self):
 		for cwd in (self.repo, self.plain):

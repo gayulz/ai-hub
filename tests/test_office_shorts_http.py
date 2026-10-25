@@ -58,7 +58,7 @@ class OfficeShortsHTTPTest(ShortsCase):
 				(413, {"Content-Length": "9" * 100})):
 			self.assertEqual(self.post(headers=headers)[0], expected)
 		self.assertFalse((self.hub / "shorts").exists())
-		payload = {**self.payload, "story": "가" * 2000,
+		payload = {**self.payload, "story": "가" * 8000,
 			"conditions": [{"id": step["id"], "value": "나" * 300} for step in STEPS]}
 		code, _, body = self.post(payload)
 		self.assertEqual(code, 200, body)

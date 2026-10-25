@@ -28,6 +28,8 @@ PRESETS = {"pictures": ("사진", "Pictures"), "movies": ("영상", "Movies"),
 	"desktop": ("바탕화면", "Desktop"), "downloads": ("다운로드", "Downloads"),
 	"documents": ("문서", "Documents"), "icloud": ("iCloud Drive", "Library/Mobile Documents/com~apple~CloudDocs")}
 SAVE_PRESETS = ("movies", "desktop", "documents")
+# shortcut: 8000 코드 포인트는 임시 방어값이며 정식 데이터 계약은 3c-2에서 정한다.
+STORY_MAX = 8000
 CONFIRMED = "접수를 확정했습니다. 제작은 따로 시작합니다."
 ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, ConfigError, RecursionError)
 
@@ -147,7 +149,7 @@ def validate(payload: dict) -> dict:
 		rules = Rules()
 	except ERRORS:
 		raise Invalid("글 검사 설정을 확인할 수 없어 접수를 거부했습니다.", "story") from None
-	story = checked_text(payload["story"], "story", 2000, rules)
+	story = checked_text(payload["story"], "story", STORY_MAX, rules)
 	values = payload["conditions"]
 	by_id, seen = {step["id"]: step for step in STEPS}, {}
 	try:
@@ -269,6 +271,8 @@ def read_state(root: Path) -> dict:
 		with directory(root / "shorts") as parent:
 			rules = Rules()
 			for name in os.listdir(parent):
+				if name.startswith("."):
+					continue
 				try:
 					action_id("shorts_intake", name)
 					folder = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
@@ -298,7 +302,7 @@ def read_state(root: Path) -> dict:
 						if value["id"] != step["id"] or value["label"] != step["label"]:
 							raise ValueError
 						string(value["value"], "조건", 300)
-					story = string(row["story"], "이야기", 2000)
+					story = string(row["story"], "이야기", STORY_MAX)
 					preview = masked(question_cards.HOME_PATH.sub("[경로 생략]", story), rules)
 					items.append((created, {"id": name, "created": row["created"], "status": row["status"], "story_preview": preview[:40]}))
 				except ERRORS:

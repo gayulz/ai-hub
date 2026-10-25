@@ -59,7 +59,7 @@ class OfficeShortsTest(ShortsCase):
 		bad = [None, [], {}, {**self.payload, "extra": "p01"}]
 		bad += [{k: v for k, v in self.payload.items() if k != key} for key in self.payload]
 		bad += [{**self.payload, "id": value} for value in (None, 1, [], SID.upper(), SID + "/", "../p01", "s-" + "a" * 31)]
-		bad += [{**self.payload, "story": value} for value in (None, [], "", " ", "가" * 2001, "합성\x01", "\ud800")]
+		bad += [{**self.payload, "story": value} for value in (None, [], "", " ", "가" * 8001, "합성\x01", "\ud800")]
 		conditions = self.payload["conditions"]
 		bad += [{**self.payload, "conditions": value} for value in (None, {}, [], conditions[:-1], conditions + conditions[:1],
 			[conditions[0]] * len(STEPS), [{"id": "p01", "value": "합성"}] + conditions[1:],
@@ -75,6 +75,31 @@ class OfficeShortsTest(ShortsCase):
 				("save", {"kind": "preset", "id": "documents"}),
 				("source", {"kind": "path", "value": str(self.source), "extra": "p01"}), ("save", {"kind": "p01", "value": str(self.save)})):
 			self.assertEqual(actions.apply({**self.payload, key: value})[0], 400)
+
+	def test_story_8000_code_point_limit_preserves_original_and_state_reads_same_limit(self):
+		family = "\U0001f468\u200d\U0001f469\u200d\U0001f467\u200d\U0001f466"
+		combined = "e\u0301\u0302\u0303"
+		for number, story in enumerate(("가" * 2001, "가" * 8000, family * 1000 + "가" * 1000,
+				family * 1142, family * 1142 + "가" * 6, combined * 2000, " \t\u1100\u1161\n합성 \n")):
+			with self.subTest(number=number):
+				identity = "s-" + f"{number:032x}"
+				code, result = actions.apply({**self.payload, "id": identity, "story": story})
+				self.assertEqual(code, 200, result)
+				path = self.hub / "shorts" / identity / "intake.json"
+				self.assertEqual(json.loads(path.read_text())["story"], story)
+				group = shorts.read_state(self.hub)
+				self.assertEqual(group["status"], "정상")
+				self.assertIn(identity, [row["id"] for row in group["items"]])
+		self.assertEqual(shorts.STORY_MAX, 8000)
+		for story in ("가" * 8001, family * 1143, family * 1500, family * 2000, combined * 2000 + "\u0304"):
+			with self.subTest(code_points=len(story)):
+				code, result = actions.apply({**self.payload, "story": story})
+				self.assertEqual((code, result["field"]), (400, "story"))
+				self.assertFalse((self.hub / "shorts" / SID).exists())
+		path.write_text(json.dumps({**json.loads(path.read_text()), "story": "가" * 8001}), encoding="utf-8")
+		group = shorts.read_state(self.hub)
+		self.assertEqual(group["status"], "확인 불가")
+		self.assertNotIn(identity, [row["id"] for row in group["items"]])
 
 	def test_sensitive_story_condition_and_path_refused_without_ai_or_raw_errors(self):
 		values = ("acme 정보", "xyz 정보", "토큰 " + "ghp_" + "a" * 36, "p01" + "@" + "acme.invalid",
@@ -242,6 +267,27 @@ class OfficeShortsTest(ShortsCase):
 		self.assertEqual((code, result["message"]), (409, "이미 접수한 요청입니다"))
 		self.assertEqual(path.read_text(), "합성 기존 기록")
 		self.assertEqual(list(path.parent.parent.iterdir()), [path.parent])
+
+	def test_state_ignores_hidden_temporary_entries_but_keeps_unknown_entries_unavailable(self):
+		self.assertEqual(actions.apply(self.payload)[0], 200)
+		parent = self.hub / "shorts"
+		expected = shorts.read_state(self.hub)
+		(parent / ".intake-writing").mkdir()
+		(parent / ".intake-writing/intake.tmp").write_text("{", encoding="utf-8")
+		(parent / ".intake-abandoned").mkdir()
+		(parent / ".intake-abandoned/intake.json").write_text("{", encoding="utf-8")
+		(parent / ".DS_Store").write_bytes(b"p01")
+		(parent / ".intake-linked").symlink_to(self.save, target_is_directory=True)
+		before = {p: (p.lstat().st_mode, p.lstat().st_mtime_ns) for p in parent.rglob("*")}
+		self.assertEqual(shorts.read_state(self.hub), expected)
+		self.assertEqual(before, {p: (p.lstat().st_mode, p.lstat().st_mtime_ns) for p in parent.rglob("*")})
+		for name, directory in (("p01", True), ("p01.txt", False)):
+			path = parent / name
+			path.mkdir() if directory else path.write_text("p01", encoding="utf-8")
+			group = shorts.read_state(self.hub)
+			self.assertEqual(group["status"], "확인 불가")
+			self.assertEqual(group["items"], expected["items"])
+			path.rmdir() if directory else path.unlink()
 
 	def test_state_skips_wrong_schema_and_hard_links_without_modifying_files(self):
 		self.assertEqual(actions.apply(self.payload)[0], 200)

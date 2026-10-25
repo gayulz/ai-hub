@@ -3,9 +3,25 @@
 	function init(){
 		const bridge=window.officeBridge,esc=bridge.esc,$=id=>document.getElementById(id);
 		const dialog=$('shorts-dialog'),body=$('shorts-body'),next=$('shorts-next'),previous=$('shorts-previous');
-		let config,callbacks,cards=[],answers={},id='',index=0,depth=0,base=null,dirty=false,busy=false,exiting=false,cleaning=false,outside=false;
+		let config,callbacks,cards=[],answers={},id='',index=0,depth=0,base=null,dirty=false,busy=false,exiting=false,cleaning=false,outside=false,editing=false,cleanupTimer;
 		const current=()=>cards[index],answer=key=>answers[key],length=value=>Array.from(value||'').length;
-		const marker=()=>({shorts:{id,card:current().id,depth}});
+		const storyMax=2000,storyCodePointMax=8000,segmenter=typeof Intl.Segmenter==='function'?new Intl.Segmenter('ko-KR',{granularity:'grapheme'}):null;
+		const marker=()=>({shorts:{id,card:current().id,depth,editing}});
+		function storyLength(value){
+			const counted=(value||'').replace(/\r\n/g,'\n');
+			return segmenter?Array.from(segmenter.segment(counted)).length:length(counted);
+		}
+		function storyReason(value){
+			const extra=storyLength(value)-storyMax;
+			if(extra>0)return '최대 2,000자까지 입력할 수 있어요. '+extra.toLocaleString('ko-KR')+'자를 줄여 주세요';
+			if(length(value)>storyCodePointMax)return '이모지·결합 문자가 많아 입력 한도를 넘어요. 줄여 주세요';
+			return /^[\s\p{Cf}]*$/u.test(value||'')?'한 글자 이상 적으면 다음으로 갈 수 있어요':'';
+		}
+		function storyFeedback(){
+			const value=answer('story')?.value||'',count=storyLength(value),extra=count-storyMax;
+			$('shorts-remaining').textContent=extra>0?'2,000자 초과 (+'+extra.toLocaleString('ko-KR')+'자)':count.toLocaleString('ko-KR')+' / 2,000자';
+			$('shorts-story-rule').textContent=storyReason(value)||'한 글자 이상 적으면 다음으로 갈 수 있어요';
+		}
 		function proposal(step){
 			if(step.proposal?.source==='story'){
 				const story=answer('story')?.value||'',sentence=story.match(/^[\s\S]*?(?:[.!?。！？](?=\s|$)|\n|$)/)?.[0]||story;
@@ -16,14 +32,16 @@
 		function valid(card){
 			const value=answer(card.id)?.value;
 			if(card.id==='source'||card.id==='save')return value?.kind==='preset'||(value?.kind==='path'&&!!value.value.trim()&&length(value.value)<=4096);
-			return typeof value==='string'&&!!value.trim()&&length(value)<=(card.id==='story'?2000:300);
+			if(card.id==='story')return typeof value==='string'&&!storyReason(value);
+			return typeof value==='string'&&!!value.trim()&&length(value)<=300;
 		}
 		function complete(){return cards.filter(c=>c.id!=='summary').every(c=>valid(c)&&answer(c.id)?.confirmed)}
 		function controls(){
-			const locked=busy||exiting;
+			const locked=busy||exiting,card=current(),story=card?.id==='story';
 			body.inert=locked;
 			body.querySelectorAll('button,textarea,input,summary').forEach(el=>{el.disabled=locked});
-			previous.disabled=locked||depth<=1;next.disabled=locked||(current()?.id==='summary'?!complete():!valid(current()));
+			previous.disabled=locked||depth<=1;next.disabled=locked||(!story&&(card?.id==='summary'?!complete():!valid(card)));
+			next.setAttribute('aria-disabled',String(next.disabled||(story&&!valid(card))));
 			$('shorts-close').disabled=busy;$('shorts-footer').hidden=exiting;
 			dialog.setAttribute('aria-busy',String(busy));
 		}
@@ -67,25 +85,34 @@
 			$('shorts-progress').setAttribute('aria-valuetext',(index+1)+' / '+cards.length+' · '+card.label);
 			$('shorts-bar').style.width=((index+1)/cards.length*100)+'%';
 			if(card.id==='story'){
-				body.innerHTML='<label for="shorts-story">영상으로 만들 이야기를 적어 주세요.</label><p id="shorts-story-hint" class="shorts-notice">회사·서비스 이름, 비밀값, 이메일·홈 경로는 적지 마세요. 질문은 고정 목록으로 진행됩니다.</p><textarea id="shorts-story" rows="6" maxlength="2000" aria-describedby="shorts-story-hint shorts-remaining"></textarea><p id="shorts-remaining" class="shorts-notice"></p>';
+				body.innerHTML='<label for="shorts-story">영상으로 만들 이야기를 적어 주세요.</label><p id="shorts-story-hint" class="shorts-notice">최근 겪은 일, 생활 꿀팁, 소개하고 싶은 장소나 물건 등 무엇이든 좋아요. 완성된 대본이 아니어도 괜찮아요.</p><p id="shorts-story-warning" class="shorts-notice">회사·서비스 이름, 비밀값, 이메일·홈 경로는 적지 마세요. 질문은 고정 목록으로 진행됩니다.</p><textarea id="shorts-story" rows="6" aria-describedby="shorts-story-hint shorts-story-warning shorts-story-rule shorts-remaining"></textarea><p id="shorts-story-rule" class="shorts-notice"></p><p id="shorts-remaining" class="shorts-notice"></p>';
 				$('shorts-story').value=answer('story')?.value||'';
 			}else if(card.id==='source'||card.id==='save'){
 				body.innerHTML=folderHTML(card);$('shorts-path').value=answer(card.id)?.value?.kind==='path'?answer(card.id).value.value:'';
 			}else if(card.id==='summary')body.innerHTML=summaryHTML();
 			else{body.innerHTML=conditionHTML(card);$('shorts-value').value=answer(card.id)?.value||''}
-			if($('shorts-remaining'))$('shorts-remaining').textContent=((card.id==='story'?2000:300)-length(answer(card.id)?.value))+'자 남음';
-			next.textContent=card.id==='summary'?'접수 확정':answer(card.id)?.needs?'확정':'다음';
+			if(card.id==='story')storyFeedback();
+			else if($('shorts-remaining'))$('shorts-remaining').textContent=(300-length(answer(card.id)?.value))+'자 남음';
+			next.textContent=card.id==='summary'?'접수 확정':editing||answer(card.id)?.needs?'확정':'다음';
 			$('shorts-status').textContent='';controls();
 			if(focus){body.scrollTop=0;$('shorts-title').focus({preventScroll:true})}
 		}
-		function navigate(key){
+		function navigate(key,edit=false){
 			const target=cards.findIndex(c=>c.id===key);if(target<0)return;
-			index=target;depth++;history.pushState(marker(),'');render();
+			index=target;editing=edit;
+			// 앞쪽 기록을 남겨 뒤로 가기와 닫기 정리에 필요한 깊이를 제한한다.
+			if(depth<30){depth++;history.pushState(marker(),'')}else history.replaceState(marker(),'');
+			render();
 		}
-		function truncate(){cleaning='trim';history.pushState(base,'');history.back()}
+		function endCleanup(){clearTimeout(cleanupTimer);cleaning=false}
+		function cleanHistory(stage){
+			clearTimeout(cleanupTimer);cleaning=stage;
+			cleanupTimer=setTimeout(()=>{history.replaceState(base,'');endCleanup()},500);
+		}
+		function truncate(){cleanHistory('trim');history.pushState(base,'');history.back()}
 		function finish(){
 			const remaining=depth;dialog.close();body.replaceChildren();exiting=false;id='';
-			if(remaining){cleaning='return';history.go(-remaining)}else truncate();
+			if(remaining){cleanHistory('return');history.go(-remaining)}else truncate();
 			if(callbacks.focus?.isConnected)callbacks.focus.focus({preventScroll:true});else $('close-panel').focus();
 		}
 		function requestClose(){
@@ -95,9 +122,13 @@
 		}
 		async function submit(){
 			controls();if(next.disabled)return;
+			if(current().id==='story'){
+				const reason=storyReason(answer('story')?.value);
+				if(reason){$('shorts-status').textContent=reason;$('shorts-story').focus();return}
+			}
 			if(current().id!=='summary'){
 				answers[current().id]={...answer(current().id),accepted:answer(current().id).value,confirmed:true,needs:false};
-				navigate(cards[index+1].id);return;
+				navigate(editing?'summary':cards[index+1].id);return;
 			}
 			busy=true;controls();$('shorts-status').textContent='접수 확인 중';
 			const payload={action:'shorts_intake',id,story:answer('story').value,source:answer('source').value,save:answer('save').value,conditions:config.steps.map(s=>({id:s.id,value:answer(s.id).value}))};
@@ -121,7 +152,7 @@
 		}
 		function open(data,options){
 			if(cleaning||dialog.open||document.querySelector('dialog[open]'))return;
-			config=data;callbacks=options;answers={};index=0;depth=1;dirty=false;busy=false;exiting=false;outside=false;
+			config=data;callbacks=options;answers={};index=0;depth=1;dirty=false;busy=false;exiting=false;outside=false;editing=false;
 			id='s-'+crypto.randomUUID().replace(/-/g,'');
 			cards=[{id:'story',label:'이야기'},{id:'source',label:'소스 폴더'},...config.steps,{id:'save',label:'저장 폴더'},{id:'summary',label:'최종 요약'}];
 			base=history.state;history.pushState(marker(),'');$('shorts-exit').hidden=true;$('meeting-popover').hidden=true;
@@ -130,10 +161,14 @@
 		body.onclick=e=>{
 			if(busy||exiting)return;
 			const button=e.target.closest('button');if(!button||button.disabled)return;
-			if(button.dataset.shortsEdit){navigate(button.dataset.shortsEdit);return}
+			if(button.dataset.shortsEdit){navigate(button.dataset.shortsEdit,true);return}
 			if(button.dataset.shortsPreset){setAnswer(current().id,{kind:'preset',id:button.dataset.shortsPreset});render(false);[...body.querySelectorAll('[data-shorts-preset]')].find(b=>b.dataset.shortsPreset===button.dataset.shortsPreset)?.focus();return}
 			const value=button.dataset.shortsChip??(button.dataset.shortsProposal!==undefined?proposal(current()):null);
-			if(value!==null){setAnswer(current().id,value,value);render(false);$('shorts-value').focus()}
+			if(value!==null){
+				const selector=button.dataset.shortsChip!==undefined?'[data-shorts-chip]':'[data-shorts-proposal]';
+				setAnswer(current().id,value,value);render(false);
+				[...body.querySelectorAll(selector)].find(b=>b.dataset.shortsChip===button.dataset.shortsChip)?.focus();
+			}
 		};
 		body.oninput=e=>{
 			if(busy||exiting)return;
@@ -144,8 +179,10 @@
 			else return;
 			body.querySelectorAll('[aria-pressed]').forEach(button=>{button.setAttribute('aria-pressed','false');button.setAttribute('aria-expanded','false')});
 			if($('shorts-difference'))$('shorts-difference').hidden=true;
-			if($('shorts-remaining'))$('shorts-remaining').textContent=((current().id==='story'?2000:300)-length(field.value))+'자 남음';
+			if(field.id==='shorts-story'){storyFeedback();$('shorts-status').textContent=''}
+			else if($('shorts-remaining'))$('shorts-remaining').textContent=(300-length(field.value))+'자 남음';
 		};
+		body.oncompositionend=e=>{if(e.target.id==='shorts-story')body.oninput(e)};
 		previous.onclick=()=>{if(!previous.disabled)history.back()};next.onclick=submit;$('shorts-close').onclick=requestClose;
 		$('shorts-discard').onclick=finish;
 		$('shorts-stay').onclick=()=>{exiting=false;$('shorts-exit').hidden=true;if(outside){outside=false;depth=1;history.pushState(marker(),'')}controls();$('shorts-title').focus()};
@@ -153,10 +190,10 @@
 		dialog.addEventListener('focusin',()=>viewport());
 		window.addEventListener('popstate',e=>{
 			if(cleaning==='return'){truncate();return}
-			if(cleaning==='trim'){cleaning=false;return}
+			if(cleaning==='trim'){endCleanup();return}
 			if(!dialog.open)return;
 			if(e.state?.shorts?.id===id){
-				depth=e.state.shorts.depth;index=cards.findIndex(c=>c.id===e.state.shorts.card);render();
+				depth=e.state.shorts.depth;editing=e.state.shorts.editing===true;index=cards.findIndex(c=>c.id===e.state.shorts.card);render();
 			}else{depth=0;outside=true;requestClose()}
 		});
 		window.addEventListener('keydown',e=>{if(dialog.open){e.stopImmediatePropagation();if(e.key==='Escape'){e.preventDefault();requestClose()}}},true);

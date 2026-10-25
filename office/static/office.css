@@ -302,6 +302,7 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .shorts-footer{position:sticky;bottom:0;display:flex;justify-content:space-between;gap:12px;flex:none;min-width:0;padding:8px 0 max(8px,env(safe-area-inset-bottom));background:var(--paper);border-top:1px solid var(--line)}
 .shorts-footer[hidden],.shorts-exit[hidden]{display:none}
 .shorts-footer button{flex:1;text-align:center;max-width:100%}
+#shorts-next[aria-disabled=true]:not(:disabled){opacity:.55;cursor:not-allowed;filter:none}
 .shorts-exit{flex:none;padding:12px;background:var(--soft);color:var(--ink)}
 .shorts-exit button{margin:4px}
 .shorts-recent{display:block;min-width:0;overflow-wrap:anywhere}

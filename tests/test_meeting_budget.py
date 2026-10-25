@@ -135,7 +135,8 @@ class MeetingBudgetTest(MeetingCase):
 			state = self.start(self.analyze())
 		self.assertEqual(meeting.MAX_CALLS, 14)
 		self.assertEqual(meeting.MAX_SECONDS, 1800)
-		self.assertEqual(meeting.SUMMARY_SECONDS, 180)
+		self.assertEqual(meeting.SUMMARY_SECONDS, 420)
+		self.assertEqual(meeting.CALL_SECONDS, 360)
 		self.assertEqual(state["status"], "budget_exhausted")
 		self.assertIsNotNone(state["summary"])
 		self.assertEqual(len(state["calls"]), 14)
@@ -215,13 +216,13 @@ class MeetingBudgetTest(MeetingCase):
 			with mock.patch("orchestrator.providers.call", side_effect=speech):
 				state["rounds"]["1"].append(session.ask("round1", "backend"))
 			self.assertEqual(self.ai.calls[-1][1]["timeout"], 31)
-			self.assertEqual(meeting.MAX_SECONDS - state["active_seconds"], 180)
+			self.assertEqual(meeting.MAX_SECONDS - state["active_seconds"], meeting.SUMMARY_SECONDS)
 			with mock.patch("orchestrator.providers.call") as call:
 				self.assertIsNone(session.ask("round1", "qa"))
 				call.assert_not_called()
 			session.summarize()
 		self.assertIsNotNone(state["summary"])
-		self.assertEqual(self.ai.calls[-1][1]["timeout"], 180)
+		self.assertEqual(self.ai.calls[-1][1]["timeout"], meeting.SUMMARY_SECONDS)
 		self.assertEqual(state["calls"][-1]["phase"], "summary")
 
 	def test_successful_retry_also_counts_its_active_time(self):
@@ -239,7 +240,26 @@ class MeetingBudgetTest(MeetingCase):
 		self.assertEqual(state["status"], "completed")
 		self.assertEqual(len(state["calls"]), 7)
 		self.assertEqual(state["active_seconds"], 14)
-		self.assertEqual(self.ai.calls[2][1]["timeout"], self.ai.calls[1][1]["timeout"] - 2)
+		# 남은 시간이 넉넉하면 재시도도 호출당 상한만 받는다. 첫 시도가 쓴 시간은 위 active_seconds 로 센다
+		self.assertEqual(self.ai.calls[2][1]["timeout"], meeting.CALL_SECONDS)
+
+	def test_one_slow_participant_call_cannot_take_all_remaining_time_from_the_summary(self):
+		state = self.analyze()
+		clock = [0.0]
+		def hang(plan, **kwargs):
+			clock[0] += kwargs["timeout"]
+			raise ProviderError("timeout", "합성 시간 초과")
+		with mock.patch("orchestrator.meeting.time.monotonic", side_effect=lambda: clock[0]), \
+				self.engine.store.locked(state["id"]) as record:
+			state.update(status="running", phase="round1", active_seconds=100)
+			state["rounds"]["1"] = [{"role": "qa", "method": "작은 범위부터 점검한다", "risks": [], "changes": [], "questions": []}]
+			session = meeting.Session(record, state, meeting.Rules())
+			with mock.patch("orchestrator.providers.call", side_effect=hang):
+				self.assertIsNone(session.ask("round1", "backend"))
+			self.assertTrue(all(c["timeout"] <= meeting.CALL_SECONDS for c in state["calls"] if c["phase"] == "round1"))
+			self.assertGreaterEqual(meeting.MAX_SECONDS - state["active_seconds"], meeting.SUMMARY_SECONDS)
+			session.summarize()
+		self.assertGreaterEqual(self.ai.calls[-1][1]["timeout"], meeting.SUMMARY_SECONDS)
 
 	def test_retry_checkpoint_loses_time_budget_but_keeps_the_absence_reason(self):
 		state = self.analyze()

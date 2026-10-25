@@ -12,7 +12,7 @@ from vaultfilter.public import Rules
 
 from . import meeting_prompts as prompts, meeting_record as records, providers, targets
 from . import question_cards as cards
-from .meeting_record import MAX_CALLS, MAX_SECONDS, SUMMARY_SECONDS
+from .meeting_record import CALL_SECONDS, MAX_CALLS, MAX_SECONDS, SUMMARY_SECONDS
 
 TERMINAL = ("completed", "budget_exhausted", "questions_exhausted")
 
@@ -170,7 +170,7 @@ class Session:
 				return None
 			cards.text(prompt, "회의 입력", prompts.MAX_PROMPT_CHARS, rules=self.rules)
 			entry = {"phase": phase, "role": role or "moderator", "plan": plan.id, "model": plan.model,
-				"ok": None, "timeout": remaining - reserve * SUMMARY_SECONDS}
+				"ok": None, "timeout": min(remaining - reserve * SUMMARY_SECONDS, CALL_SECONDS if reserve else remaining)}
 			if attempt:
 				entry["retry"] = True
 			s["calls"].append(entry)

@@ -18,8 +18,10 @@ from collector.backfill_common import clean, safe
 from collector.config import home, load_sources
 
 MAX_CALLS, MAX_SECONDS = 14, 1800
-# 정리 호출에 실제 소요 시간과 저장 여유를 남긴다.
-SUMMARY_SECONDS = 180
+# 정리 호출에 실제 소요 시간과 저장 여유를 남긴다(큰 회의의 정리는 180초로 모자랐다).
+SUMMARY_SECONDS = 420
+# 참석자·분석 호출 하나가 남은 시간을 모두 쓰면 정리 단계가 굶는다. 한 번의 호출은 이 시간까지만 쓴다.
+CALL_SECONDS = 360
 ID = re.compile(r"m-[a-f0-9]{32}")
 FILES = ("meeting.json", "minutes.md", ".lock")
 STATUSES = ("analyzing", "participants_pending", "questions_pending", "answers_pending", "running",

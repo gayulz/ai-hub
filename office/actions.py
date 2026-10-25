@@ -17,7 +17,7 @@ from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator import targets
 
-from . import chats, drafts, meetings
+from . import chats, drafts, meetings, shorts
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -116,7 +116,7 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(payload, dict):
 			raise ValueError
 		action = payload.get("action")
-		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS):
+		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
@@ -125,6 +125,8 @@ def apply(payload) -> tuple[int, dict]:
 			keys = meetings.KEYS[action]
 		if action in chats.ACTIONS:
 			keys = chats.KEYS[action]
+		if action in shorts.ACTIONS:
+			keys = shorts.KEYS
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
@@ -145,6 +147,9 @@ def apply(payload) -> tuple[int, dict]:
 		return 400, result(False, "허용된 동작과 올바른 식별자가 필요합니다.")
 	root = home()
 	try:
+		if action in shorts.ACTIONS:
+			with shorts.directory(root):
+				pass
 		with private_file(root, "run", "office-action.lock") as lock:
 			try:
 				fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -159,6 +164,9 @@ def apply(payload) -> tuple[int, dict]:
 			if action in chats.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
 					return chats.execute(root, payload, audit, REPO)
+			if action in shorts.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return shorts.execute(root, payload, audit)
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

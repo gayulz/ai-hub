@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from collector.config import ConfigError, home
 from orchestrator import targets
 
-from . import agents, chats, drafts, meetings, roles, telegram_bridge
+from . import agents, chats, drafts, meetings, roles, shorts, telegram_bridge
 from .common import identifier, normal, read_toml, text, unavailable
 from .jobs import read_jobs
 from .ledger import read_action_activity, read_ledger, read_r1
@@ -154,6 +154,7 @@ def build_state(now: datetime | None = None) -> dict:
 		for item in runs["items"] if item.get("public") and item.get("at")]
 	board_items.sort(key=lambda item: item["at"], reverse=True)
 	return {"updated": now.isoformat(timespec="seconds"), "agents": people, "jobs": jobs, "dev_targets": dev_targets,
+		"shorts": shorts.read_state(root),
 		**meeting_state, **chat_state, "questions": {**meeting_state["questions"], "status": question_status, "items": question_items},
 		"blog_dashboard": blog_dashboard(), "telegram": telegram_bridge.status(),
 		"dev_plans": plans.get("orchestration", {"implementer": None, "reviewer": None}),

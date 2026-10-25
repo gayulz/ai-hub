@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collector.config import home
 
-from . import actions, chats, drafts, meetings, remote
+from . import actions, chats, drafts, meetings, remote, shorts
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
@@ -87,8 +87,8 @@ class Handler(BaseHTTPRequestHandler):
 			reject(400, "올바른 본문 길이가 필요합니다.")
 			return
 		length_text = lengths[0].lstrip("0") or "0"
-		if len(length_text) > 5 or int(length_text) > 16384:
-			reject(413, "본문은 16384바이트 이하여야 합니다.")
+		if len(length_text) > 6 or int(length_text) > 131072:
+			reject(413, "본문 길이가 허용 범위를 넘었습니다.")
 			return
 		length = int(length_text)
 		tokens = self.headers.get_all("X-Office-Token", [])
@@ -101,7 +101,11 @@ class Handler(BaseHTTPRequestHandler):
 				raise ValueError
 			payload = json.loads(body.decode("utf-8"))
 		except (ValueError, UnicodeError, RecursionError):
-			reject(400, "올바른 JSON 본문이 필요합니다.")
+			reject(413 if length > 16384 else 400, "본문 길이 또는 JSON 형식을 확인해 주세요.")
+			return
+		# 모든 조건의 최대 길이를 받는 접수만 확장하고 기존 동작의 한도는 유지한다.
+		if length > 16384 and not (isinstance(payload, dict) and payload.get("action") == "shorts_intake"):
+			reject(413, "본문은 16384바이트 이하여야 합니다.")
 			return
 		code, payload = actions.apply(payload)
 		self.respond_json(code, payload)
@@ -117,6 +121,11 @@ class Handler(BaseHTTPRequestHandler):
 			self.respond(200, payload, "application/json; charset=utf-8")
 		elif target == "/api/session":
 			self.respond_json(200, {"token": self.server.office_token})
+		elif target == "/api/shorts/steps":
+			try:
+				self.respond_json(200, shorts.steps())
+			except OSError:
+				self.respond_json(503, {"message": "폴더 선택지를 확인할 수 없습니다."})
 		elif target == "/api/meeting" or target.startswith("/api/meeting?"):
 			match = re.fullmatch(r"/api/meeting\?id=(m-[a-f0-9]{32})", target)
 			if not match:
@@ -145,11 +154,12 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(200, {"ok": True, "draft": drafts.card(row, data)})
 			except (OSError, ValueError, TypeError, KeyError, RecursionError):
 				self.respond_json(409, actions.result(False, "대기 중인 초안을 확인할 수 없습니다."))
-		elif target in ("/", "/office.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/office.css", "/scene.json"):
+		elif target in ("/", "/office.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/shorts.js", "/shorts_wizard.js", "/office.css", "/scene.json"):
 			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
 				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/meeting.js": ("meeting.js", "text/javascript"),
 				"/meeting_panel.js": ("meeting_panel.js", "text/javascript"), "/meeting_scene.js": ("meeting_scene.js", "text/javascript"),
 				"/chat.js": ("chat.js", "text/javascript"), "/chat_dock.js": ("chat_dock.js", "text/javascript"),
+				"/shorts.js": ("shorts.js", "text/javascript"), "/shorts_wizard.js": ("shorts_wizard.js", "text/javascript"),
 				"/office.css": ("office.css", "text/css"),
 				"/scene.json": ("scene.json", "application/json")}[target]
 			self.respond(200, (STATIC / name).read_bytes(), kind + "; charset=utf-8")

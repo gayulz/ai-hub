@@ -304,6 +304,7 @@ function showPerson(id,focus=true){
 	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
 	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
 	if(a.name==='PM')$('panel-body').innerHTML+=window.officeChat?.person()||'';
+	if(a.department==='shorts'&&a.name==='PD')$('panel-body').innerHTML+=window.officeShorts?.person()||'';
 	$('panel-body').innerHTML+=blogButton(a.blog_path,a.name);
 	const c=$('portrait').getContext('2d');c.imageSmoothingEnabled=false;c.scale(1.6,1.6);art.drawActor(c,{...a,x:28,y:56,walking:false},0);
 	if(focus&&!fitMode){center(a.x,a.y);follow=false}
@@ -351,7 +352,7 @@ window.officeBridge={state:()=>state,token:()=>officeToken,toast,esc,people:()=>
 	actors:()=>actors,routeFrom,walkable,chairs:()=>{const room=D.rooms.find(r=>r.id==='meeting');return room?D.props.filter(p=>p.type==='chair'&&contains(room,p.x,p.y)):[]},
 	tickHook(fn){tickHooks.add(fn);return()=>tickHooks.delete(fn)},reducedMotion:()=>reduced.matches,
 	openDevWith(text,target){
-		if(!officeToken||devBusy||applying||['dev-dialog','action-dialog','blog-dialog','meeting-dialog','chat-dialog'].some(id=>$(id).open))return false;
+		if(!officeToken||devBusy||applying||['dev-dialog','action-dialog','blog-dialog','meeting-dialog','chat-dialog','shorts-dialog'].some(id=>$(id).open))return false;
 		openDev('plan',document.activeElement);if(!$('dev-dialog').open)return false;
 		devOrigin=(D.people.find(p=>p.name===devRoles.plan)||D.people[0]).id;
 		$('dev-target').value=(devTargets().find(t=>t.id===target)||devTargets().find(t=>t.id==='ai-hub')||devTargets()[0]).id;

@@ -58,6 +58,14 @@
 		<div id="chat-composer" class="chat-composer"><label for="chat-text">PM에게 보내기</label><textarea id="chat-text" rows="2" maxlength="2000" aria-describedby="chat-remaining chat-send-reason" placeholder="Ctrl 또는 Cmd+Enter로 보내기"></textarea><div class="chat-compose-actions"><span id="chat-remaining">2000자 남음</span><button id="chat-send" class="apply-button" disabled>보내기</button></div><p id="chat-send-reason" role="status" aria-live="polite"></p></div>
 	</div>
 </section>
+<dialog id="shorts-dialog" class="action-dialog shorts-dialog" aria-labelledby="shorts-title">
+	<header class="shorts-head"><h2 id="shorts-title" tabindex="-1">제작 요청</h2><button id="shorts-close" class="shorts-chip">닫기</button></header>
+	<p id="shorts-count" class="shorts-notice" aria-live="polite"></p>
+	<div id="shorts-progress" class="shorts-progress" role="progressbar" aria-label="접수 진행" aria-valuemin="1" aria-valuemax="17" aria-valuenow="1"><i id="shorts-bar"></i></div>
+	<div id="shorts-body" class="shorts-body"></div><p id="shorts-status" class="shorts-notice" role="status" aria-live="polite"></p>
+	<section id="shorts-exit" class="shorts-exit" aria-label="입력 닫기 확인" hidden><p>입력 중인 접수를 닫을까요? 확정하지 않은 답은 저장되지 않습니다.</p><button id="shorts-stay" class="shorts-chip">계속 입력</button><button id="shorts-discard" class="shorts-chip">닫기</button></section>
+	<footer id="shorts-footer" class="shorts-footer"><button id="shorts-previous" class="shorts-chip" disabled>이전</button><button id="shorts-next" class="apply-button" disabled>다음</button></footer>
+</dialog>
 <script src="/pixel-art.js" defer></script>
 <script src="/office.js" defer></script>
 <script src="/meeting.js" defer></script>
@@ -65,4 +73,6 @@
 <script src="/meeting_panel.js" defer></script>
 <script src="/chat.js" defer></script>
 <script src="/chat_dock.js" defer></script>
+<script src="/shorts_wizard.js" defer></script>
+<script src="/shorts.js" defer></script>
 </body></html>

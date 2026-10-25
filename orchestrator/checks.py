@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import shlex
+import signal
 import subprocess
+import tempfile
 from pathlib import Path
 
 from vaultfilter.store import Dictionary
@@ -13,6 +16,7 @@ from vaultfilter.store import Dictionary
 MAX_LINES = 500
 NAME_KINDS = ("회사명", "서비스명", "사람이름")
 DEFAULT_TEST = "python3 -m unittest discover -s tests"
+TEST_SECONDS, KILL_GRACE_SECONDS = 900, 5
 
 
 class CommitRejected(RuntimeError):
@@ -109,14 +113,41 @@ def verify(worktree: Path, base: str, request: dict, outside: list[str]) -> list
 	# 파일에 원래 있던 이름은 이번 변경의 잘못이 아니다(공개 저장소 push 검사도 새 줄만 본다)
 	leaked = [p for p in existing if any(n.search(p) or n.search(_added_lines(worktree, base, p)) for n in names)]
 	results.append({"name": "회사·서비스 이름", "ok": not leaked, "detail": ", ".join(leaked)})
-	command = request.get("test_command", DEFAULT_TEST)
-	try:
-		test = subprocess.run(shlex.split(command), cwd=worktree, capture_output=True, text=True, timeout=900)
-		tail = (test.stdout + test.stderr).strip().splitlines()[-15:]
-		results.append({"name": "테스트", "ok": test.returncode == 0, "detail": "\n".join(tail)})
-	except subprocess.TimeoutExpired:
-		results.append({"name": "테스트", "ok": False, "detail": "시간 초과(900초)"})
+	results.append(run_tests(request.get("test_command", DEFAULT_TEST), worktree))
 	return results
+
+
+def _end_group(process: subprocess.Popen, sig: int) -> None:
+	try:
+		os.killpg(process.pid, sig)
+	except (ProcessLookupError, PermissionError):
+		pass
+
+
+def run_tests(command: str, cwd: Path) -> dict:
+	"""시험을 새 세션에서 돌리고, 끝났거나 시간 초과가 되면 그 세션에 남은 프로세스(브라우저 등)까지 끝낸다.
+
+	시험이 띄운 하위 프로세스가 시험 프로세스보다 오래 살아 고아가 되면 램을 계속 차지한다. 출력은 파이프가 아니라
+	임시 파일로 받는다(남은 하위 프로세스가 파이프를 쥐고 있어도 시험 프로세스가 끝나면 기다리지 않는다).
+	"""
+	with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as output:
+		process = subprocess.Popen(shlex.split(command), cwd=cwd, stdout=output, stderr=subprocess.STDOUT,
+			start_new_session=True)
+		try:
+			process.wait(timeout=TEST_SECONDS)
+		except subprocess.TimeoutExpired:
+			_end_group(process, signal.SIGTERM)
+			try:
+				process.wait(timeout=KILL_GRACE_SECONDS)
+			except subprocess.TimeoutExpired:
+				pass
+			_end_group(process, signal.SIGKILL)
+			process.wait()
+			return {"name": "테스트", "ok": False, "detail": f"시간 초과({TEST_SECONDS}초)"}
+		_end_group(process, signal.SIGKILL)  # 시험이 끝난 뒤에도 남은 하위 프로세스를 정리한다
+		output.seek(0)
+		tail = output.read().strip().splitlines()[-15:]
+	return {"name": "테스트", "ok": process.returncode == 0, "detail": "\n".join(tail)}
 
 
 def checks_passed(checks: list[dict]) -> bool:

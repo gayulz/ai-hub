@@ -130,6 +130,30 @@ class MeetingQuestionsTest(MeetingCase):
 			cards.accept(card, card["id"], [answer(kind="delegate", value="위임합니다")], "cli", rules)
 		self.assertEqual(card["status"], "waiting")
 
+	def test_recommended_written_as_label_is_mapped_to_the_option_id_only_when_unique(self):
+		rules = Rules()
+		for written in ("작게", " 작게 ", "A"):
+			card = cards.create([{**question(), "recommended": written}], 1, "analysis", rules)
+			self.assertEqual(card["questions"][0]["recommended"], "a", written)
+		prefixed = question()
+		prefixed["options"][0]["reply"], prefixed["options"][1]["reply"] = "A안: 작게 진행", "B안: 넓게 진행"
+		for written, expected in (("A안", "a"), ("B안", "b")):
+			card = cards.create([{**prefixed, "recommended": written}], 1, "analysis", rules)
+			self.assertEqual(card["questions"][0]["recommended"], expected)
+		ambiguous = question()
+		for option in ambiguous["options"]:
+			option["reply"] = "안: 같은 시작"
+		with self.assertRaises(ValueError):  # 회신 문구 첫머리가 두 선택지에 걸리면 고르지 않는다
+			cards.create([{**ambiguous, "recommended": "안"}], 1, "analysis", rules)
+		same = question()
+		for option in same["options"]:
+			option["label"] = "같은 라벨"
+		for written in ("같은 라벨", "없는 값", ""):
+			with self.assertRaises(ValueError):
+				cards.create([{**same, "recommended": written}], 1, "analysis", rules)
+		with self.assertRaises(ValueError):
+			cards.create([{**question(), "recommended": ["a"]}], 1, "analysis", rules)
+
 	def test_invalid_option_fields_and_incomplete_bundle_are_atomic(self):
 		rules = Rules()
 		for change in ({"reason": ""}, {"recommended": "absent"}, {"allow_delegate": "yes"}):

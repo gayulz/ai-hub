@@ -61,9 +61,25 @@ def validate_questions(value, rules, *, minimum=0):
 			options.add(key)
 			for field in ("label", "difference", "reply"):
 				text(option[field], field, 500, rules=rules)
-		if q["recommended"] not in options:
-			raise ValueError("추천 선택지가 목록에 없습니다")
+		if not isinstance(q["recommended"], str) or q["recommended"] not in options:
+			q["recommended"] = _recommended_id(q["options"], q["recommended"])
 	return value
+
+
+def _recommended_id(options, value):
+	"""AI가 추천을 id 대신 라벨·'A안'으로 적은 경우, 라벨·대소문자만 다른 id·회신 문구의 첫머리 표기가 한 선택지로만 정해질 때 id 로 바꾼다."""
+	if isinstance(value, str) and value.strip():
+		wanted = value.strip()
+
+		def reply_starts_with(option):
+			reply = option["reply"].strip()
+			return reply.startswith(wanted) and (len(reply) == len(wanted) or not reply[len(wanted)].isalnum())
+
+		for same in (lambda o: o["label"].strip() == wanted, lambda o: o["id"].casefold() == wanted.casefold(), reply_starts_with):
+			found = [o["id"] for o in options if same(o)]
+			if len(found) == 1:
+				return found[0]
+	raise ValueError("추천 선택지가 목록에 없습니다")
 
 
 def create(questions, turn: int, source: str, rules) -> dict:

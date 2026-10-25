@@ -177,6 +177,26 @@ class ChatFlowTest(ChatCase):
 		self.assertNotIn("xyz", json.dumps(state, ensure_ascii=False))
 		self.assertNotIn("원응답", json.dumps(state, ensure_ascii=False))
 
+	def test_recommendation_written_as_label_is_accepted_and_stored_as_the_option_id(self):
+		state = self.new()
+		state = self.engine.send(state["id"], "범위를 정해 주세요")
+		self.ai.replies = [response(questions=[{**question(), "recommended": "작게"}])]
+		state = self.engine.send(state["id"], "다시 묻습니다")
+		self.assertEqual((state["failure"], state["calls"]), ("", 2))
+		self.assertEqual(state["cards"][-1]["questions"][0]["recommended"], "a")
+
+	def test_validation_retry_tells_the_ai_which_rule_failed_but_not_its_raw_reply(self):
+		state = self.new()
+		bad = response(reply="검사에 걸릴 원응답 문장", questions=[{**question(), "recommended": "없는 선택지"}])
+		self.ai.replies = [bad, response()]
+		state = self.engine.send(state["id"], "질문을 만들어 주세요")
+		retry = context(self.ai.calls[-1][1]["prompt"])["retry_reason"]
+		self.assertIn(chat.REJECTED, retry)
+		self.assertIn("추천 선택지가 목록에 없습니다", retry)
+		self.assertNotIn("검사에 걸릴 원응답 문장", self.ai.calls[-1][1]["prompt"])
+		self.assertEqual((state["failure"], state["calls"]), ("", 2))
+		self.assertIn("recommended", chat_prompts.INSTRUCTION)
+
 	def test_input_rejection_costs_zero_calls_and_saves_nothing(self):
 		state = self.new()
 		for text in ("", " ", "글" * 2001, "acme 자료", "xyz 서비스", "ghp_" + "a" * 36,

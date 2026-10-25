@@ -34,7 +34,7 @@ class OfficeChatsHTTPTest(ChatCase):
 		status, headers, body = self.get()
 		self.assertEqual(status, 200)
 		value = json.loads(body)
-		self.assertEqual(set(value), {"id", "status", "target", "plan", "tool", "turns", "card", "dev_draft", "needs_user", "calls", "seconds", "failure", "updated"})
+		self.assertEqual(set(value), {"id", "status", "target", "plan", "tool", "turns", "card", "dev_draft", "needs_user", "calls", "seconds", "failure", "failure_reason", "updated"})
 		self.assertEqual(value["turns"], state["turns"])
 		self.assertEqual(set(value["card"]), {"id", "turn", "status", "questions", "summary"})
 		self.assertEqual(value["card"]["id"], CARD)
@@ -68,6 +68,7 @@ class OfficeChatsHTTPTest(ChatCase):
 			self.assertNotIn(raw, body.decode())
 		self.assertIn("[경로 생략]", body.decode())
 		self.assertEqual(json.loads(body)["failure"], "대화를 마치지 못했습니다. 상태를 확인해 주세요.")
+		self.assertEqual(json.loads(body)["failure_reason"], "")  # 엔진이 정한 분류 문구가 아니면 이유를 보내지 않는다
 
 	def test_bad_query_ids_missing_records_host_and_methods(self):
 		for path in ("/api/chat", "/api/chat?", "/api/chat?id=", "/api/chat?id=../other", "/api/chat?id=" + CHAT.upper(),

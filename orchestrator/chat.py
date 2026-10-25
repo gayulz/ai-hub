@@ -185,14 +185,14 @@ class Engine:
 			return self._exchange(record, state, history, text, source, rules, plan, selected.path)
 
 	def _exchange(self, record, state, history, text, source, rules, plan, cwd):
-		session, reason = _session(state["session"], rules), ""
+		session, reason, hint = _session(state["session"], rules), "", ""
 		state.update(status="busy", failure="")
 		for attempt in range(2):
 			state["calls"] += 1
 			record.save(state)
 			started, elapsed = time.monotonic(), None
 			try:
-				reply = providers.chat_call(plan, prompt=prompts.prompt(text, history, resume=session is not None, reason=reason),
+				reply = providers.chat_call(plan, prompt=prompts.prompt(text, history, resume=session is not None, reason=reason + hint),
 					cwd=cwd, schema=prompts.SCHEMA, timeout=TIMEOUT, session=session)
 				if type(reply.seconds) in (int, float) and math.isfinite(reply.seconds) and reply.seconds >= 0:
 					elapsed = reply.seconds
@@ -200,11 +200,13 @@ class Engine:
 				card = cards.create(value["questions"], len(state["cards"]) + 1, "pm", rules) if value["questions"] else None
 				session = _session(reply.session, rules)
 			except providers.ProviderError as exc:
-				reason = PROVIDER_FAILURES.get(exc.kind, "대화 도구 호출을 마치지 못했습니다")
-			except (ValueError, TypeError, KeyError, RecursionError):
+				reason, hint = PROVIDER_FAILURES.get(exc.kind, "대화 도구 호출을 마치지 못했습니다"), ""
+			except (ValueError, TypeError, KeyError, RecursionError) as exc:
 				reason = REJECTED
+				# 우리 검사가 낸 짧은 문구만 재시도 안내에 붙인다(AI 응답 원문은 붙이지 않는다)
+				hint = ": " + str(exc) if isinstance(exc, ValueError) and 0 < len(str(exc)) <= 100 and "\n" not in str(exc) else ""
 			except Exception:
-				reason = "대화 도구 호출을 마치지 못했습니다"
+				reason, hint = "대화 도구 호출을 마치지 못했습니다", ""
 			else:
 				state["seconds"] += elapsed if elapsed is not None else time.monotonic() - started
 				state["turns"].append({"at": records.now(), "role": "assistant", "text": value["reply"], "source": source, "kind": "message"})

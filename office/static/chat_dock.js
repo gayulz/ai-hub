@@ -62,7 +62,7 @@
 				}
 				if(added&&follow)log.scrollTop=log.scrollHeight;
 				$('chat-needs-user').hidden=!row.needs_user;$('chat-needs-user').textContent=row.needs_user?'사용자 확인 필요: '+row.needs_user:'';
-				$('chat-failure').textContent=row.failure?'대화를 마치지 못했습니다. 상태를 확인하고 다시 보내 주세요.':'';
+				$('chat-failure').textContent=row.failure?'대화를 마치지 못했습니다. '+(typeof row.failure_reason==='string'&&row.failure_reason?'이유: '+row.failure_reason+'. ':'')+'상태를 확인하고 다시 보내 주세요.':'';
 				$('chat-question').hidden=row.status==='closed'||!['waiting','answered'].includes(row.card?.status);
 				$('chat-question').textContent=row.card?.status==='answered'?'답변 확인':'질문 카드에 답하기';
 				$('chat-to-dev').hidden=!row.dev_draft;

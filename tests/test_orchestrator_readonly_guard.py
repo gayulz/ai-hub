@@ -182,6 +182,27 @@ class ReadonlyGuardTest(unittest.TestCase):
 		self.assertIn("probe.txt", self.assert_write(lambda: self.call(self.repo)))
 		self.assertFalse((self.repo / "probe.txt").exists())
 
+	def test_codex_and_claude_changes_are_logged_not_failed_and_files_are_kept(self):
+		hub = self.root / "hub"
+		for tool in ("codex", "claude"):
+			for cwd in (self.repo, self.plain):
+				with self.subTest(tool=tool, cwd=cwd.name), mock.patch.dict(os.environ, {"AI_HUB_HOME": str(hub)}):
+					other = cwd / f"concurrent-{tool}.txt"
+					self.effect = lambda other=other: other.write_text("호출 중 다른 곳에서 만든 파일")
+					self.assertEqual(self.call(cwd, tool).data, self.data)
+					self.assertTrue(other.exists())  # 새 파일을 지우지 않는다
+		lines = (hub / "logs/readonly-guard.log").read_text(encoding="utf-8").splitlines()
+		self.assertEqual(len(lines), 4)
+		self.assertTrue(all("동시 편집일 수 있음" in line for line in lines))
+		self.assertEqual(stat.S_IMODE((hub / "logs/readonly-guard.log").stat().st_mode), 0o600)
+
+	def test_agy_still_fails_and_removes_new_files_while_codex_in_the_same_folder_does_not(self):
+		with mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.root / "hub")}):
+			probe = self.repo / "agy-probe.txt"
+			self.effect = lambda: probe.write_text("AGY가 만든 파일")
+			self.assertIn("agy-probe.txt", self.assert_write(lambda: self.call(self.repo, "agy")))
+			self.assertFalse(probe.exists())
+
 	def test_unchanged_call_succeeds_for_all_tools_and_folders(self):
 		for cwd in (self.repo, self.plain):
 			for tool in ("agy", "codex", "claude"):

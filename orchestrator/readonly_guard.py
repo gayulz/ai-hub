@@ -6,11 +6,18 @@ import hashlib
 import os
 import stat
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from collector.config import home
+
 MAX_DEPTH = 8
 MAX_ENTRIES = 20_000
+# plan 모드에서도 파일을 만드는 도구만 변경을 실패로 처리한다. Codex(-s read-only)·Claude(허용 도구 제한)는
+# 도구가 쓰기를 막으므로, 호출 중 저장소가 바뀌어도 사람·IDE·다른 AI의 동시 편집일 수 있어 기록만 남긴다.
+ENFORCED_TOOLS = frozenset({"agy"})
+MAX_LOGGED_NAMES = 5
 
 
 @dataclass
@@ -138,23 +145,43 @@ def _remove_new(cwd: Path, names: set[str]) -> None:
 		os.close(root)
 
 
+def _record(tool: str, changed: list[str]) -> None:
+	"""실패시키지 않는 도구의 변경 감지를 로컬 로그에 한 줄 남긴다. 기록 실패는 호출에 영향을 주지 않는다."""
+	line = f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {tool} 읽기 전용 호출 중 변경 감지 {len(changed)}개(동시 편집일 수 있음): " \
+		+ ", ".join(changed[:MAX_LOGGED_NAMES]) + "\n"
+	try:
+		folder = home() / "logs"
+		folder.mkdir(parents=True, exist_ok=True)
+		fd = os.open(folder / "readonly-guard.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+		with os.fdopen(fd, "a", encoding="utf-8") as stream:
+			stream.write(line)
+	except OSError:
+		pass
+
+
 def verify(cwd: Path, before: Snapshot | None, tool: str) -> None:
-	"""검사 불가인 AGY는 실행 전에 거부하고, 변경 오류는 다른 호출 오류보다 우선한다."""
+	"""검사 불가인 AGY는 실행 전에 거부하고, 변경 오류는 다른 호출 오류보다 우선한다. 다른 도구는 변경을 기록만 한다."""
 	from .providers import ProviderError
 
+	enforced = tool in ENFORCED_TOOLS
 	if before is None:
-		if tool == "agy":
+		if enforced:
 			raise ProviderError("write", "읽기 전용을 검사할 수 없는 폴더입니다")
 		return
 	after = snapshot(cwd)
 	if after is None:
-		raise ProviderError("write", "읽기 전용을 검사할 수 없는 폴더입니다")
+		if enforced:
+			raise ProviderError("write", "읽기 전용을 검사할 수 없는 폴더입니다")
+		return
 	if before == after:
 		return
 	changed = sorted(name for name in before.files.keys() | after.files.keys()
 		if before.files.get(name) != after.files.get(name))
 	if not changed:
 		changed = sorted(before.states.keys() | after.states.keys())
+	if not enforced:
+		_record(tool, changed)
+		return
 	_remove_new(cwd, after.untracked - before.files.keys() - before.ignored)
 	names = ", ".join(changed[:5]) or "변경 경로 확인 불가"
 	more = f" 외 {len(changed) - 5}개" if len(changed) > 5 else ""

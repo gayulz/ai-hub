@@ -48,7 +48,7 @@ class OfficeChatDockTest(unittest.TestCase):
 		chatDetail.card.status='confirmed';await panel.read(CHAT);assert(!$('chat-send').disabled);
 		const getToken=window.officeBridge.token;window.officeBridge.token=()=>null;await refresh();await flush();assert($('chat-send').disabled);assert($('chat-send-reason').textContent.includes('세션'));assert($('chat-text').disabled);window.officeBridge.token=getToken;
 		chatDetail.status='closed';await panel.read(CHAT);assert($('chat-composer').hidden);assert($('chat-send').disabled);assert.equal($('chat-dock-state').textContent,'닫힘');
-		chatDetail.status='idle';chatDetail.card=null;chatDetail.failure='보이면 안 되는 원문';await panel.read(CHAT);assert(!$('chat-composer').hidden);assert(!$('chat-send').disabled);assert($('chat-failure').textContent.includes('다시 보내'));assert(!$('chat-failure').textContent.includes('원문'));
+		chatDetail.status='idle';chatDetail.card=null;chatDetail.failure='보이면 안 되는 원문';await panel.read(CHAT);assert(!$('chat-composer').hidden);assert(!$('chat-send').disabled);assert($('chat-failure').textContent.includes('다시 보내'));assert(!$('chat-failure').textContent.includes('원문'));chatDetail.failure_reason='응답이 JSON 계약·질문·보안 검사를 통과하지 못했습니다';await panel.read(CHAT);assert($('chat-failure').textContent.includes('이유: 응답이 JSON 계약'));assert($('chat-failure').textContent.includes('다시 보내'));
 		edit('chat-text','가'.repeat(2001));assert($('chat-send').disabled);edit('chat-text','  ');assert($('chat-send').disabled);edit('chat-text','합성 글');chatDetail.turns=Array.from({length:50},()=>({role:'user',text:'합성 글',source:'office'}));await panel.read(CHAT);assert($('chat-send').disabled);assert($('chat-send-reason').textContent.includes('50번'));assert.equal(requests.length,0);
 		""")
 

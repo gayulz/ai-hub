@@ -10,6 +10,14 @@ from test_office_chats import CARD, CHAT, ChatCase, chat_state, write_chat
 
 
 class OfficeChatsStateTest(ChatCase):
+	def test_failure_reason_only_shows_the_engines_own_category_texts(self):
+		from orchestrator import chat
+		from office import chat_state as state_module
+		for known in (chat.REJECTED, chat.REJECTED + ": 추천 선택지가 목록에 없습니다", *chat.PROVIDER_FAILURES.values()):
+			self.assertEqual(state_module.failure_reason(known), known.split(": ")[0])
+		for unknown in ("", "보이면 안 되는 원문", None, 3):
+			self.assertEqual(state_module.failure_reason(unknown), "")
+
 	def test_empty_state_and_plan_filter_are_read_only_and_match_engine(self):
 		with (self.hub / "plans.toml").open("a") as stream:
 			stream.write('''

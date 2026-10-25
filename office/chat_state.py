@@ -8,7 +8,7 @@ from pathlib import Path
 
 from collector.config import ConfigError, home
 from orchestrator import chat_record, question_cards
-from orchestrator.chat import Engine
+from orchestrator.chat import PROVIDER_FAILURES, REJECTED, Engine
 from orchestrator.draft import safe_text
 from orchestrator.meeting_prompts import LOCAL_PATH
 from vaultfilter.public import Rules
@@ -109,6 +109,14 @@ def snapshot(root: Path) -> tuple[dict, list[dict]]:
 	return {"chats": {**group, "items": [row for _, row in items[:20]]}, "chat_plans": plans}, pending
 
 
+FAILURE_REASONS = (REJECTED, *PROVIDER_FAILURES.values(), "대화 도구 호출을 마치지 못했습니다")
+
+
+def failure_reason(text: str) -> str:
+	"""기록의 실패 문구 중 엔진이 정한 분류 문구만 화면에 보낸다. 그 밖의 값은 보내지 않는다."""
+	return next((known for known in FAILURE_REASONS if isinstance(text, str) and text.startswith(known)), "")
+
+
 def detail(identity: str) -> dict:
 	chat_record.identity(identity)
 	updated = modified(home(), identity)
@@ -124,4 +132,5 @@ def detail(identity: str) -> dict:
 		"card": None if card is None else {key: card[key] for key in ("id", "turn", "status")} | {
 			"questions": questions(card, rules), "summary": clean(card["summary"], rules)},
 		"dev_draft": clean(state["dev_draft"], rules)[:2000], "seconds": state["seconds"],
-		"failure": "대화를 마치지 못했습니다. 상태를 확인해 주세요." if state["failure"] else "", "updated": stamp(updated)}
+		"failure": "대화를 마치지 못했습니다. 상태를 확인해 주세요." if state["failure"] else "",
+		"failure_reason": failure_reason(state["failure"]), "updated": stamp(updated)}

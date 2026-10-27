@@ -52,7 +52,7 @@ class SearchServiceTest {
 	@Test
 	void excludesCompanyChunksByDefaultAndIncludesThemOnlyWhenRequested() throws Exception {
 		write("p01.md", "---\nsensitivity: company\n---\n# 임시저장\n임시저장 본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchChunks("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchNotes("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchChunks("임시저장", 5, true)).singleElement()
@@ -65,7 +65,7 @@ class SearchServiceTest {
 		write("p01.md", "---\nsensitivity: company\naliases:\n  - acme\n작성자: xyz\n"
 				+ "description: >\n  문장: 설명\n  sensitivity: public\n  tags: [acme\n"
 				+ "깨진 줄\n---\n# 임시저장\n임시저장 본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchChunks("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchNotes("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchChunks("임시저장", 5, true)).singleElement()
@@ -76,7 +76,7 @@ class SearchServiceTest {
 	@Test
 	void excludesNotesWhoseHeaderCannotBeReadFromDefaultSearch() throws Exception {
 		write("p01.md", "---\nsensitivity: company\ntags: [acme, 'xyz]\n---\n# 임시저장\n임시저장 본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchChunks("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchNotes("임시저장", 5, false)).isEmpty();
 		assertThat(service.searchNotes("임시저장", 5, true)).extracting(SearchHit::path).containsExactly("p01.md");
@@ -89,7 +89,7 @@ class SearchServiceTest {
 		}
 		write("p01.md", "임시저장 " + "일반 본문 ".repeat(30));
 		write("p02.md", "임시저장 " + "다음 본문 ".repeat(30));
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchChunks("임시저장", 2, false)).hasSize(2)
 				.allSatisfy(hit -> assertThat(hit.sensitivity()).isNull());
 		assertThat(service.searchNotes("임시저장", 2, false)).hasSize(2)
@@ -110,7 +110,7 @@ class SearchServiceTest {
 		write("p01.md", "# 임시저장\n임시저장 기능을 시험한다");
 		write("p02.md", "# 스프링부트\n스프링부트 설정을 시험한다");
 		write("p03.md", "# xyz\n다른 낱말을 기록한다");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchNotes("임시저장", 5, false).getFirst().path()).isEqualTo("p01.md");
 		assertThat(service.searchNotes("스프링부트", 5, false).getFirst().path()).isEqualTo("p02.md");
 	}
@@ -121,7 +121,7 @@ class SearchServiceTest {
 				.collect(Collectors.joining("\n"));
 		write("p01.md", "# 임시저장\n" + sections);
 		write("p02.md", "임시저장 " + "일반 본문 ".repeat(100));
-		indexer.index(vault);
+		indexer.index(vault, false);
 		List<SearchHit> chunks = service.searchChunks("임시저장", 100, false);
 		List<SearchHit> notes = service.searchNotes("임시저장", 2, false);
 		assertThat(chunks.subList(0, 32)).allSatisfy(hit -> assertThat(hit.path()).isEqualTo("p01.md"));
@@ -138,7 +138,7 @@ class SearchServiceTest {
 	void producesSingleLineSnippetOfAtMost120CodePoints() throws Exception {
 		String symbol = new String(Character.toChars(0x1d11e));
 		write("p01.md", "임시저장\n" + symbol.repeat(200) + "\n다음");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		SearchHit hit = service.searchChunks("임시저장", 1, false).getFirst();
 		assertThat(hit.snippet()).startsWith("임시저장 ").doesNotContain("\n", "\r");
 		assertThat(hit.snippet().codePointCount(0, hit.snippet().length())).isEqualTo(120);
@@ -153,10 +153,10 @@ class SearchServiceTest {
 		Files.createDirectory(settings.getIndexDir());
 		assertThatThrownBy(() -> service.searchChunks("임시저장", 5, false)).isInstanceOf(IOException.class)
 				.hasMessage("색인이 없습니다. 먼저 index 를 실행하세요");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchNotes("임시저장", 5, false)).isEmpty();
 		write("p01.md", "임시저장");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		assertThat(service.searchChunks("!!!", 5, true)).isEmpty();
 		assertThat(service.searchNotes(" ", 5, false)).isEmpty();
 		assertThatThrownBy(() -> service.searchNotes("임시저장", 0, false))
@@ -172,7 +172,7 @@ class SearchServiceTest {
 		settings.setBm25B(0.2f);
 		write("p01.md", "# 임시저장\n## 기능\n임시저장 ".repeat(2));
 		write("p02.md", "임시저장 " + "일반 본문 ".repeat(30));
-		indexer.index(vault);
+		indexer.index(vault, false);
 		try (var analyzer = factory.analyzer(); var directory = FSDirectory.open(settings.getIndexDir());
 				var reader = DirectoryReader.open(directory)) {
 			var query = (BooleanQuery) service.buildQuery("임시저장", true, analyzer);
@@ -197,7 +197,7 @@ class SearchServiceTest {
 		};
 		var trackedIndexer = new NoteIndexer(new VaultReader(), new Chunker(settings), tracked, settings);
 		write("p01.md", "임시저장");
-		trackedIndexer.index(vault);
+		trackedIndexer.index(vault, false);
 		assertThat(new SearchService(tracked, settings).searchNotes("임시저장", 1, false)).hasSize(1);
 		assertThat(calls[0]).isEqualTo(2);
 	}

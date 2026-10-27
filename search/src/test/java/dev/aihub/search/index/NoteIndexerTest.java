@@ -49,7 +49,7 @@ class NoteIndexerTest {
 	void addsChunksAndLeavesSameHashDocumentsAndCommitUntouched() throws Exception {
 		write("acme/p01.md", "# p01\n도입\n## 소제목\n본문");
 		write("p02.md", "본문");
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(2, 0, 0, 0, 3, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(2, 0, 0, 0, 3, 0));
 		long generation;
 		long version;
 		List<Document> before;
@@ -59,7 +59,7 @@ class NoteIndexerTest {
 			before = List.of(reader.storedFields().document(0), reader.storedFields().document(1),
 					reader.storedFields().document(2));
 		}
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 0, 2, 3, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 0, 2, 3, 0));
 		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
 			assertThat(reader.getIndexCommit().getGeneration()).isEqualTo(generation);
 			assertThat(reader.getVersion()).isEqualTo(version);
@@ -83,13 +83,13 @@ class NoteIndexerTest {
 		write("p01.md", "oldxyz\n## 이전\noldxyz");
 		write("p02.md", "삭제할 본문");
 		write("p03.md", "그대로인 본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		chunked.clear();
 		write("p01.md", "newxyz\n## 다음\nnewxyz");
 		Files.delete(vault.resolve("p02.md"));
 		write("p04.md", "추가 본문");
 
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(1, 1, 1, 1, 4, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(1, 1, 1, 1, 4, 0));
 		assertThat(chunked).containsExactly("p01.md", "p04.md");
 
 		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
@@ -99,7 +99,7 @@ class NoteIndexerTest {
 			assertThat(searcher.count(new TermQuery(new Term("body", "newxyz")))).isEqualTo(2);
 			assertThat(searcher.count(new TermQuery(new Term("path", "p02.md")))).isZero();
 		}
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 0, 3, 4, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 0, 3, 4, 0));
 	}
 
 	@Test
@@ -107,7 +107,7 @@ class NoteIndexerTest {
 		write("p01.md", "---\ntype: note\nsensitivity: company\ncreated: 2026-01-01\n"
 				+ "tags: [acme, xyz]\n---\n# 제목\n## 소제목\n본문");
 		write("p02.md", "본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
 			var searcher = new IndexSearcher(reader);
 			var docs = searcher.search(new TermQuery(new Term("path", "p01.md")), 10).scoreDocs;
@@ -135,11 +135,11 @@ class NoteIndexerTest {
 	@Test
 	void headerOnlyChangeUpdatesNoteAndReadFailurePreservesExistingChunks() throws Exception {
 		write("p01.md", "---\nsensitivity: personal\n---\n본문");
-		indexer.index(vault);
+		indexer.index(vault, false);
 		write("p01.md", "---\nsensitivity: company\n---\n본문");
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 1, 0, 0, 1, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 1, 0, 0, 1, 0));
 		Files.write(vault.resolve("p01.md"), new byte[] {(byte) 0xc3, 0x28});
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 0, 0, 1, 1));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 0, 0, 1, 1));
 		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
 			var searcher = new IndexSearcher(reader);
 			int id = searcher.search(new TermQuery(new Term("path", "p01.md")), 1).scoreDocs[0].doc;
@@ -150,14 +150,14 @@ class NoteIndexerTest {
 	@Test
 	void tracksEmptyNotesWithoutCreatingEmptyChunkDocuments() throws Exception {
 		write("p01.md", "\n\n");
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(1, 0, 0, 0, 0, 0));
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 0, 1, 0, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(1, 0, 0, 0, 0, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 0, 1, 0, 0));
 		write("p01.md", "본문");
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 1, 0, 0, 1, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 1, 0, 0, 1, 0));
 		write("p01.md", "");
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 1, 0, 0, 0, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 1, 0, 0, 0, 0));
 		Files.delete(vault.resolve("p01.md"));
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 1, 0, 0, 0));
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 1, 0, 0, 0));
 	}
 
 	@Test
@@ -165,7 +165,7 @@ class NoteIndexerTest {
 		try (var directory = FSDirectory.open(settings.getIndexDir()); var analyzer = factory.analyzer();
 				var writer = new IndexWriter(directory, new IndexWriterConfig(analyzer))) {
 			assertThat(writer.isOpen()).isTrue();
-			assertThatThrownBy(() -> indexer.index(vault)).isInstanceOf(IOException.class)
+			assertThatThrownBy(() -> indexer.index(vault, false)).isInstanceOf(IOException.class)
 					.hasMessageContaining("다른 색인 작업이 실행 중입니다");
 		}
 	}
@@ -173,9 +173,9 @@ class NoteIndexerTest {
 	@Test
 	void failedTraversalDoesNotCommitOrDeletePreviousNotes() throws Exception {
 		write("p01.md", "본문");
-		indexer.index(vault);
-		assertThatThrownBy(() -> indexer.index(temp.resolve("missing"))).isInstanceOf(IOException.class);
-		assertThat(indexer.index(vault)).isEqualTo(new IndexReport(0, 0, 0, 1, 1, 0));
+		indexer.index(vault, false);
+		assertThatThrownBy(() -> indexer.index(temp.resolve("missing"), false)).isInstanceOf(IOException.class);
+		assertThat(indexer.index(vault, false)).isEqualTo(new IndexReport(0, 0, 0, 1, 1, 0));
 	}
 
 	private void write(String path, String text) throws IOException {

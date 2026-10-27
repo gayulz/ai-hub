@@ -32,8 +32,12 @@ class ProviderError(Exception):
 		self.kind = kind
 
 
+CAUSE_TAIL = 1500
+
+
 def _exit_cause(stderr: str, stdout: str) -> str:
-	output = (stderr + "\n" + stdout).lower()
+	# 실제 오류는 출력 끝에 나온다. 앞쪽은 구현 AI 가 되풀이하는 프롬프트일 수 있어 단어만 보고 오분류하지 않게 끝부분만 본다
+	output = (stderr[-CAUSE_TAIL:] + "\n" + stdout[-CAUSE_TAIL:]).lower()
 	for pattern, cause in (
 		(r"resource_exhausted|quota|rate limit|usage limit|too many requests|\b429\b", "한도 소진"),
 		(r"unauthorized|not logged in|log in required|please log in|sign in|authentication|invalid api key|\b(?:401|403)\b", "로그인 확인 필요"),

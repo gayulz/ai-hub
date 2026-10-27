@@ -49,6 +49,14 @@ class ExitCauseTest(unittest.TestCase):
 					with self.subTest(cause=cause, stderr=stderr, stdout=stdout):
 						self.assertEqual(providers._exit_cause(stderr, stdout), cause)
 
+	def test_prompt_echo_at_the_start_does_not_decide_the_cause(self):
+		# 구현 AI 가 시작할 때 되풀이하는 프롬프트에 quota·429 같은 단어가 있어도, 오래 돈 뒤의 끝부분 오류가 분류를 정한다
+		echo = "요청서: Individual quota reached 429 RESOURCE_EXHAUSTED rate limit\n" * 20
+		progress = "진행 중인 작업 한 줄\n" * 400
+		self.assertEqual(providers._exit_cause(echo + progress + "connection reset by peer", ""), "네트워크·서버 오류")
+		self.assertEqual(providers._exit_cause(echo + progress + "something broke", ""), "원인 미분류")
+		self.assertEqual(providers._exit_cause("", echo + progress + "Error: 429 quota exceeded"), "한도 소진")
+
 	def test_priority_and_numeric_word_boundaries(self):
 		for stderr, stdout, expected in (("network", "429", "한도 소진"),
 				("quota", "unauthorized context length network", "한도 소진"),

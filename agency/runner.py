@@ -1,12 +1,17 @@
 """의존 순서로 실행하고 검증을 통과한 결과를 프로젝트 가지에 쌓는다."""
 
+import re
+import subprocess
+import tomllib
+from datetime import date
 from pathlib import Path
 
-from collector.backfill_common import locked
+from collector.backfill_common import locked, safe
 from orchestrator import __main__ as orchestration, targets
 from orchestrator.branch_apply import apply_to_branch
 from orchestrator.checks import git
-from orchestrator.record import Run
+from orchestrator.flow import worktrees_dir
+from orchestrator.record import Run, runs_dir
 
 from . import project
 from .departments import load_departments
@@ -23,13 +28,131 @@ def _validate(request: dict, repo: Path, branch: str) -> None:
 		raise ValueError("작업 요청서는 부서의 저장소와 프로젝트 가지를 기준으로 한 코드 작업이어야 합니다")
 
 
-def _usage(identity: str, execution: Run) -> None:
+def _usage(identity: str, execution: Run, previous_usage: dict | None = None) -> Run:
 	# 재개·반영 재시도로 같은 호출을 두 번 청구하지 않는다.
-	previous = execution.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
-	usage = {"calls": len(execution.calls), "seconds": sum(call.get("seconds", 0) for call in execution.calls)}
-	project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
-	execution.handoff["agency_usage"] = usage
-	execution.save()
+	with orchestration.locked(execution):
+		latest = Run.load(execution.run_id)
+		if latest.run_id != execution.run_id:
+			raise ValueError("실행 기록의 번호가 다릅니다")
+		previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+		usage = {"calls": len(latest.calls), "seconds": sum(call.get("seconds", 0) for call in latest.calls)}
+		project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
+		latest.handoff["agency_usage"] = usage
+		latest.save()
+		return latest
+
+
+def _worktrees(repo: Path) -> list[tuple[str, str]]:
+	result = []
+	for entry in git(repo, "worktree", "list", "--porcelain", "-z").split("\0\0"):
+		if not entry:
+			continue
+		fields = entry.split("\0")
+		branches = [field[7:] for field in fields if field.startswith("branch ")]
+		if not fields[0].startswith("worktree ") or len(branches) > 1:
+			raise RuntimeError("Git 작업 폴더 목록을 확인할 수 없습니다")
+		result.append((fields[0][9:], branches[0] if branches else ""))
+	return result
+
+
+def _branch_exists(repo: Path, ref: str) -> bool:
+	refs = git(repo, "for-each-ref", "--format=%(refname)", ref).splitlines()
+	result = subprocess.run(["git", "-C", str(repo), "show-ref", "--verify", "--quiet", ref],
+		capture_output=True)
+	if result.returncode not in (0, 1) or (ref in refs) != (result.returncode == 0):
+		raise RuntimeError("Git 가지 참조를 확인할 수 없습니다")
+	return result.returncode == 0
+
+
+def _cleanup_previous(identity: str, task: dict, repo: Path, branch: str) -> None:
+	run_id = task["run_id"]
+	if not isinstance(run_id, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{3}", run_id):
+		raise ValueError("직전 실행 번호 형식이 잘못됐습니다")
+	try:
+		date.fromisoformat(run_id[:10])
+		if run_id.endswith("-000"):
+			raise ValueError
+	except ValueError:
+		raise ValueError("직전 실행 번호 형식이 잘못됐습니다") from None
+	folder = runs_dir() / run_id
+	for path in (folder, *(folder / name for name in ("run.json", "request.toml", "report.md", "events.jsonl", ".lock"))):
+		if not safe(path):
+			raise ValueError("직전 실행 기록에 심볼릭 링크를 사용할 수 없습니다")
+	if not folder.is_dir() or not all((folder / name).is_file() for name in ("run.json", "request.toml")):
+		raise ValueError("직전 실행 기록 또는 요청서가 없습니다")
+	if (folder / ".lock").exists() and not (folder / ".lock").is_file():
+		raise ValueError("직전 실행 잠금은 일반 파일이어야 합니다")
+	execution = Run.load(run_id)
+	if execution.run_id != run_id:
+		raise ValueError("직전 실행 기록의 번호가 다릅니다")
+	with orchestration.locked(execution):
+		execution = Run.load(run_id)
+		row = project.load(identity)
+		matches = [item for item in row["tasks"] if item["id"] == task["id"]]
+		if (len(matches) != 1 or matches[0] != task or task["status"] != "대기" or row["branch"] != branch
+				or any(item["id"] != task["id"] and item["run_id"] == run_id for item in row["tasks"])):
+			raise ValueError("대기 작업의 직전 실행이 바뀌었습니다")
+		if (execution.run_id != run_id or execution.status not in
+				("실패", "시간 초과", "호출 한도 소진", "예산 소진", "사용자 입력 필요")
+				or execution.approval_pending or not isinstance(execution.end_reason, str)
+				or "(한도 소진)" not in execution.end_reason):
+			raise ValueError("직전 실행은 정리할 수 있는 한도 대기 상태가 아닙니다")
+		request_path = Path(task["request_path"])
+		if (not request_path.is_absolute() or not safe(request_path)
+				or not request_path.resolve().is_relative_to(project._folder(identity).resolve())):
+			raise ValueError("대기 작업의 요청서 경로가 잘못됐습니다")
+		data = orchestration.read_request(str(request_path))
+		with (folder / "request.toml").open("rb") as stream:
+			previous_request = tomllib.load(stream)
+		if previous_request != data or execution.request != data["request"] or execution.repo != str(repo):
+			raise ValueError("직전 실행과 대기 작업의 요청 또는 저장소가 다릅니다")
+		request_repo = data["request"].get("repo", ".")
+		if not isinstance(request_repo, str) or not safe(Path(request_repo)):
+			raise ValueError("요청서의 저장소 경로에 심볼릭 링크를 사용할 수 없습니다")
+		_validate(data["request"], repo, branch)
+		_validate({**execution.request, "repo": execution.repo, "kind": execution.kind}, repo, branch)
+		worktree = worktrees_dir() / run_id
+		expected_branch = "orch/" + run_id
+		ref = "refs/heads/" + expected_branch
+		if worktree == repo:
+			raise ValueError("현재 저장소는 정리할 수 없습니다")
+		if branch == expected_branch:
+			raise ValueError("프로젝트 기준 가지는 정리할 수 없습니다")
+		if (not worktree.is_absolute() or not safe(worktree) or execution.branch not in ("", expected_branch)
+				or execution.worktree not in ("", str(worktree))):
+			raise ValueError("직전 실행의 작업 폴더 또는 가지가 다릅니다")
+		entries = _worktrees(repo)
+		registered = [item for item in entries if item[0] == str(worktree)]
+		if (len(registered) > 1 or any(path != str(worktree) and name == ref for path, name in entries)
+				or registered and (registered[0][1] != ref or not execution.worktree or not execution.branch)
+				or worktree.exists() and (not registered or not worktree.is_dir())):
+			raise ValueError("직전 실행의 Git 작업 폴더 소유 관계가 다릅니다")
+		if worktree.exists():
+			if not safe(worktree / ".git") or not (worktree / ".git").is_file():
+				raise ValueError("직전 실행의 Git 작업 폴더가 올바르지 않습니다")
+			common = git(worktree, "rev-parse", "--git-common-dir").strip()
+			repo_common = git(repo, "rev-parse", "--git-common-dir").strip()
+			if ((worktree / common).resolve() != (repo / repo_common).resolve()
+					or git(worktree, "symbolic-ref", "-q", "HEAD").strip() != ref
+					or git(worktree, "rev-parse", "--show-toplevel").strip() != str(worktree)):
+				raise ValueError("직전 실행의 Git 작업 폴더가 대상 저장소와 다릅니다")
+		branch_exists = _branch_exists(repo, ref)
+		if branch_exists and not execution.branch:
+			raise ValueError("직전 실행의 가지 소유 관계를 확인할 수 없습니다")
+		if Run.load(run_id) != execution:
+			raise RuntimeError("정리 중 직전 실행 기록이 바뀌었습니다")
+		if registered:
+			git(repo, "worktree", "remove", "--force", str(worktree))
+		if worktree.exists() or any(path == str(worktree) or name == ref for path, name in _worktrees(repo)):
+			raise RuntimeError("직전 실행의 Git 작업 폴더가 남았습니다")
+		branch_exists = _branch_exists(repo, ref)
+		if Run.load(run_id) != execution:
+			raise RuntimeError("정리 중 직전 실행 기록이 바뀌었습니다")
+		if branch_exists:
+			git(repo, "branch", "-D", expected_branch)
+		if not safe(worktree) or worktree.exists() or _branch_exists(repo, ref) or Run.load(run_id) != execution:
+			raise RuntimeError("직전 실행의 Git 정리가 완료되지 않았습니다")
+		project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
 
 
 def run(identity: str) -> dict:
@@ -52,6 +175,8 @@ def run(identity: str) -> dict:
 		branch = row["branch"]
 		ref = "refs/heads/" + branch
 		if not git(repo, "rev-parse", "--verify", ref, check=False).strip():
+			if any(task["status"] == "대기" and task["run_id"] for task in row["tasks"]):
+				raise ValueError("직전 실행의 프로젝트 기준 가지가 없습니다")
 			head = git(repo, "rev-parse", "HEAD").strip()
 			git(repo, "branch", branch, head)
 			project.set_checkpoint(identity, "branch", head)
@@ -67,13 +192,17 @@ def run(identity: str) -> dict:
 			if task and not task["run_id"]:
 				row = project.update_task(identity, task["id"], status="대기")
 				task = None
+			previous_usage = None
 			if task is None:
 				ready = project.next_ready_tasks(row)
 				if not ready:
 					return _result(project.transition(identity, "막힘", reason="실행할 수 있는 대기 작업이 없습니다"))
 				task = ready[0]
-				_validate(orchestration.read_request(task["request_path"])["request"], repo, branch)
-				project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
+				if task["run_id"]:
+					_cleanup_previous(identity, task, repo, branch)
+				else:
+					_validate(orchestration.read_request(task["request_path"])["request"], repo, branch)
+					project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
 				project.set_checkpoint(identity, "task", task["id"])
 				execution = orchestration.start_run(task["request_path"])
 				project.update_task(identity, task["id"], run_id=execution.run_id)
@@ -81,12 +210,9 @@ def run(identity: str) -> dict:
 				execution = Run.load(task["run_id"])
 				_validate({**execution.request, "repo": execution.repo, "kind": execution.kind}, repo, branch)
 				if execution.status not in ("승인 필요", "완료"):
-					usage = execution.handoff.get("agency_usage")
+					previous_usage = execution.handoff.get("agency_usage")
 					orchestration.cmd_resume(execution.run_id, [])
-					execution = Run.load(execution.run_id)
-					if usage is not None:
-						execution.handoff["agency_usage"] = usage
-			_usage(identity, execution)
+			execution = _usage(identity, execution, previous_usage)
 			reason = ""
 			if execution.status in ("승인 필요", "완료"):
 				try:

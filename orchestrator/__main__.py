@@ -49,7 +49,7 @@ def orchestration_config() -> dict:
 @contextmanager
 def locked(run: Run):
 	run.folder.mkdir(parents=True, exist_ok=True)
-	with open(run.folder / ".lock", "w") as fh:
+	with open(run.folder / ".lock", "a") as fh:
 		try:
 			fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 		except BlockingIOError:
@@ -151,25 +151,46 @@ def cmd_run(request_path: str) -> int:
 
 def execute(run: Run) -> int:
 	with locked(run):
-		Flow(run, load_plans(), orchestration_config()).run_all()
+		return _execute_locked(run)
+
+
+def _execute_locked(run: Run) -> int:
+	Flow(run, load_plans(), orchestration_config()).run_all()
 	finish_outputs(run)
 	return 0 if run.status in ("승인 필요", "완료") else 1
 
 
 def cmd_resume(run_id: str, options: list[str]) -> int:
 	run = Run.load(run_id)
-	if run.status in ("승인 필요", "완료", "취소"):
-		print(f"{run_id} 는 이미 끝났습니다: {run.status}")
-		return 0
-	for flag, value in zip(options[::2], options[1::2]):
-		if flag == "--calls":
-			run.budget["calls"] += int(value)
-		elif flag == "--minutes":
-			run.budget["seconds"] += int(value) * 60
-	run.status, run.end_reason = "작업 중", ""
-	run.event("resume", budget=run.budget)
-	run.save()
-	return execute(run)
+	if run.run_id != run_id:
+		raise ValueError("실행 기록의 번호가 다릅니다")
+	with locked(run):
+		run = Run.load(run_id)
+		if run.run_id != run_id:
+			raise ValueError("실행 기록의 번호가 다릅니다")
+		if run.status in ("승인 필요", "완료", "취소"):
+			print(f"{run_id} 는 이미 끝났습니다: {run.status}")
+			return 0
+		if run.worktree and not Path(run.worktree).is_dir():
+			raise RuntimeError("재개할 실행의 작업 폴더가 없습니다")
+		if not run.worktree and "agency_usage" in run.handoff:
+			from agency import project
+			branch = run.request.get("base_branch", "")
+			identity = branch.removeprefix("agency/") if isinstance(branch, str) and branch.startswith("agency/") else ""
+			if not project.ID.fullmatch(identity):
+				raise RuntimeError("재개할 실행의 프로젝트를 확인할 수 없습니다")
+			row = project.load(identity)
+			if row["branch"] != branch or sum(task.get("run_id") == run_id for task in row["tasks"]) != 1:
+				raise RuntimeError("다른 실행으로 교체된 작업은 재개할 수 없습니다")
+		for flag, value in zip(options[::2], options[1::2]):
+			if flag == "--calls":
+				run.budget["calls"] += int(value)
+			elif flag == "--minutes":
+				run.budget["seconds"] += int(value) * 60
+		run.status, run.end_reason = "작업 중", ""
+		run.event("resume", budget=run.budget)
+		run.save()
+		return _execute_locked(run)
 
 
 def cmd_apply(run_id: str) -> int:

@@ -86,8 +86,9 @@ def judge(notes, plans, ledger, day, cache, failed):
 					if any(workdir.iterdir()):
 						raise summarize.SummarizeError("R4 임시 작업 폴더에 파일이 생성됨")
 		except (summarize.SummarizeError, OSError):
+			# 한도 소진 같은 요금제 단위 실패가 묶음을 버리지 않도록 다음 요금제로 넘어간다. 실패한 요금제는 이후 건너뛴다
 			failed.add(plan.id)
-			return None, "AI 호출 실패"
+			continue
 		value = validate(parse(text), notes) if isinstance(text, str) else None
 		if value is None:
 			return None, "판정 실패"

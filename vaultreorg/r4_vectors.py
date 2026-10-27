@@ -17,6 +17,8 @@ from . import frontmatter, r3_select
 from .r3 import state_file
 
 TYPES = {"study", "reference", "project", "career", "decision"}
+# [[링크]] 대상 이름에 쓸 수 없는 문자: 이런 이름의 노트는 후보에서 뺀다
+LINK_UNSAFE = "\r\n[]|#^"
 MODEL = "bge-m3"
 
 
@@ -78,8 +80,12 @@ def read_note(vault, value: str) -> tuple[dict | None, str]:
 def collect(vault, skipped: Counter) -> list[dict]:
 	notes = []
 	for path in r3_select.inventory(vault, skipped):
+		value = path.relative_to(vault).as_posix()
+		if any(char in value for char in LINK_UNSAFE):
+			skipped["링크에 쓸 수 없는 이름"] += 1
+			continue
 		try:
-			note, reason = read_note(vault, path.relative_to(vault).as_posix())
+			note, reason = read_note(vault, value)
 		except (OSError, ValueError, ConfigError):
 			note, reason = None, "읽기 또는 형식 오류"
 		if note is None:

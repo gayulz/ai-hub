@@ -180,7 +180,7 @@ class R4Test(support.ReorgCase):
 		finally:
 			ledger.close()
 
-	def test_call_failure_moves_to_next_plan_for_next_group_and_only_once_each(self):
+	def test_call_failure_falls_through_to_next_plan_and_dead_plans_are_tried_once(self):
 		for i in range(18):
 			self.note(f"Study/p{i:02d}.md")
 		def failing(plan, prompt, *, cwd):
@@ -190,8 +190,11 @@ class R4Test(support.ReorgCase):
 			return result
 		with mock.patch.object(summarize, "call", side_effect=failing):
 			plan = self.preview()
-		self.assertEqual([item[0] for item in self.calls], list(r4_judge.ORDER))
-		self.assertEqual(sum(g["status"] == "failed" for g in plan["groups"]), 2)
+		used = [item[0] for item in self.calls]
+		self.assertEqual(used[:3], list(r4_judge.ORDER))
+		self.assertEqual((used.count("agy-opus"), used.count("agy-sonnet")), (1, 1))
+		self.assertEqual(used.count("codex-personal"), len(plan["groups"]))
+		self.assertEqual(sum(g["status"] == "failed" for g in plan["groups"]), 0)
 		plans = load_plans()
 		with self.assertRaises(ConfigError):
 			r4_judge.routing(replace(plans, plans={"agy-opus": replace(plans.plans["agy-opus"], tool="claude")}))
@@ -295,6 +298,15 @@ class R4Test(support.ReorgCase):
 		self.assertEqual(self.git("log", "-4", "--format=%s").decode().splitlines(),
 			[f"볼트 R4: 관련 노트 링크 {n}개 덧붙임" for n in (1, 10, 2, 10)])
 		self.assertEqual(self.run_module("r4-apply-links").returncode, 0)
+
+	def test_link_unsafe_file_names_are_excluded_and_plan_still_loads(self):
+		self.pair()
+		self.note("Study/[대괄호] p03.md")
+		self.init_git("Study")
+		plan = self.preview()
+		self.assertNotIn("Study/[대괄호] p03.md", self.all_notes())
+		self.assertEqual(plan["skipped"]["링크에 쓸 수 없는 이름"], 1)
+		self.assertEqual(self.command("r4-apply-links"), 0, self.stderr.getvalue())
 
 	def test_merge_duplicate_and_distinct_are_report_only(self):
 		self.pair()

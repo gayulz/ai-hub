@@ -35,7 +35,7 @@ def load_plan(vault: Path) -> dict:
 				raise ValueError
 			for note in group["notes"]:
 				rel = rules.relative(note["path"])
-				if r3_select.path_reason(rel) or nfc(note["path"]) in seen or any(c in note["path"] for c in "\r\n[]|#^"):
+				if r3_select.path_reason(rel) or nfc(note["path"]) in seen or any(c in note["path"] for c in r4_vectors.LINK_UNSAFE):
 					raise ValueError
 				seen.add(nfc(note["path"]))
 				if note["type"] not in r4_vectors.TYPES or note["status"] not in ("pending", "prepared", "applied", "skipped", "unchanged", "failed"):

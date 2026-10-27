@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -101,6 +102,7 @@ budget = { calls = 20, minutes = 10 }
 	def execution(self, task, status="승인 필요", reason="합성 검토 통과"):
 		request = orchestration.read_request(task["request_path"])["request"]
 		execution = Run(new_run_id(), request, str(self.repo))
+		shutil.copyfile(task["request_path"], execution.folder / "request.toml")
 		execution.calls = [dict(call) for call in self.calls]
 		execution.save()
 		if status == "승인 필요":
@@ -255,7 +257,7 @@ budget = { calls = 20, minutes = 10 }
 					resumed.calls.append({"ok": True, "seconds": 3})
 					resumed.finish("승인 필요", "합성 재개 성공")
 					return 0
-				with mock.patch.object(orchestration, "execute", side_effect=finish), \
+				with mock.patch.object(orchestration, "_execute_locked", side_effect=finish), \
 						mock.patch.object(orchestration, "cmd_resume", wraps=orchestration.cmd_resume) as resume:
 					self.assertEqual(runner.run(row["id"])["status"], "검수")
 				resume.assert_called_once_with(execution.run_id, [])

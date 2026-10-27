@@ -49,7 +49,7 @@ def orchestration_config() -> dict:
 @contextmanager
 def locked(run: Run):
 	run.folder.mkdir(parents=True, exist_ok=True)
-	with open(run.folder / ".lock", "w") as fh:
+	with open(run.folder / ".lock", "a") as fh:
 		try:
 			fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 		except BlockingIOError:
@@ -88,8 +88,8 @@ def report(run: Run) -> str:
 	return "\n".join(lines) + "\n"
 
 
-def finish_outputs(run: Run) -> None:
-	"""보고서를 run 폴더에 쓰고, 볼트 일지(정해진 착지점)에 한 덩어리로 남긴다."""
+def finish_outputs(run: Run, *, print_report: bool = True) -> None:
+	"""보고서와 볼트 일지를 저장하고, 요청한 경우 본문을 출력한다."""
 	text = report(run)
 	(run.folder / "report.md").write_text(text, encoding="utf-8")
 	answered = sorted({c["tool"] for c in run.calls if c.get("ok")})
@@ -98,7 +98,8 @@ def finish_outputs(run: Run) -> None:
 	today = datetime.now().date()
 	vault.upsert_block(vault.daily_path(load_sources().vault, "personal", today), f"run:{run.run_id}", body,
 		"AI 오케스트레이션", today, "personal")
-	print(text)
+	if print_report:
+		print(text)
 
 
 def read_request(request_path: str) -> dict:
@@ -150,25 +151,46 @@ def cmd_run(request_path: str) -> int:
 
 def execute(run: Run) -> int:
 	with locked(run):
-		Flow(run, load_plans(), orchestration_config()).run_all()
+		return _execute_locked(run)
+
+
+def _execute_locked(run: Run) -> int:
+	Flow(run, load_plans(), orchestration_config()).run_all()
 	finish_outputs(run)
 	return 0 if run.status in ("승인 필요", "완료") else 1
 
 
 def cmd_resume(run_id: str, options: list[str]) -> int:
 	run = Run.load(run_id)
-	if run.status in ("승인 필요", "완료", "취소"):
-		print(f"{run_id} 는 이미 끝났습니다: {run.status}")
-		return 0
-	for flag, value in zip(options[::2], options[1::2]):
-		if flag == "--calls":
-			run.budget["calls"] += int(value)
-		elif flag == "--minutes":
-			run.budget["seconds"] += int(value) * 60
-	run.status, run.end_reason = "작업 중", ""
-	run.event("resume", budget=run.budget)
-	run.save()
-	return execute(run)
+	if run.run_id != run_id:
+		raise ValueError("실행 기록의 번호가 다릅니다")
+	with locked(run):
+		run = Run.load(run_id)
+		if run.run_id != run_id:
+			raise ValueError("실행 기록의 번호가 다릅니다")
+		if run.status in ("승인 필요", "완료", "취소"):
+			print(f"{run_id} 는 이미 끝났습니다: {run.status}")
+			return 0
+		if run.worktree and not Path(run.worktree).is_dir():
+			raise RuntimeError("재개할 실행의 작업 폴더가 없습니다")
+		if not run.worktree and "agency_usage" in run.handoff:
+			from agency import project
+			branch = run.request.get("base_branch", "")
+			identity = branch.removeprefix("agency/") if isinstance(branch, str) and branch.startswith("agency/") else ""
+			if not project.ID.fullmatch(identity):
+				raise RuntimeError("재개할 실행의 프로젝트를 확인할 수 없습니다")
+			row = project.load(identity)
+			if row["branch"] != branch or sum(task.get("run_id") == run_id for task in row["tasks"]) != 1:
+				raise RuntimeError("다른 실행으로 교체된 작업은 재개할 수 없습니다")
+		for flag, value in zip(options[::2], options[1::2]):
+			if flag == "--calls":
+				run.budget["calls"] += int(value)
+			elif flag == "--minutes":
+				run.budget["seconds"] += int(value) * 60
+		run.status, run.end_reason = "작업 중", ""
+		run.event("resume", budget=run.budget)
+		run.save()
+		return _execute_locked(run)
 
 
 def cmd_apply(run_id: str) -> int:

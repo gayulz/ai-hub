@@ -103,4 +103,7 @@ def choose(data: bytes) -> tuple[str | None, str, str]:
 		return None, kind, "본문 없음"
 	if kind == "project" and len(body) < 5000:
 		return None, kind, "작은 project"
+	# 본문이 요약보다 짧으면 3줄 요약이 군더더기만 된다
+	if kind == "study" and len(body.strip()) < 500:
+		return None, kind, "짧은 study"
 	return "study" if kind == "study" else "outline", kind, ""

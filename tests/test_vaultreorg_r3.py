@@ -23,7 +23,8 @@ else:
 	import test_vaultreorg_support as support
 
 SUMMARY = {"lines": ["기록을 확인했다.", "판단의 근거를 정리했다.", "남은 작업을 확인했다."]}
-BODY = "\n".join(SUMMARY["lines"])
+# 짧은 study 는 대상에서 빠지므로 숫자·영문 없는 합성 문장으로 500자를 넘긴다
+BODY = "\n".join(SUMMARY["lines"]) + "\n" + "길이를 채우는 합성 문장이다. " * 30
 
 
 class R3Test(support.ReorgCase):
@@ -386,12 +387,19 @@ class R3Test(support.ReorgCase):
 		fenced = "설명입니다.\n```json\n" + json.dumps(SUMMARY, ensure_ascii=False) + "\n```\n끝"
 		with mock.patch.object(summarize, "call", return_value=fenced):
 			self.assertEqual(self.preview()["Study/p01.md"]["status"], "pending")
-		self.note("Study/p02.md", body="다른 본문이다.")
+		self.note("Study/p02.md", body="다른 본문이다. " * 80)
 		with mock.patch.object(summarize, "call", return_value="JSON이 아닌 답") as call:
 			self.preview()
 			self.preview()
 			self.assertEqual(call.call_count, 2)
 		self.assertEqual(self.notes()["Study/p02.md"]["reason"], "검증 실패")
+
+	def test_short_study_is_skipped_without_ai_call(self):
+		self.note(body="짧은 본문이다.")
+		with mock.patch.object(summarize, "call") as call:
+			note = self.preview()["Study/p01.md"]
+		call.assert_not_called()
+		self.assertEqual((note["status"], note["reason"]), ("skipped", "짧은 study"))
 
 	def test_agy_argv_model_and_legacy_default_and_explicit_cwd(self):
 		plan = load_plans().plans["agy-argon"]

@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 
 from .config import Plan, Plans, run_dir
 from .ledger import Ledger
@@ -84,11 +85,14 @@ def _argv(plan: Plan, prompt: str) -> tuple[list[str], bool]:
 			argv += ["-m", plan.model]
 		return argv + ["-"], True
 	if plan.tool == "agy":
-		return ["agy", "-p", prompt], False
+		argv = ["agy", "-p", prompt]
+		if plan.model:
+			argv += ["--model", plan.model]
+		return argv, False
 	raise SummarizeError(f"지원하지 않는 도구: {plan.tool}")
 
 
-def call(plan: Plan, prompt: str, *, metadata=None) -> str:
+def call(plan: Plan, prompt: str, *, metadata=None, cwd: Path | None = None) -> str:
 	if plan.tool == "ollama":
 		from . import ollama
 		try:
@@ -97,13 +101,12 @@ def call(plan: Plan, prompt: str, *, metadata=None) -> str:
 			raise SummarizeError(str(exc)) from exc
 	argv, use_stdin = _argv(plan, prompt)
 	if metadata is not None:
-		if plan.tool == "agy" and plan.model:
-			argv += ["--model", plan.model]
 		if not plan.model and plan.tool in ("claude", "agy"):
 			argv += ["--output-format", "json"]
-	run_dir().mkdir(parents=True, exist_ok=True)
+	workdir = run_dir() if cwd is None else cwd
+	workdir.mkdir(parents=True, exist_ok=True)
 	try:
-		result = subprocess.run(argv, input=prompt if use_stdin else None, cwd=run_dir(),
+		result = subprocess.run(argv, input=prompt if use_stdin else None, cwd=workdir,
 			capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
 	except (OSError, subprocess.TimeoutExpired) as exc:
 		raise SummarizeError(f"{plan.id} 실행 실패: {type(exc).__name__}") from exc

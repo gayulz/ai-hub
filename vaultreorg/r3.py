@@ -82,12 +82,15 @@ def plan_note(vault, path, plans, ledger, day, cache, failed, company_names) -> 
 	note.update(kind=kind, type=note_type)
 	body = frontmatter.split(data).body
 	entry, reason = r3_text.propose(kind, body.decode("utf-8"), plans, ledger, day, cache, failed)
+	value = r3_text.parse(entry["text"]) if entry is not None else None
+	if entry is not None and value is None:
+		# JSON 이 아닌 응답은 캐시에 남기지 않아 다음 실행에서 다시 부른다
+		slot = cache.get(sha(body.decode("utf-8")), {})
+		slot.pop(kind, None)
+		if not slot:
+			cache.pop(sha(body.decode("utf-8")), None)
 	private_write(state_file("r3-cache.json"), json.dumps({"version": 3, "entries": cache}, ensure_ascii=False) + "\n")
 	if entry is not None:
-		try:
-			value = json.loads(entry["text"])
-		except ValueError:
-			value = None
 		proposal = r3_text.validate(kind, value, body.decode("utf-8"), company_names)
 		if proposal is None:
 			reason = "검증 실패"

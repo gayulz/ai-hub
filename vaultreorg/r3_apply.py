@@ -170,9 +170,8 @@ def finish_batch(vault: Path, pending: list[dict], plan: dict, company_names: li
 				if nfc(note["path"]) in paths:
 					note.update(commit=digest, reason="")
 				else:
-					note["reason"] = "Git 경로 규칙으로 커밋 보류"
-			if any(not note.get("commit") for note in pending):
-				raise RuntimeError("일부 노트의 Git 경로 규칙으로 커밋을 보류했습니다")
+					# 사전 이름·무시 목록 경로는 R1 과 같이 볼트 Git 에 올리지 않고 로컬에만 둔다
+					note.update(local_only=True, reason="Git 경로 규칙으로 커밋 없이 로컬에만 반영")
 			plan.pop("commit_error", None)
 		except (OSError, ValueError, RuntimeError, ConfigError) as exc:
 			plan["commit_error"] = str(exc) if isinstance(exc, (RuntimeError, frontmatter.NoteError)) else "커밋 전 접근 또는 잠금 실패"
@@ -207,7 +206,7 @@ def apply(limit: int | None = None) -> int:
 				return 1
 			pending, written, skipped, failed, selected = [], 0, 0, 0, 0
 			for note in plan["notes"]:
-				if note["status"] == "skipped" or note.get("commit"):
+				if note["status"] == "skipped" or note.get("commit") or note.get("local_only"):
 					continue
 				if limit is not None and selected >= limit:
 					break

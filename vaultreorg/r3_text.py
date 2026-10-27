@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 import unicodedata
@@ -69,6 +70,23 @@ def validate(kind: str, value, body: str, company_names: list[str]) -> dict | No
 	if kind == "study":
 		return {"lines": list(valid.values())} if len(valid) == 3 else None
 	return valid or None
+
+
+def parse(text: str) -> dict | None:
+	"""응답에서 JSON 객체 하나를 꺼낸다. 코드 울타리(```)나 앞뒤 설명이 붙어도 받는다."""
+	text = text.strip()
+	fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
+	candidates = [fenced.group(1)] if fenced else []
+	start, end = text.find("{"), text.rfind("}")
+	candidates += [text, text[start:end + 1] if 0 <= start < end else ""]
+	for candidate in candidates:
+		try:
+			value = json.loads(candidate)
+		except ValueError:
+			continue
+		if isinstance(value, dict):
+			return value
+	return None
 
 
 def prompt(kind: str, body: str) -> str:

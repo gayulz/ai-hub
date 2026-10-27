@@ -372,10 +372,26 @@ class R3Test(support.ReorgCase):
 		self.git("-c", "core.precomposeunicode=false", "add", "--", name)
 		self.git("commit", "-q", "-m", "합성 시작")
 		self.preview()
-		self.assertEqual(self.command("r3-apply"), 1, self.stderr.getvalue())
+		self.assertEqual(self.command("r3-apply"), 0, self.stderr.getvalue())
 		self.assertEqual(int(self.git("rev-list", "--count", "HEAD")), 2)
 		self.assertNotIn("가짜회사", self.git("ls-files").decode())
 		self.assertTrue(self.notes()[name]["commit"])
+		# 경로 규칙으로 커밋에서 빠진 노트는 로컬 반영으로 끝나고 다음 실행이 다시 잡지 않는다
+		self.assertTrue(self.notes()["Study/가짜회사.md"]["local_only"])
+		self.assertEqual(self.command("r3-apply"), 0, self.stderr.getvalue())
+		self.assertEqual(int(self.git("rev-list", "--count", "HEAD")), 2)
+
+	def test_fenced_or_wrapped_json_is_accepted_and_non_json_is_not_cached(self):
+		self.note()
+		fenced = "설명입니다.\n```json\n" + json.dumps(SUMMARY, ensure_ascii=False) + "\n```\n끝"
+		with mock.patch.object(summarize, "call", return_value=fenced):
+			self.assertEqual(self.preview()["Study/p01.md"]["status"], "pending")
+		self.note("Study/p02.md", body="다른 본문이다.")
+		with mock.patch.object(summarize, "call", return_value="JSON이 아닌 답") as call:
+			self.preview()
+			self.preview()
+			self.assertEqual(call.call_count, 2)
+		self.assertEqual(self.notes()["Study/p02.md"]["reason"], "검증 실패")
 
 	def test_agy_argv_model_and_legacy_default_and_explicit_cwd(self):
 		plan = load_plans().plans["agy-argon"]

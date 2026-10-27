@@ -327,10 +327,17 @@ budget = { calls = 3, minutes = 2 }
 		code, out, err = self.cli("list")
 		self.assertEqual(code, 0)
 		self.assertIn(identity + "\txyz\t접수 중\tCLI 합성", out)
+		snapshot = self.files(identity)
 		code, out, err = self.cli("show", identity)
-		self.assertEqual(code, 0)
-		for value in ("상태: 접수 중", "명세 빈칸:", "goal", "작업 목록:", "예산 사용:", "3", "2"):
-			self.assertIn(value, out)
+		self.assertEqual((code, err), (0, ""))
+		lines = out.splitlines()
+		self.assertEqual([line for line in lines if line.startswith("가지:")], ["가지: agency/" + identity])
+		self.assertEqual([line for line in lines if line.startswith("체크포인트:")], ["체크포인트: 없음"])
+		for value in ("프로젝트: " + identity, "부서: xyz", "상태: 접수 중", "제목: CLI 합성",
+				"명세 빈칸: goal, target, out_of_scope, done_criteria, 어디에 납품하나요?",
+				"작업 목록:", "- 없음", "예산 사용: 호출 0/3회, 시간 0/120초"):
+			self.assertIn(value, lines)
+		self.assertEqual(self.files(identity), snapshot)
 		code, out, err = self.cli("cancel", identity)
 		self.assertEqual(code, 0)
 		self.assertIn("취소", out)
@@ -341,7 +348,51 @@ budget = { calls = 3, minutes = 2 }
 			self.assertEqual(code, 2)
 			self.assertIn("usage:", err)
 		self.assertEqual(self.cli("new", "--dept", "missing", "--title", "제목", "요청")[0], 1)
-		self.assertEqual(self.cli("show", "p-20300101-001")[0], 1)
+		for invalid, message in (("p-20300101-001", "프로젝트가 없습니다"),
+				("../xyz", "프로젝트 id 형식이 잘못됐습니다"), ("p-20300101-000", "프로젝트 id 형식이 잘못됐습니다")):
+			with self.subTest(identity=invalid):
+				self.assertEqual(self.cli("show", invalid), (1, "", "오류: " + message + "\n"))
+
+	def test_cli_show_only_latest_checkpoint_is_read_only(self):
+		identity = self.new()["id"]
+		project.set_checkpoint(identity, "계획", "합성 이전 확인")
+		project.set_checkpoint(identity, "검수", "합성 최종 확인")
+		snapshot = self.files(identity)
+		code, out, err = self.cli("show", identity)
+		self.assertEqual((code, err), (0, ""))
+		lines = out.splitlines()
+		self.assertEqual([line for line in lines if line.startswith("가지:")], ["가지: agency/" + identity])
+		self.assertEqual([line for line in lines if line.startswith("체크포인트:")],
+			["체크포인트: 검수 · 합성 최종 확인"])
+		self.assertNotIn("체크포인트: 계획 · 합성 이전 확인", out)
+		self.assertEqual(self.files(identity), snapshot)
+
+	def test_cli_show_preserves_partial_checkpoint_and_whitespace(self):
+		identity = self.new()["id"]
+		for step, detail in (("", "설명 원문"), ("단계 원문", ""), (" 단계 원문 ", " 설명 원문 ")):
+			with self.subTest(step=step, detail=detail):
+				project.set_checkpoint(identity, step, detail)
+				snapshot = self.files(identity)
+				code, out, err = self.cli("show", identity)
+				self.assertEqual((code, err), (0, ""))
+				self.assertEqual([line for line in out.splitlines() if line.startswith("체크포인트:")],
+					[f"체크포인트: {step} · {detail}"])
+				self.assertEqual(self.files(identity), snapshot)
+
+	def test_cli_show_confirmed_spec_tasks_and_used_budget(self):
+		identity = self.confirmed()["id"]
+		folder = self.hub / "projects" / identity
+		project.add_task(identity, "첫 작업", str(folder / "one.md"))
+		project.add_task(identity, "둘째 작업", str(folder / "two.md"), ["t1"])
+		project.update_task(identity, "t1", status="완료")
+		project.add_usage(identity, 1, 1.5)
+		snapshot = self.files(identity)
+		code, out, err = self.cli("show", identity)
+		self.assertEqual((code, err), (0, ""))
+		for value in ("상태: 명세 확정", "제목: 합성 프로젝트", "명세 빈칸: 없음", "작업 목록:",
+				"- t1 [완료] 첫 작업", "- t2 [대기] 둘째 작업", "예산 사용: 호출 1/3회, 시간 1.5/120초"):
+			self.assertIn(value, out.splitlines())
+		self.assertEqual(self.files(identity), snapshot)
 
 	def test_cli_stdin_and_check_collect_all_skill_errors(self):
 		for request in (("-",), ()):

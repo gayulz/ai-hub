@@ -92,6 +92,17 @@ class AgencyAiTest(unittest.TestCase):
 				ai.ask(department(), "질문", {"type": "object"})
 		self.assertIn("원인 미분류", str(caught.exception))
 
+	def test_review_plans_exclude_implementers_and_ask_uses_given_plans(self):
+		self.write('implementer = ["first"]\nreviewer = ["first", "second", "third"]\n')
+		reviewers = ai.review_plans(department(), exclude=("first",))
+		self.assertEqual([plan.id for plan in reviewers], ["second", "third"])
+		with mock.patch.object(providers, "call", return_value=providers.Reply({"ok": 1}, 0.5, "")) as call:
+			answer = ai.ask(department(), "판정", {"type": "object"}, plans=reviewers[1:])
+		self.assertEqual(answer.plan_id, "third")
+		self.assertEqual(call.call_args.args[0].id, "third")
+		with self.assertRaises(RuntimeError):
+			ai.ask(department(), "판정", {"type": "object"}, plans=[])
+
 	def test_no_allowed_plan(self):
 		self.write('pm = ["work"]\n')
 		with self.assertRaises(RuntimeError):

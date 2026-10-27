@@ -61,7 +61,8 @@ def _check():
 
 
 # 조각마다 자기 CLI 모듈을 가진다(접수 되묻기·PM 계획·실행기). 모듈은 부를 때만 불러온다.
-DELEGATES = {"intake": "intake_cli", "answer": "intake_cli", "plan": "plan_cli", "run": "runner_cli"}
+DELEGATES = {"intake": "intake_cli", "answer": "intake_cli", "plan": "plan_cli", "run": "runner_cli",
+	"review": "review_cli", "deliver": "deliver_cli"}
 
 
 def _delegate(argv: list[str]) -> int | None:

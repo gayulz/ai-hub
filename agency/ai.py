@@ -24,26 +24,37 @@ class Answer:
 	seconds: float
 
 
-def pm_plans(department: Department) -> list[Plan]:
-	"""[orchestration] 의 pm → planner → implementer 중 처음 있는 목록에서 부서가 허용한 요금제만 남긴다."""
+def _role_plans(department: Department, keys: tuple[str, ...], exclude: tuple[str, ...] = ()) -> list[Plan]:
 	if not department.external_ai:
 		raise ValueError("외부 AI 금지 부서는 PM 호출을 쓸 수 없습니다")
 	with (home() / "plans.toml").open("rb") as stream:
 		config = tomllib.load(stream).get("orchestration", {})
-	order = config.get("pm") or config.get("planner") or config.get("implementer") or []
+	order = next((config[key] for key in keys if config.get(key)), [])
 	plans, models = load_plans().plans, config.get("models", {})
 	found = []
 	for plan_id in order:
 		plan = plans.get(plan_id)
-		if plan is None or plan_id not in department.allow_plans or "personal" not in plan.allow:
+		if (plan is None or plan_id in exclude or plan_id not in department.allow_plans
+				or "personal" not in plan.allow):
 			continue
 		found.append(replace(plan, model=models[plan_id] or None) if plan_id in models else plan)
 	return found
 
 
-def ask(department: Department, prompt: str, schema: dict, repo: Path | None = None, timeout: float = 570) -> Answer:
+def pm_plans(department: Department) -> list[Plan]:
+	"""[orchestration] 의 pm → planner → implementer 중 처음 있는 목록에서 부서가 허용한 요금제만 남긴다."""
+	return _role_plans(department, ("pm", "planner", "implementer"))
+
+
+def review_plans(department: Department, exclude: tuple[str, ...] = ()) -> list[Plan]:
+	"""검수 판정용. [orchestration] reviewer 목록에서 이 프로젝트의 구현에 쓴 요금제(exclude)를 뺀다."""
+	return _role_plans(department, ("reviewer",), exclude)
+
+
+def ask(department: Department, prompt: str, schema: dict, repo: Path | None = None, timeout: float = 570,
+		plans: list[Plan] | None = None) -> Answer:
 	"""읽기 전용으로 앞 요금제부터 최대 3개까지 부른다. 실패 메시지에는 요금제와 원인 분류만 담는다."""
-	plans = pm_plans(department)[:MAX_TRIES]
+	plans = (pm_plans(department) if plans is None else plans)[:MAX_TRIES]
 	if not plans:
 		raise RuntimeError("부서가 허용한 PM 요금제가 없습니다")
 	causes = []

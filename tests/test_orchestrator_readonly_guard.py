@@ -28,6 +28,11 @@ class ReadonlyGuardTest(unittest.TestCase):
 		temporary = tempfile.TemporaryDirectory()
 		self.addCleanup(temporary.cleanup)
 		self.root = Path(temporary.name).resolve()
+		# 분류하지 못한 실패는 홈의 logs/ 에 기록되므로, 시험이 실제 ~/.ai-hub 에 쓰지 않게 홈을 임시 폴더로 바꾼다
+		self.hub = self.root / "hub"
+		patch = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.hub)})
+		patch.start()
+		self.addCleanup(patch.stop)
 		self.plain, self.repo = self.root / "plain", self.root / "repo"
 		self.plain.mkdir()
 		self.repo.mkdir()

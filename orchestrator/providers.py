@@ -7,14 +7,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from collector.config import Plan
+from collector.config import Plan, home
 
 from . import readonly_guard
 
@@ -28,6 +30,40 @@ class ProviderError(Exception):
 	def __init__(self, kind: str, message: str):
 		super().__init__(message)
 		self.kind = kind
+
+
+def _exit_cause(stderr: str, stdout: str) -> str:
+	output = (stderr + "\n" + stdout).lower()
+	for pattern, cause in (
+		(r"resource_exhausted|quota|rate limit|usage limit|too many requests|\b429\b", "한도 소진"),
+		(r"unauthorized|not logged in|log in required|please log in|sign in|authentication|invalid api key|\b(?:401|403)\b", "로그인 확인 필요"),
+		(r"context length|context window|prompt is too long|too many tokens|maximum context", "입력 길이 초과"),
+		(r"network|connection reset|connection refused|connection closed|econnreset|etimedout|timed out|dns|"
+			r"stream disconnected|failed to connect|temporarily unavailable|\b(?:500|502|503|504)\b", "네트워크·서버 오류"),
+	):
+		if re.search(pattern, output):
+			return cause
+	return "원인 미분류"
+
+
+def _log_unclassified(plan_id: str, tool: str, returncode: int, stderr: str, stdout: str) -> None:
+	"""분류하지 못한 실패만 마스킹해 로컬에 남긴다. 기록 오류는 호출 흐름에 영향을 주지 않는다."""
+	try:
+		path = home() / "logs/provider-errors.jsonl"
+		path.parent.mkdir(parents=True, exist_ok=True)
+		fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+		with os.fdopen(fd, "a", encoding="utf-8") as stream:
+			os.fchmod(stream.fileno(), 0o600)
+			if os.fstat(stream.fileno()).st_size > 2 * 1024 * 1024:
+				return
+			tail = (stderr or stdout)[-600:].replace(str(Path.home()), "~")
+			tail = re.sub(r"[A-Za-z0-9_+/=-]{32,}", "***", tail)
+			tail = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", tail)
+			entry = {"at": datetime.now().astimezone().isoformat(timespec="seconds"),
+				"plan": plan_id, "tool": tool, "returncode": returncode, "tail": tail}
+			stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+	except OSError:
+		pass
 
 
 @dataclass
@@ -159,7 +195,10 @@ def call(plan: Plan, writer: bool, prompt: str, cwd: Path, schema: dict, timeout
 			if not writer:
 				readonly_guard.verify(cwd, before, plan.tool)
 		if result.returncode != 0:
-			raise ProviderError("exit", f"{plan.id} 종료 코드 {result.returncode}")
+			cause = _exit_cause(result.stderr or "", result.stdout or "")
+			if cause == "원인 미분류":
+				_log_unclassified(plan.id, plan.tool, result.returncode, result.stderr or "", result.stdout or "")
+			raise ProviderError("exit", f"{plan.id} 종료 코드 {result.returncode} ({cause})")
 		data, usage = _unwrap(plan.tool, result.stdout, last_file)
 		return Reply(data, seconds, usage)
 
@@ -230,7 +269,10 @@ def chat_call(plan: Plan, prompt: str, cwd: Path, schema: dict, timeout: float, 
 			raise ProviderError("json", "대화 응답을 읽지 못했습니다") from None
 		seconds = time.monotonic() - started
 		if result.returncode != 0:
-			raise ProviderError("exit", "대화 도구 호출이 실패했습니다")
+			cause = _exit_cause(result.stderr or "", result.stdout or "")
+			if cause == "원인 미분류":
+				_log_unclassified(plan.id, plan.tool, result.returncode, result.stderr or "", result.stdout or "")
+			raise ProviderError("exit", f"{plan.id} 종료 코드 {result.returncode} ({cause})")
 		try:
 			data, usage = _unwrap(plan.tool, result.stdout, last_file)
 		except (OSError, ValueError, RecursionError):

@@ -1,7 +1,7 @@
 """한 번 실행의 진행: 준비 → 구현 → 기계 검증 → 독립 검토 → (보완 → 검증 → 검토) → 승인 대기.
 
 예산(호출 수·시간·보완 횟수)은 호출 전에 확인하고, 다 쓰면 새 호출을 시작하지 않는다.
-공급자 전환은 단계마다 한 번, plans.toml 에 있고 personal 이 허용된 요금제끼리만 한다.
+요금제는 단계마다 최대 3개를 시도하며, plans.toml 에 있고 personal 이 허용된 것만 쓴다.
 단계가 끝날 때마다 run.json 에 저장하므로 끊겨도 그 자리에서 이어 간다.
 """
 
@@ -20,6 +20,7 @@ from .record import Run, now
 
 ROLE_KEYS = {"implement": "implementer", "review": "reviewer", "draft": "planner"}
 BLOCKING = ("blocker", "major")
+MAX_PLAN_TRIES = 3
 
 
 def role_plans(plans: Plans, orchestration: dict, role: str) -> list[Plan]:
@@ -65,9 +66,16 @@ class Flow:
 		return self.run
 
 	def ask(self, role: str, prompt: str, schema: dict, writer: bool) -> dict | None:
-		"""역할 담당에게 묻는다. 실패하면 다음 요금제로 한 번만 넘어간다. 못 받으면 실행을 끝내고 None."""
+		"""역할마다 최대 3개 요금제에 묻고, 성공한 구현 요금제는 검토에서 제외한다. 못 받으면 실행을 끝내고 None."""
 		r = self.run
-		for plan in role_plans(self.plans, self.orchestration, role)[:2]:
+		plans = role_plans(self.plans, self.orchestration, role)
+		if role == "review":
+			implemented = {c.get("plan") for c in r.calls if c.get("role") == "implement" and c.get("ok") is True}
+			for plan in plans:
+				if plan.id in implemented:
+					r.event("review_skip_same_plan", plan=plan.id)
+			plans = [plan for plan in plans if plan.id not in implemented]
+		for plan in plans[:MAX_PLAN_TRIES]:
 			if r.seconds_left() <= 0:
 				r.finish("시간 초과", f"{role} 호출 전에 시간 한도({r.budget['seconds']}초)를 다 썼습니다. 이어 가려면 resume --minutes")
 				return None

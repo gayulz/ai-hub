@@ -1,6 +1,7 @@
 """Codex·Claude 의 새 대화·이어 가기 인자를 완전히 비교하고 AGY 는 거부하는지 본다. 실제 AI는 부르지 않는다."""
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +17,10 @@ class ChatProviderTest(unittest.TestCase):
 		self.temp = tempfile.TemporaryDirectory()
 		self.addCleanup(self.temp.cleanup)
 		self.root = Path(self.temp.name).resolve()
+		self.hub = self.root / "hub"
+		patch = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.hub)})
+		patch.start()
+		self.addCleanup(patch.stop)
 		self.git_repo, self.plain = self.root / "repo", self.root / "plain"
 		self.git_repo.mkdir()
 		self.plain.mkdir()
@@ -122,6 +127,38 @@ class ChatProviderTest(unittest.TestCase):
 			with mock.patch.object(providers.subprocess, "run", side_effect=fake), self.assertRaises(providers.ProviderError) as caught:
 				providers.chat_call(self.plan("codex"), "질문", self.git_repo, self.schema, 600, None)
 			self.assertEqual(caught.exception.kind, kind)
+
+	def test_nonzero_exits_use_classification_without_logging_or_echoing_output(self):
+		for tool in ("codex", "claude"):
+			for session in (None, "thread-00"):
+				def fake(argv, **kwargs):
+					return subprocess.CompletedProcess(argv, 0 if argv[0] == "git" else 7, "SECRETLINE", "NETWORK 429 SECRETLINE")
+				with self.subTest(tool=tool, session=session), mock.patch.object(providers.subprocess, "run", side_effect=fake):
+					with self.assertRaises(providers.ProviderError) as caught:
+						providers.chat_call(self.plan(tool), "질문", self.plain, self.schema, 600, session)
+					self.assertEqual(caught.exception.kind, "exit")
+					self.assertEqual(str(caught.exception), "p01 종료 코드 7 (한도 소진)")
+					self.assertNotIn("SECRETLINE", str(caught.exception))
+		self.assertFalse((self.hub / "logs/provider-errors.jsonl").exists())
+
+	def test_unclassified_exit_logs_masked_tail_and_log_failure_keeps_exit_kind(self):
+		token = "ghp_" + "a" * 36
+		user_home = self.root / "xyz"
+		for tool in ("codex", "claude"):
+			def fake(argv, **kwargs):
+				return subprocess.CompletedProcess(argv, 0 if argv[0] == "git" else 7, "SECRETLINE", f"{user_home}/note {token}\n")
+			with self.subTest(tool=tool), mock.patch.object(providers.subprocess, "run", side_effect=fake), \
+					mock.patch.object(providers.Path, "home", return_value=user_home):
+				with self.assertRaises(providers.ProviderError) as caught:
+					providers.chat_call(self.plan(tool), "질문", self.plain, self.schema, 600, None)
+				self.assertEqual(str(caught.exception), "p01 종료 코드 7 (원인 미분류)")
+				with mock.patch.object(providers.Path, "mkdir", side_effect=OSError("합성 기록 오류")):
+					with self.assertRaises(providers.ProviderError) as failed:
+						providers.chat_call(self.plan(tool), "질문", self.plain, self.schema, 600, None)
+					self.assertEqual((failed.exception.kind, str(failed.exception)), ("exit", str(caught.exception)))
+		entries = [json.loads(line) for line in (self.hub / "logs/provider-errors.jsonl").read_text(encoding="utf-8").splitlines()]
+		self.assertEqual([entry["tool"] for entry in entries], ["codex", "claude"])
+		self.assertEqual([entry["tail"] for entry in entries], ["~/note *** "] * 2)
 
 	def test_unsupported_tool_and_invalid_session_never_start_a_process(self):
 		for tool, session in (("ollama", None), ("codex", "--yolo"), ("claude", "../session"), ("agy", None), ("agy", "conv-01")):

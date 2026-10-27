@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import contextlib
@@ -10,8 +11,10 @@ import io
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from collector import vault
-from collector.config import load_plans
+from collector.config import Plan, Plans, load_plans
 from orchestrator import __main__ as cli, checks, targets
 from orchestrator.flow import Flow
 from orchestrator.providers import ProviderError, Reply, extract_json
@@ -63,7 +66,7 @@ class FakeAI:
 	def __call__(self, plan, writer, prompt, cwd, schema, timeout):
 		self.log.append((plan.id, writer))
 		if plan.tool in self.fail_tools:
-			raise ProviderError("exit", f"{plan.id} 종료 코드 1")
+			raise ProviderError("exit", f"{plan.id} 종료 코드 1 (원인 미분류)")
 		if "verdict" in schema["properties"]:
 			return Reply(self.reviews.pop(0), 0.1, "미측정")
 		if "document" in schema["properties"]:
@@ -352,6 +355,90 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertEqual(extract_json('앞말 {"a": 2} 뒷말'), {"a": 2})
 		with self.assertRaises(ProviderError):
 			extract_json("JSON 없음")
+
+
+class PlanSelectionTest(unittest.TestCase):
+	def setUp(self):
+		temporary = tempfile.TemporaryDirectory()
+		self.addCleanup(temporary.cleanup)
+		self.root = Path(temporary.name).resolve()
+		patch = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.root / "hub")})
+		patch.start()
+		self.addCleanup(patch.stop)
+		self.ids = ["p01", "p02", "p03", "p04"]
+		self.plans = Plans({pid: Plan(pid, "agy", "합성", "personal", ("personal",), None, None) for pid in self.ids}, {})
+
+	def engine(self, caller, **budget):
+		run = Run(new_run_id(), {"goal": "합성 분석", "done": [], "owned_paths": []}, str(self.root),
+			kind="analysis", worktree=str(self.root))
+		run.budget.update(budget)
+		run.save()
+		return Flow(run, self.plans, {"implementer": self.ids, "reviewer": self.ids}, caller=caller)
+
+	def test_third_plan_is_called_after_two_failures_for_each_role(self):
+		for role in ("implement", "review"):
+			with self.subTest(role=role):
+				caller = mock.Mock(side_effect=[ProviderError("exit", "합성 실패")] * 2 + [Reply(PASS, .1, {})])
+				engine = self.engine(caller)
+				self.assertEqual(engine.ask(role, "질문", {}, False), PASS)
+				self.assertEqual([c.args[0].id for c in caller.call_args_list], self.ids[:3])
+				self.assertEqual([c["ok"] for c in engine.run.calls], [False, False, True])
+				self.assertEqual(engine.run.budget["calls"], 8)
+
+	def test_fourth_plan_is_not_tried_after_three_failures(self):
+		for role in ("implement", "review"):
+			with self.subTest(role=role):
+				caller = mock.Mock(side_effect=ProviderError("exit", "합성 실패"))
+				engine = self.engine(caller)
+				self.assertIsNone(engine.ask(role, "질문", {}, False))
+				self.assertEqual([c.args[0].id for c in caller.call_args_list], self.ids[:3])
+				self.assertEqual(engine.run.status, "실패")
+
+	def test_call_and_time_budgets_stop_before_third_attempt(self):
+		for limit, expected in (("calls", "호출 한도 소진"), ("seconds", "시간 초과")):
+			with self.subTest(limit=limit):
+				def fail(*args):
+					if limit == "seconds" and len(engine.run.calls) == 2:
+						engine.run.elapsed = engine.run.budget["seconds"]
+					raise ProviderError("exit", "합성 실패")
+				caller = mock.Mock(side_effect=fail)
+				engine = self.engine(caller, **({"calls": 2} if limit == "calls" else {}))
+				self.assertIsNone(engine.ask("implement", "질문", {}, True))
+				self.assertEqual(caller.call_count, 2)
+				self.assertEqual(engine.run.status, expected)
+
+	def test_review_skips_all_successful_implementers_before_try_limit(self):
+		caller = mock.Mock(side_effect=[ProviderError("exit", "합성 실패")] * 2 + [Reply(PASS, .1, {})])
+		engine = self.engine(caller)
+		engine.run.calls = [{"role": "implement", "plan": "p01", "ok": True}]
+		self.assertEqual(engine.ask("review", "질문", {}, False), PASS)
+		self.assertEqual([c.args[0].id for c in caller.call_args_list], self.ids[1:])
+		events = [json.loads(line) for line in (engine.run.folder / "events.jsonl").read_text().splitlines()]
+		self.assertEqual([e["plan"] for e in events if e["event"] == "review_skip_same_plan"], ["p01"])
+		self.assertEqual(len(engine.run.calls), 4)
+
+	def test_failed_pending_and_review_calls_do_not_exclude_plans(self):
+		caller = mock.Mock(return_value=Reply(PASS, .1, {}))
+		engine = self.engine(caller)
+		engine.run.calls = [{"role": "implement", "plan": "p01", "ok": False},
+			{"role": "implement", "plan": "p01", "ok": None}, {"role": "review", "plan": "p01", "ok": True}]
+		self.assertEqual(engine.ask("review", "질문", {}, False), PASS)
+		self.assertEqual(caller.call_args.args[0].id, "p01")
+		self.assertNotIn("review_skip_same_plan", (engine.run.folder / "events.jsonl").read_text())
+
+	def test_empty_review_list_after_skips_finishes_run_as_failed(self):
+		caller = mock.Mock()
+		engine = self.engine(caller)
+		engine.run.calls = [{"role": "implement", "plan": pid, "ok": True} for pid in self.ids]
+		engine.run.step, engine.run.document = "review", "합성 문서"
+		result = engine.run_all()
+		caller.assert_not_called()
+		self.assertEqual(result.status, "실패")
+		self.assertIn("review 담당 호출이 모두 실패했습니다", result.end_reason)
+		self.assertEqual(len(result.calls), 4)
+		events = [json.loads(line) for line in (result.folder / "events.jsonl").read_text().splitlines()]
+		self.assertEqual([e["plan"] for e in events if e["event"] == "review_skip_same_plan"], self.ids)
+		self.assertEqual(Run.load(result.run_id).status, "실패")
 
 
 if __name__ == "__main__":

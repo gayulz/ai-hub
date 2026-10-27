@@ -14,7 +14,8 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 | `vaultfilter/` push 전 검사(`verify encrypted`: 암호화 여부·경로·작성자·메시지)와 마스킹 사전(경로·메시지 검사용) | Python | 사용 중 |
 | `orchestrator/` AI 개발 오케스트레이션(A안) — 구현 AI·독립 검토 AI·기계 검증·보완, 실행 기록 `~/.ai-hub/runs/`, 반영은 사용자 승인 뒤 `apply`(대상 저장소의 작업 중인 파일과 겹치면 거부). 사무실 개발 지시용 요청서 초안은 `draft --target`(plans.toml `[orchestration] planner`, 없으면 implementer). 대상 저장소의 경로·테스트 명령·커밋 꼴·기본 금지 사항은 `targets`(ai-hub 내장 + `~/.ai-hub/repos.toml`)로만 정한다(계획: 볼트 `261022-07`, `261024-06`) | Python | 사용 중 |
 | `vaultsync/` 볼트 자동 기록 — 하루 2회(12:30·23:30) 커밋·push, 첨부는 iCloud 사본(계획: 볼트 `261022-05`, `261022-06`) | Python | 사용 중 |
-| 검색 엔진·기억 서버(MCP) | Java/Spring Boot + Lucene + Nori | 예정 |
+| `search/` 검색 엔진 — 볼트 노트를 조각내 Lucene(Nori 한국어 분석기)으로 색인하고 BM25·벡터(Ollama `bge-m3`, 로컬 전용)·RRF 하이브리드로 검색한다. 명령은 `index`·`query`·`eval`·`serve`, 회사 노트는 기본 검색에서 제외한다. 색인 `~/.ai-hub/index`, 평가 점수 로그 `~/.ai-hub/search-eval-log.md`. 로컬 REST는 `127.0.0.1:8791`(launchd 상시 실행, 증분 색인은 매시 40분 예약). 시험은 `cd search && ./gradlew test --offline`(계획: 볼트 `261024-04`) | Java 21/Spring Boot + Lucene + Nori | 사용 중 |
+| 기억 서버(MCP) — 위 검색을 Claude·Codex·Gemini·AGY에 도구로 연다 | 미정 | 예정 |
 
 ## 작업 전에 반드시 읽을 것
 

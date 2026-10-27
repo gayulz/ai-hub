@@ -85,7 +85,7 @@ public class SearchService {
 				throw new EmbeddingException("질의 임베딩 벡터 차원이 설정과 다릅니다");
 			}
 			Query filter = includeCompany ? null : new BooleanQuery.Builder()
-					.add(new MatchAllDocsQuery(), Occur.MUST)
+					.add(MatchAllDocsQuery.INSTANCE, Occur.MUST)
 					.add(new TermQuery(new Term("sensitivity", "company")), Occur.MUST_NOT).build();
 			int candidates = (int) Math.min((long) k * 5, 100);
 			var vectorQuery = new KnnFloatVectorQuery("vector", vector, candidates, filter);

@@ -85,8 +85,9 @@ def _requests(data, rules: Rules, selected: targets.Target, branch: str) -> list
 
 def plan(identity: str) -> dict:
 	row = project.load(identity)
-	if row["status"] != "명세 확정":
-		raise ValueError("명세 확정 프로젝트만 계획할 수 있습니다")
+	# 계획 호출이 실패해 막힘 → 재개되면 상태가 '계획'으로 돌아온다. 작업이 없으면 다시 계획할 수 있어야 한다.
+	if row["status"] not in ("명세 확정", "계획"):
+		raise ValueError("명세 확정 또는 작업 없는 계획 상태의 프로젝트만 계획할 수 있습니다")
 	if row["tasks"]:
 		raise ValueError("이미 작업이 있는 프로젝트는 계획할 수 없습니다")
 	department = load_departments().get(row["department"])
@@ -120,7 +121,8 @@ def plan(identity: str) -> dict:
 		+ "\n지금까지의 답(answers):\n" + json.dumps(row["answers"], ensure_ascii=False)
 		+ "\n플레이북:\n" + playbook + "\n추적 파일 목록(앞 400줄):\n" + files)
 	rules = Rules()
-	project.transition(identity, "계획")
+	if row["status"] == "명세 확정":
+		project.transition(identity, "계획")
 	started = time.monotonic()
 	try:
 		answer = ai.ask(department, prompt, SCHEMA, repo=selected.path)
@@ -139,6 +141,9 @@ def plan(identity: str) -> dict:
 		raise
 	folder = project._folder(identity) / "tasks"
 	try:
+		if folder.exists() and not folder.is_symlink():
+			# 앞선 시도가 쓰다 만 요청서는 지우지 않고 옆으로 옮겨 남긴다(작업으로 등록되지 않은 파일).
+			folder.rename(folder.with_name(f"tasks-failed-{time.time_ns()}"))
 		folder.mkdir(mode=0o700)
 		folder.chmod(0o700)
 		for number, request in enumerate(requests, 1):

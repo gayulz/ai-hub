@@ -220,9 +220,6 @@ budget={calls=10, minutes=30}
 		row = self.confirmed()
 		project.add_task(row["id"], "기존 작업", str(project._folder(row["id"]) / "prior.toml"))
 		rows = [row, project.new(self.department, "접수", "합성 요청")]
-		planned = self.confirmed()
-		project.transition(planned["id"], "계획")
-		rows.append(planned)
 		for row in rows:
 			with self.subTest(identity=row["id"]):
 				before = project.load(row["id"])
@@ -281,26 +278,44 @@ budget={calls=10, minutes=30}
 				self.assertEqual(current["used"]["calls"], 1)
 				self.assertFalse((project._folder(row["id"]) / "tasks").exists())
 
-	def test_existing_request_directory_and_symlink_are_never_overwritten(self):
-		for linked in (False, True):
-			with self.subTest(linked=linked):
-				row = self.confirmed()
-				folder = project._folder(row["id"]) / "tasks"
-				if linked:
-					outside = self.root / "outside"
-					outside.mkdir()
-					folder.symlink_to(outside, target_is_directory=True)
-				else:
-					folder.mkdir()
-					(folder / "t1.toml").write_text("합성 원본", encoding="utf-8")
-				with self.assertRaises(ValueError):
-					planner.plan(row["id"])
-				self.assertEqual(project.load(row["id"])["tasks"], [])
-				self.assertEqual(project.load(row["id"])["status"], "막힘")
-				if linked:
-					self.assertEqual(list(outside.iterdir()), [])
-				else:
-					self.assertEqual((folder / "t1.toml").read_text(), "합성 원본")
+	def test_symlinked_request_directory_is_never_written(self):
+		row = self.confirmed()
+		folder = project._folder(row["id"]) / "tasks"
+		outside = self.root / "outside"
+		outside.mkdir()
+		folder.symlink_to(outside, target_is_directory=True)
+		with self.assertRaises(ValueError):
+			planner.plan(row["id"])
+		self.assertEqual(project.load(row["id"])["tasks"], [])
+		self.assertEqual(project.load(row["id"])["status"], "막힘")
+		self.assertEqual(list(outside.iterdir()), [])
+
+	def test_leftover_request_directory_is_moved_aside_not_overwritten(self):
+		row = self.confirmed()
+		folder = project._folder(row["id"]) / "tasks"
+		folder.mkdir()
+		(folder / "t1.toml").write_text("합성 원본", encoding="utf-8")
+		planner.plan(row["id"])
+		kept = [path for path in folder.parent.iterdir() if path.name.startswith("tasks-failed-")]
+		self.assertEqual(len(kept), 1)
+		self.assertEqual((kept[0] / "t1.toml").read_text(encoding="utf-8"), "합성 원본")
+		self.assertEqual(len(project.load(row["id"])["tasks"]), 2)
+		self.assertNotEqual((folder / "t1.toml").read_text(encoding="utf-8"), "합성 원본")
+
+	def test_replan_after_blocked_call_is_resumed(self):
+		row = self.confirmed()
+		self.ask.side_effect = RuntimeError("합성 실패 (한도 소진)")
+		with self.assertRaises(RuntimeError):
+			planner.plan(row["id"])
+		resumed = project.resume(row["id"])
+		self.assertEqual((resumed["status"], resumed["tasks"]), ("계획", []))
+		self.ask.side_effect = None
+		self.ask.return_value = ai.Answer(sample(), "xyz", 2.5)
+		result = planner.plan(row["id"])
+		current = project.load(row["id"])
+		self.assertEqual(len(result["tasks"]), 2)
+		self.assertEqual(current["status"], "계획")
+		self.assertEqual(current["used"]["calls"], 2)
 
 	def test_readback_failure_prevents_task_registration(self):
 		row = self.confirmed()

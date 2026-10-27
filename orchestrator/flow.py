@@ -106,7 +106,13 @@ class Flow:
 
 	def prepare(self) -> None:
 		r = self.run
-		r.base_commit = checks.git(r.repo, "rev-parse", "HEAD").strip()
+		if base_branch := r.request.get("base_branch"):
+			r.base_commit = checks.git(r.repo, "rev-parse", "--verify", f"refs/heads/{base_branch}^{{commit}}", check=False).strip()
+			if not r.base_commit:
+				r.finish("실패", "기준 가지가 없습니다")
+				return
+		else:
+			r.base_commit = checks.git(r.repo, "rev-parse", "HEAD").strip()
 		r.branch = f"orch/{r.run_id}"
 		worktree = worktrees_dir() / r.run_id
 		if not worktree.exists():

@@ -149,6 +149,35 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertEqual((self.repo / "src" / "a.py").read_text(encoding="utf-8"), "VALUE = 2\n")
 		self.assertFalse(Path(run.worktree).exists())
 
+	def test_read_request_validates_optional_base_branch_with_git(self):
+		path = self.repo.parent / "request.toml"
+		request = '[request]\ngoal="합성 작업"\ndone=["완료"]\nowned_paths=["src/*"]\n'
+		path.write_text(request, encoding="utf-8")
+		self.assertNotIn("base_branch", cli.read_request(str(path))["request"])
+		for branch in ("agency/project", "agency/합성"):
+			with self.subTest(branch=branch):
+				path.write_text(request + "base_branch=" + json.dumps(branch, ensure_ascii=False), encoding="utf-8")
+				self.assertEqual(cli.read_request(str(path))["request"]["base_branch"], branch)
+		for value in ('42', 'true', '["agency/project"]', '{}', '""', '"bad name"', '"bad..name"',
+				'"agency//bad"', '"../bad"', '"bad.lock"', '"bad@{name"', '"-bad"', '"HEAD"', '"bad\\u0000name"'):
+			with self.subTest(value=value):
+				path.write_text(request + "base_branch=" + value, encoding="utf-8")
+				with self.assertRaisesRegex(ValueError, "^base_branch"):
+					cli.read_request(str(path))
+
+	def test_apply_refuses_project_branch_run_without_mutation(self):
+		run = self.approved({"src/a.py": "VALUE = 2\n"})
+		run.request["base_branch"] = "agency/project"
+		run.save()
+		before = self.snapshot()
+		with mock.patch.object(cli, "finish_outputs") as finish:
+			with self.assertRaisesRegex(RuntimeError, "^프로젝트 가지 기준 실행은 apply <run_id> --onto <가지> 로만 반영합니다$"):
+				cli.cmd_apply(run.run_id)
+			finish.assert_not_called()
+		self.assertEqual(self.snapshot(), before)
+		self.assertEqual(Run.load(run.run_id).status, "승인 필요")
+		self.assertTrue(Path(run.worktree).exists())
+
 	def test_apply_rejects_dirty_modified_deleted_untracked_and_directory_collisions_without_mutation(self):
 		cases = [("src/a.py", "추가 합성 내용", "수정"), ("src/a.py", None, "삭제"),
 			("src/new file.py", "합성 새 파일", "추적 안 됨"), ("src/새\n파일.py", "합성 줄바꿈 파일", "추적 안 됨"),

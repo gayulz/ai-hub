@@ -8,8 +8,9 @@
 	python3 -m orchestrator resume <run_id> [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
+	python3 -m orchestrator apply <run_id> --onto <가지>  프로젝트 기준 가지에 한 커밋으로 반영한다(push 안 함)
 
-요청서는 [request] goal·done·owned_paths·forbidden·details·test_command·commit_message·kind·role, [budget] calls·minutes·fixes.
+요청서는 [request] goal·done·owned_paths·forbidden·details·test_command·commit_message·kind·role·base_branch, [budget] calls·minutes·fixes.
 role은 plan·backend·frontend·design 중 하나이며 생략하면 backend다.
 역할 담당은 ~/.ai-hub/plans.toml 의 [orchestration] implementer·reviewer 목록을 따른다.
 """
@@ -17,6 +18,7 @@ role은 plan·backend·frontend·design 중 하나이며 생략하면 backend다
 from __future__ import annotations
 
 import fcntl
+import shlex
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,7 @@ from collector import vault
 from collector.config import ConfigError, home, load_plans, load_sources
 
 from . import checks, targets
+from .branch_apply import apply_to_branch, commit_message
 from .flow import Flow
 from .record import DEFAULT_BUDGET, Run, new_run_id
 
@@ -80,7 +83,8 @@ def report(run: Run) -> str:
 	if run.kind == "analysis":
 		lines += ["", f"문서: `{run.folder / 'document.md'}`"]
 	if run.status == "승인 필요" and run.kind == "code":
-		lines += ["", f"반영: `python3 -m orchestrator apply {run.run_id}`"]
+		onto = " --onto " + shlex.quote(run.request["base_branch"]) if run.request.get("base_branch") else ""
+		lines += ["", f"반영: `python3 -m orchestrator apply {run.run_id}{onto}`"]
 	return "\n".join(lines) + "\n"
 
 
@@ -110,6 +114,15 @@ def read_request(request_path: str) -> dict:
 	kind = request.get("kind", "code")
 	if kind == "code" and not request.get("owned_paths"):
 		raise ValueError("코드 작업은 owned_paths(고쳐도 되는 경로)가 필요합니다")
+	if "base_branch" in request:
+		branch = request["base_branch"]
+		if not isinstance(branch, str):
+			raise ValueError("base_branch는 올바른 가지 이름 문자열이어야 합니다")
+		try:
+			if checks.git(Path(request_path).parent, "check-ref-format", "--branch", branch).strip() != branch:
+				raise ValueError
+		except (RuntimeError, ValueError):
+			raise ValueError("base_branch는 올바른 가지 이름 문자열이어야 합니다") from None
 	return data
 
 
@@ -157,6 +170,8 @@ def cmd_apply(run_id: str) -> int:
 	run = Run.load(run_id)
 	if run.kind != "code" or run.status != "승인 필요":
 		raise RuntimeError(f"반영할 수 없는 상태입니다: {run.kind} · {run.status}")
+	if run.request.get("base_branch"):
+		raise RuntimeError("프로젝트 가지 기준 실행은 apply <run_id> --onto <가지> 로만 반영합니다")
 	if checks.git(run.repo, "diff", "--cached", "--name-only").strip():
 		raise RuntimeError("본 저장소에 스테이징된 변경이 있어 반영하지 않습니다")
 	paths = [p for p in checks.git(run.repo, "diff", "--name-only", "-z", "--no-renames", run.base_commit, run.branch).split("\0") if p]
@@ -165,10 +180,7 @@ def cmd_apply(run_id: str) -> int:
 	if overlaps:
 		raise RuntimeError(f"작업 중인 파일과 겹쳐 반영하지 않습니다: {len(overlaps)}개")
 	selected = next((item for item in targets.targets().values() if str(item.path) == run.repo), None)
-	message = run.request.get("commit_message") or run.request["goal"]
-	if selected and selected.claude_trailer and any(c.get("role") == "implement" and c.get("tool") == "claude"
-			and c.get("ok") is True for c in run.calls):
-		message = message.rstrip() + "\n\n" + selected.claude_trailer
+	message = commit_message(run, selected)
 	merged = subprocess.run(["git", "-C", run.repo, "merge", "--squash", run.branch], capture_output=True, text=True)
 	if merged.returncode != 0 or not checks.git(run.repo, "diff", "--cached", "--name-only").strip():
 		checks.git(run.repo, "reset", "-q", "--merge", check=False)  # 반쯤 합친 상태를 남기지 않는다
@@ -204,6 +216,9 @@ def main(argv: list[str]) -> int:
 			return 0
 		if argv[:1] == ["apply"] and len(argv) == 2:
 			return cmd_apply(argv[1])
+		if argv[:1] == ["apply"] and len(argv) == 4 and argv[2] == "--onto":
+			print(apply_to_branch(argv[1], argv[3])[:12])
+			return 0
 	except (OSError, ValueError, RuntimeError, KeyError, ConfigError) as exc:
 		print(f"orchestrator 실패: {type(exc).__name__}: {exc}", file=sys.stderr)
 		return 1

@@ -166,10 +166,16 @@ def step(identity: str) -> dict:
 		answered = {item["question"] for item in row["answers"] if item["answer"].strip()}
 		values = data.get("questions")
 		values = values if isinstance(values, list) else []
-		values = list(dict.fromkeys(value for value in values if _valid_question(value) and value not in answered))[:3]
+		# 부서 필수 질문은 AI 가 빠뜨려도 원문 그대로 먼저 연다. 이미 열린 질문은 자리를 차지하지 않는다.
+		required = [question for question in department.required_questions if question not in answered]
+		opened = {item["question"] for item in questions["open"]}
+		proposed = [value for value in dict.fromkeys([*required, *(value for value in values if _valid_question(value))])
+			if value not in answered]
+		values = [value for value in proposed[:3] if value not in opened]
 		candidates = list(values)
 		summary = data.get("summary")
-		if (not values and not missing and _valid_summary(summary)
+		# AI 가 열린 질문을 다시 묻는 것도 '아직 확인할 것이 남음'으로 본다(요약 확인을 열지 않음).
+		if (not proposed and not missing and _valid_summary(summary)
 				and not any(item["question"].startswith(CONFIRM_PREFIX) for item in questions["open"])):
 			candidates.append(CONFIRM_PREFIX + summary)
 		for question in candidates:

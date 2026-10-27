@@ -164,6 +164,15 @@ budget = { calls = 3, minutes = 2 }
 		self.reply(questions=(REQUIRED,))
 		self.assertEqual(intake.step(self.identity)["questions"], [])
 
+	def test_required_questions_open_even_when_ai_omits_them(self):
+		self.reply(questions=("다른 질문?",))
+		result = intake.step(self.identity)
+		self.assertEqual([item["question"] for item in result["questions"]], [REQUIRED, "다른 질문?"])
+		self.reply(questions=())
+		again = intake.step(self.identity)
+		self.assertEqual(again["questions"], result["questions"])
+		self.assertIn(REQUIRED, again["missing"])
+
 	def test_complete_spec_opens_only_one_summary_confirmation(self):
 		self.ready()
 		first = intake.step(self.identity)

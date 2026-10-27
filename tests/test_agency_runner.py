@@ -155,6 +155,12 @@ budget = { calls = 20, minutes = 10 }
 		self.assertFalse(any(call.args[1] == "checkout" for call in git.call_args_list))
 		self.assertTrue(all(Run.load(task["run_id"]).status == "완료" for task in saved["tasks"]))
 
+	def test_project_without_tasks_is_refused_without_state_change(self):
+		row = self.new(count=0)
+		with self.assertRaisesRegex(ValueError, "등록된 작업이 없습니다"):
+			runner.run(row["id"])
+		self.assertEqual(project.load(row["id"])["status"], "계획")
+
 	def test_existing_project_branch_keeps_its_tip(self):
 		row = self.new()
 		self.git("branch", row["branch"], self.head)

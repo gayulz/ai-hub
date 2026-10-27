@@ -40,6 +40,9 @@ def run(identity: str) -> dict:
 	repo = targets.target(department.repos[0]).path
 	with locked("agency-repo:" + str(repo)):
 		row = project.load(identity)
+		# 작업이 0건이면 아래 '모두 완료' 검사가 참이 되어 빈 프로젝트가 검수로 넘어간다. 상태를 바꾸기 전에 거부한다.
+		if not row["tasks"]:
+			raise ValueError("등록된 작업이 없습니다. 먼저 python3 -m agency plan 으로 계획하세요")
 		if row["status"] == "막힘":
 			row = project.resume(identity)
 		if row["status"] == "계획":

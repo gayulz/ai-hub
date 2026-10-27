@@ -83,7 +83,9 @@ def report(threshold: float = .80, max_groups: int = 40):
 						group.update(entry)
 				for note in group["notes"]:
 					if group.get("judgment", {}).get("action") == "merge" or group.get("judgment", {}).get("relation") == "duplicate":
-						note["excerpts"] = [line.strip()[:160] for line in note["body"].splitlines() if line.strip()][:2]
+						# 제목 줄(# ...)은 살릴 내용이 아니므로 건너뛰고 본문 줄만 발췌한다
+						note["excerpts"] = [line.strip()[:160] for line in note["body"].splitlines()
+							if line.strip() and not line.lstrip().startswith("#")][:2]
 					for key in ("data", "body"):
 						note.pop(key)
 					note.update(status="pending", reason="")

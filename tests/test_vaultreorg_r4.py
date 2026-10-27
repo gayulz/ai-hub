@@ -311,6 +311,7 @@ class R4Test(support.ReorgCase):
 				text = (self.base / "r4-report.md").read_text(encoding="utf-8").split("## 병합 제안")[1]
 				self.assertIn("Study/p02.md", text)
 				self.assertIn("기록의 근거", text)
+				self.assertNotIn("합성 주제", text)
 
 	def test_stale_body_reclassification_unsafe_paths_and_tampered_hash(self):
 		paths = [self.note(f"Study/p{i}.md") for i in range(4)]

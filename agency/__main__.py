@@ -31,6 +31,12 @@ def _show(identity):
 	if department is None:
 		raise ValueError("프로젝트의 부서 설정이 없습니다")
 	print(f"프로젝트: {row['id']}\n부서: {row['department']}\n상태: {row['status']}\n제목: {row['title']}")
+	print(f"가지: {row['branch']}")
+	checkpoint = row["checkpoint"]
+	if checkpoint["step"] or checkpoint["detail"]:
+		print(f"체크포인트: {checkpoint['step']} · {checkpoint['detail']}")
+	else:
+		print("체크포인트: 없음")
 	missing = project.spec_missing(row, department)
 	print("명세 빈칸: " + (", ".join(missing) if missing else "없음"))
 	print("작업 목록:")

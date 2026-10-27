@@ -5,30 +5,48 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 
 from collector import summarize
 from collector.backfill_common import packed, sha
-from collector.config import ConfigError
+from collector.config import ConfigError, home
 
 from .r3_text import parse
 
 ORDER = ("agy-opus", "agy-sonnet", "codex-personal")
+PLAN_TOOLS = {"agy-opus": "agy", "agy-sonnet": "agy", "agy-argon": "agy", "codex-personal": "codex"}
+CACHE_PLANS = ("agy-opus", "agy-sonnet", "codex-personal", "agy-argon")
 RELATIONS = {"duplicate", "overlap", "related", "distinct"}
 ACTIONS = {"merge", "link", "none"}
 
 
 def routing(plans):
+	try:
+		with (home() / "plans.toml").open("rb") as source:
+			section = tomllib.load(source).get("vaultreorg", {})
+	except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+		raise ConfigError("R4 요금제 설정을 읽을 수 없습니다") from exc
+	if not isinstance(section, dict):
+		raise ConfigError("vaultreorg 설정은 테이블이어야 합니다")
+	explicit = "r4_judges" in section
+	order = section["r4_judges"] if explicit else ORDER
+	if explicit and (not isinstance(order, list) or not order or
+			any(not isinstance(pid, str) or not pid for pid in order) or len(set(order)) != len(order)):
+		raise ConfigError("r4_judges는 중복 없는 요금제 ID 배열이어야 합니다")
 	chosen = {}
-	for pid, tool in zip(ORDER, ("agy", "agy", "codex")):
+	for pid in order:
+		if pid not in PLAN_TOOLS:
+			raise ConfigError("R4에 허용되지 않은 요금제 ID입니다")
 		plan = plans.plans.get(pid)
 		if plan is None:
+			if explicit:
+				raise ConfigError("r4_judges의 요금제가 plans.toml에 등록되지 않았습니다")
 			continue
-		if plan.id != pid or plan.owner != "personal" or plan.tool != tool:
-			raise ConfigError("R4 요금제의 소유자·도구 설정이 허용 목록과 다릅니다")
-		if "personal" in plan.allow:
-			chosen[pid] = plan
+		if plan.id != pid or plan.owner != "personal" or plan.tool != PLAN_TOOLS[pid] or "personal" not in plan.allow:
+			raise ConfigError("R4 요금제의 소유자·도구·개인 자료 허용 설정이 잘못됐습니다")
+		chosen[pid] = plan
 	if not chosen:
 		raise ConfigError("R4에 허용된 개인 요금제가 plans.toml에 없습니다")
 	return replace(plans, plans=chosen, routing={"personal": tuple(chosen)})
@@ -71,7 +89,7 @@ def judge(notes, plans, ledger, day, cache, failed):
 	key = sha(packed(sorted((note["path"], note["before"], note["input_hash"]) for note in notes)))
 	entry = cache.get(key)
 	if entry is not None:
-		if not isinstance(entry, dict) or entry.get("plan") not in ORDER or validate(entry.get("judgment"), notes) is None:
+		if not isinstance(entry, dict) or entry.get("plan") not in CACHE_PLANS or validate(entry.get("judgment"), notes) is None:
 			raise ConfigError("R4 판정 캐시 항목 형식 오류")
 		return entry, ""
 	for plan in summarize.usable_plans("personal", plans, ledger, day, failed):

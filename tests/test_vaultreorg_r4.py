@@ -40,15 +40,23 @@ class R4Test(support.ReorgCase):
 			patch.start()
 			self.addCleanup(patch.stop)
 
-	def plans(self, limits=(None, None, None)):
+	def plans(self, limits=(None, None, None), argon=True):
 		lines = []
-		for index, (pid, tool) in enumerate(zip((*r4_judge.ORDER, "agy-personal", "claude-personal"),
-			("agy", "agy", "codex", "agy", "claude"))):
+		ids = [("agy-opus", "agy"), ("agy-sonnet", "agy"), ("codex-personal", "codex"),
+			("agy-personal", "agy"), ("claude-personal", "claude")]
+		if argon:
+			ids.append(("agy-argon", "agy"))
+		for index, (pid, tool) in enumerate(ids):
 			lines.extend(["[[plans]]", f"id='{pid}'", f"tool='{tool}'", "owner='personal'", "model='xyz'", "allow=['personal']"])
 			if index < 3 and limits[index] is not None:
 				lines.append(f"daily_limit_calls={limits[index]}")
 		lines.extend(["[routing]", "personal=['claude-personal','agy-personal','codex-personal']"])
 		(self.hub / "plans.toml").write_text("\n".join(lines), encoding="utf-8")
+
+	def set_judges(self, value):
+		path = self.hub / "plans.toml"
+		base = path.read_text(encoding="utf-8").split("\n[vaultreorg]\n", 1)[0]
+		path.write_text(base + "\n[vaultreorg]\n" + value + "\n", encoding="utf-8")
 
 	def note(self, name="Study/p01.md", kind="study", body=BODY, sensitivity="personal", nl="\n", bom=b""):
 		classification = f"sensitivity: {sensitivity}{nl}" if sensitivity is not None else ""
@@ -168,7 +176,7 @@ class R4Test(support.ReorgCase):
 		for i in range(24):
 			self.note(f"Study/p{i:02d}.md")
 		plan = self.preview()
-		self.assertEqual([item[0] for item in self.calls], list(r4_judge.ORDER))
+		self.assertEqual([item[0] for item in self.calls], ["agy-opus", "agy-sonnet", "codex-personal"])
 		self.assertEqual(sum(g["reason"] == "한도" for g in plan["groups"]), 1)
 		self.preview()
 		self.assertEqual(len(self.calls), 3)
@@ -191,13 +199,114 @@ class R4Test(support.ReorgCase):
 		with mock.patch.object(summarize, "call", side_effect=failing):
 			plan = self.preview()
 		used = [item[0] for item in self.calls]
-		self.assertEqual(used[:3], list(r4_judge.ORDER))
+		self.assertEqual(used[:3], ["agy-opus", "agy-sonnet", "codex-personal"])
 		self.assertEqual((used.count("agy-opus"), used.count("agy-sonnet")), (1, 1))
 		self.assertEqual(used.count("codex-personal"), len(plan["groups"]))
 		self.assertEqual(sum(g["status"] == "failed" for g in plan["groups"]), 0)
 		plans = load_plans()
 		with self.assertRaises(ConfigError):
 			r4_judge.routing(replace(plans, plans={"agy-opus": replace(plans.plans["agy-opus"], tool="claude")}))
+
+	def test_judge_order_is_read_again_for_each_report(self):
+		_, second = self.pair()
+		last = "codex-personal"
+		def failing(plan, prompt, *, cwd):
+			result = self.fake(plan, prompt, cwd=cwd)
+			if plan.id != last:
+				raise summarize.SummarizeError("합성 실패")
+			return result
+		with mock.patch.object(summarize, "call", side_effect=failing):
+			for index, (setting, expected) in enumerate((
+				("['agy-argon','agy-sonnet','codex-personal']", ["agy-argon", "agy-sonnet", "codex-personal"]),
+				("['codex-personal','agy-argon','agy-sonnet']", ["codex-personal", "agy-argon", "agy-sonnet"]))):
+				last = expected[-1]
+				self.set_judges("r4_judges=" + setting)
+				second.write_bytes(second.read_bytes() + f"\n합성 변경 {index}".encode())
+				self.calls.clear()
+				self.assertEqual(self.preview()["groups"][0]["plan"], last)
+				self.assertEqual([item[0] for item in self.calls], expected)
+
+	def test_missing_table_or_key_uses_default_and_skips_unregistered(self):
+		_, second = self.pair()
+		def failing(plan, prompt, *, cwd):
+			result = self.fake(plan, prompt, cwd=cwd)
+			if plan.id != "codex-personal":
+				raise summarize.SummarizeError("합성 실패")
+			return result
+		with mock.patch.object(summarize, "call", side_effect=failing):
+			for index, table in enumerate((False, True)):
+				self.plans()
+				if table:
+					self.set_judges("")
+				second.write_bytes(second.read_bytes() + f"\n합성 기본 {index}".encode())
+				self.calls.clear()
+				self.preview()
+				self.assertEqual([item[0] for item in self.calls], ["agy-opus", "agy-sonnet", "codex-personal"])
+		path = self.hub / "plans.toml"
+		remaining = path.read_text(encoding="utf-8").split("[[plans]]", 2)[2]
+		path.write_text("[[plans]]" + remaining, encoding="utf-8")
+		plans = load_plans()
+		routed = r4_judge.routing(plans)
+		self.assertEqual(routed.routing["personal"], ("agy-sonnet", "codex-personal"))
+		ledger = mock.Mock()
+		ledger.reserve_call.return_value = True
+		notes = [{"path": "p.md", "before": "a", "input_hash": "b", "title": "합성", "body": "합성"}]
+		self.calls.clear()
+		with mock.patch.object(summarize, "call", side_effect=failing):
+			entry, reason = r4_judge.judge(notes, routed, ledger, "2026-01-01", {}, set())
+		self.assertEqual((entry["plan"], reason), ("codex-personal", ""))
+		self.assertEqual([item[0] for item in self.calls], ["agy-sonnet", "codex-personal"])
+
+	def test_invalid_judge_settings_and_plan_permissions_fail_before_call(self):
+		for value in ("'x'", "1", "false", "[]", "['agy-opus','agy-opus']", "[1]", "[true]",
+			"['']", "['agy-personal']", "['unknown']", "{x=1}", "["):
+			with self.subTest(value=value):
+				self.plans()
+				self.set_judges("r4_judges=" + value)
+				with self.assertRaises(ConfigError):
+					r4.report()
+				self.assertEqual(self.calls, [])
+		for value in ("'x'", "[]", "false"):
+			self.plans()
+			path = self.hub / "plans.toml"
+			path.write_text("vaultreorg=" + value + "\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
+			with self.subTest(table=value), self.assertRaises(ConfigError):
+				r4.report()
+		self.plans(argon=False)
+		self.set_judges("r4_judges=['agy-argon']")
+		with self.assertRaises(ConfigError):
+			r4.report()
+		self.plans()
+		for pid in ("agy-opus", "agy-sonnet", "agy-argon", "codex-personal"):
+			self.set_judges("r4_judges=['" + pid + "']")
+			plans = load_plans()
+			for changes in ({"id": "other"}, {"owner": "company"}, {"tool": "claude"}, {"allow": ("study",)}):
+				with self.subTest(pid=pid, changes=changes), self.assertRaises(ConfigError):
+					r4_judge.routing(replace(plans, plans={pid: replace(plans.plans[pid], **changes)}))
+		self.plans()
+		plans = load_plans()
+		with self.assertRaises(ConfigError):
+			r4_judge.routing(replace(plans, plans={"agy-opus": replace(plans.plans["agy-opus"], allow=())}))
+		self.assertEqual(self.calls, [])
+
+	def test_legacy_cache_is_reused_independently_of_current_order(self):
+		notes = [{"path": "Study/p01.md", "before": "a", "input_hash": "b", "title": "합성", "body": "합성"}]
+		key = "90753261405706fa2803661e7bc2c8d1af5a510ee497eafb064e181469835b52"
+		cache_path = self.base / "r4-cache.json"
+		for pid in ("agy-opus", "agy-sonnet", "codex-personal", "agy-argon"):
+			with self.subTest(pid=pid):
+				current = "agy-opus" if pid == "codex-personal" else "codex-personal"
+				self.set_judges("r4_judges=['" + current + "']")
+				entry = {"judgment": JUDGMENT, "plan": pid}
+				cache_path.write_text(json.dumps({"version": 4, "entries": {key: entry}}, ensure_ascii=False) + "\n", encoding="utf-8")
+				before = cache_path.read_bytes()
+				cache, ledger = r4_vectors.load_cache("r4-cache.json"), mock.Mock()
+				result, reason = r4_judge.judge(notes, r4_judge.routing(load_plans()), ledger, "2026-01-01", cache, set())
+				self.assertEqual((result, reason, cache[key]), (entry, "", entry))
+				r4_vectors.save_cache("r4-cache.json", cache)
+				self.assertEqual(cache_path.read_bytes(), before)
+				ledger.reserve_call.assert_not_called()
+		self.assertEqual(self.calls, [])
 
 	def test_prompt_clip_body_cache_and_title_invalidation(self):
 		body = BODY + "가" * 3100 + "보내지않을끝부분"

@@ -68,10 +68,15 @@ def read_runs(root: Path) -> dict:
 			rule = classify(data.get("repo"), sources.rules) if sources else None
 			item = {"id": folder.name, "status": status, "active": active, "role": role,
 				"public": rule is not None and rule.cls in ("personal", "study", "career"), "at": stamp(data["started"]) if data.get("started") else None}
+			request = data.get("request", {})
+			if request.get("base_branch", "").startswith("agency/"):
+				item["agency"] = True
 			if item["public"]:
 				item["text"] = text(data.get("handoff", {}).get("summary", ""))
-				goal = data.get("request", {}).get("goal", "")
+				goal = request.get("goal", "")
 				item["goal"] = text(goal)
+				item["title"] = text((request.get("commit_message") or goal).split("\n", 1)[0])
+				item["reason"] = text(data.get("end_reason", ""))
 				# 표시용 정제로 다른 목표가 같아져도 지시한 역할을 잘못 연결하지 않는다.
 				item["goal_hash"] = sha256(goal.encode("utf-8")).hexdigest()
 				item["repo"] = data.get("repo")

@@ -286,7 +286,8 @@ class TelegramBridgeTest(BridgeCase):
 			state["summary"] = {"conclusion": [{"text": "결론 /private/report " + self.token + " " + "가" * 400}]}
 			self.save(state, create=True)
 		self.runs += [{"id": "2026-10-24-002", "status": "승인 필요", "public": True, "goal": "새 목표 /tmp/private-file"},
-			{"id": "2026-10-24-003", "status": "승인 필요", "public": False, "goal": "전송 금지 합성 자료"}]
+			{"id": "2026-10-24-003", "status": "승인 필요", "public": False,
+				"title": "전송 금지 합성 제목", "reason": "전송 금지 합성 결과", "goal": "전송 금지 합성 자료"}]
 		self.bridge.sync()
 		self.assertEqual(len(self.transport.sent()), 7)
 		texts = "\n".join(body["text"] for body in self.transport.sent())
@@ -294,6 +295,8 @@ class TelegramBridgeTest(BridgeCase):
 		self.assertIn("새 목표", texts)
 		for value in ("전송 금지 합성 자료", "/tmp/", "/private/", self.token):
 			self.assertNotIn(value, texts)
+		self.assertIn("[승인 필요] 실행 2026-10-24-003\n확인: 사무실 결재함",
+			[body["text"] for body in self.transport.sent()])
 		self.assertEqual(sum("reply_markup" in body for body in self.transport.sent()), 1)
 		self.bridge = telegram_bridge.Bridge(self.client, engine=self.engine)
 		self.bridge.sync()
@@ -350,16 +353,26 @@ class TelegramBridgeTest(BridgeCase):
 	def test_previews_have_requested_limits_and_ellipsis_only_when_truncated(self):
 		mid = "m-" + "1" * 32
 		for extra in (0, 1):
-			self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True, "goal": "가" * (300 + extra)}]
+			self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True,
+				"title": "가" * (60 + extra) + "\n자세한 본문", "reason": "결" * 61, "goal": "목표 대신 제목"}]
 			meetings = [{"id": mid, "status": "participants_pending", "agenda": "나" * (200 + extra), "confirmed": False,
 				"participants": [{"role": role, "reason": "합성 점검"} for role in ("backend", "qa")]},
 				{"id": "m-" + "2" * 32, "status": "completed", "summary": {"conclusion": [{"text": "다" * (1500 + extra)}]}}]
 			events = {key: text for key, text, _ in self.bridge.events(meetings)}
 			suffix = "…" if extra else ""
-			self.assertEqual(events["run:2026-10-24-001"].split("\n", 1)[1], "가" * 300 + suffix)
+			self.assertEqual(events["run:2026-10-24-001"].splitlines(), ["[승인 필요] 실행 2026-10-24-001",
+				"제목: " + "가" * 60 + suffix, "결과: " + "결" * 60, "확인: 사무실 결재함"])
 			self.assertEqual(events[f"meeting:{mid}:participants_pending"].splitlines()[1], "나" * 200 + suffix)
 			self.assertEqual(events["meeting:m-" + "2" * 32 + ":completed"].split("\n", 1)[1],
 				"다" * 1500 + ("…\n전문은 사무실 회의 화면에서" if extra else ""))
+
+	def test_agency_approval_is_omitted_and_empty_title_falls_back_to_first_goal_line(self):
+		self.runs = [{"id": "2026-10-24-001", "status": "승인 필요", "public": True, "agency": True,
+			"title": "대행사 제목", "reason": "자동 반영 대기"},
+			{"id": "2026-10-24-002", "status": "승인 필요", "public": True, "title": "",
+				"goal": "합성 목표\n요청서 본문", "reason": "독립 검토 통과"}]
+		self.assertEqual(self.bridge.events([]), [("run:2026-10-24-002",
+			"[승인 필요] 실행 2026-10-24-002\n제목: 합성 목표\n결과: 독립 검토 통과\n확인: 사무실 결재함", None)])
 
 	def test_proposal_with_invalid_participants_has_no_button_and_no_start_promise(self):
 		self.bridge.sync()

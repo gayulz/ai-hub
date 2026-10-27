@@ -139,10 +139,13 @@ class Bridge:
 				continue
 			events.append((meeting.get("created", ""), f"meeting:{mid}:{status}", text, buttons))
 		for run in read_runs(self.root)["items"]:
-			if run["status"] == "승인 필요":
-				text = "실행 승인 필요: " + run["id"]
+			if run["status"] == "승인 필요" and not run.get("agency"):
+				text = "[승인 필요] 실행 " + run["id"]
 				if run.get("public"):
-					text += "\n" + self.preview(run.get("goal", ""), 300)
+					title = (run.get("title") or run.get("goal", "")).split("\n", 1)[0]
+					text += "\n제목: " + self.preview(title, 60)
+					text += "\n결과: " + self.safe(run.get("reason", ""))[:60]
+				text += "\n확인: 사무실 결재함"
 				events.append((run.get("at") or "", "run:" + run["id"], text, None))
 		return [(key, text, buttons) for _, key, text, buttons in sorted(events)[-500:]]
 

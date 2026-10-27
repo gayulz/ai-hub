@@ -126,7 +126,7 @@ def read_request(request_path: str) -> dict:
 	return data
 
 
-def cmd_run(request_path: str) -> int:
+def start_run(request_path: str) -> Run:
 	data = read_request(request_path)
 	request = data["request"]
 	kind = request.get("kind", "code")
@@ -139,7 +139,13 @@ def cmd_run(request_path: str) -> int:
 	shutil.copy(request_path, run.folder / "request.toml")
 	run.save()
 	run.event("start", goal=request["goal"], kind=kind)
-	return execute(run)
+	# 명령의 종료 코드는 execute의 반환값을 그대로 보존한다.
+	run._exit_code = execute(run)
+	return run
+
+
+def cmd_run(request_path: str) -> int:
+	return start_run(request_path)._exit_code
 
 
 def execute(run: Run) -> int:

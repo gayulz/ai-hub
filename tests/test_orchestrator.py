@@ -340,16 +340,32 @@ class OrchestratorTest(unittest.TestCase):
 		request.write_text(f'[request]\nrepo = "{self.repo}"\ngoal = "값을 2로"\ndone = ["VALUE 가 2"]\n'
 			'owned_paths = ["src/*"]\nkind = "code"\n\n[budget]\ncalls = 4\nminutes = 5\n', encoding="utf-8")
 		with mock.patch("orchestrator.flow.call", FakeAI([PASS], {"src/a.py": "VALUE = 2\n"})), \
-				mock.patch("builtins.print"):
+				contextlib.redirect_stdout(io.StringIO()) as output:
 			self.assertEqual(cli.main(["run", str(request)]), 0)
 		run_id = sorted(p.name for p in (self.home / "runs").iterdir())[-1]
 		folder = self.home / "runs" / run_id
+		self.assertEqual(output.getvalue(), cli.report(Run.load(run_id)) + "\n")
+		self.assertEqual((folder / "request.toml").read_bytes(), request.read_bytes())
 		self.assertIn("승인 필요", (folder / "report.md").read_text(encoding="utf-8"))
 		events = [json.loads(line)["event"] for line in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()]
 		self.assertEqual(events[0], "start")
 		self.assertEqual(events[-1], "finish")
 		journal = next((self.vault / "📥 Inbox" / "AI").glob("*.md")).read_text(encoding="utf-8")
 		self.assertIn(f"run:{run_id}", journal)
+
+	def test_start_run_returns_run_and_cmd_run_preserves_execute_exit_code(self):
+		path = Path(self.tmp.name) / "request.toml"
+		path.write_text('[request]\ngoal="합성"\ndone=["완료"]\nowned_paths=["src/*"]\n'
+			'[budget]\ncalls=3\nminutes=2\nfixes=1\n', encoding="utf-8")
+		with mock.patch.object(cli, "execute", return_value=0) as execute:
+			run = cli.start_run(str(path))
+		self.assertIsInstance(run, Run)
+		execute.assert_called_once_with(run)
+		self.assertEqual(run.budget, {"calls": 3, "seconds": 120, "fixes": 1})
+		self.assertEqual(Run.load(run.run_id).request, run.request)
+		for code in (0, 1):
+			with self.subTest(code=code), mock.patch.object(cli, "execute", return_value=code):
+				self.assertEqual(cli.cmd_run(str(path)), code)
 
 	def hook(self, body):
 		path = self.repo / ".git" / "hooks" / "pre-commit"

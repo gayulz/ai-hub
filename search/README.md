@@ -28,12 +28,13 @@ java -jar build/libs/ai-hub-search-0.1.0.jar eval
 java -jar build/libs/ai-hub-search-0.1.0.jar eval --set /tmp/acme-eval.toml --mode hybrid --k 5 --log /tmp/acme-scores.md
 java -jar build/libs/ai-hub-search-0.1.0.jar serve
 java -jar build/libs/ai-hub-search-0.1.0.jar serve --bind 127.0.0.1 --port 8791
+java -jar build/libs/ai-hub-search-0.1.0.jar serve --allow-company
 ```
 
 - `index`는 벡터 포함이 기본이다. `--no-vector`를 주면 Ollama를 호출하지 않는다. 볼트는 `--search.vault=...` 또는 `SEARCH_VAULT`로 지정하며 명령 인자가 우선이다. 색인 결과는 추가·수정·삭제·변경 없음 노트 수, 전체 조각 수, 읽지 못한 파일 수, 이번 벡터 생성 수다.
 - `query` 기본은 BM25·5개·회사 제외다. `--mode bm25|vector|hybrid`, 양수 `--k`, `--include-company`를 지원한다. 노트마다 최고 점수 조각 하나를 골라 순위·점수·경로·소제목·스니펫을 출력한다.
 - `eval` 기본도 BM25·k=5다. 기본 평가 파일은 `~/.ai-hub/search-eval.toml`, 기본 누적 로그는 `~/.ai-hub/search-eval-log.md`다. `--set`, `--mode`, `--k`, `--log`로 바꾼다. 원본 TOML은 수정하지 않으며 원본과 같은 파일을 로그로 지정하면 거부한다.
-- `serve`는 종료 신호를 받을 때까지 실행된다. 기본 바인딩은 `127.0.0.1:8791`이다. `--port 0`은 시험용 임시 포트를 배정하고 실제 포트를 한 줄로 출력한다. 종료 시 HTTP 서버·작업 executor·Spring 컨텍스트를 정리한다.
+- `serve`는 종료 신호를 받을 때까지 실행된다. 기본 바인딩은 `127.0.0.1:8791`이며 회사 노트 조회(`includeCompany=true`)는 기본으로 403을 반환한다. `--allow-company`를 주면 회사 조회를 허용하고 포트 출력 다음 줄에 허용 모드를 알린다. AI 도구에 검색을 열 때 회사 노트가 새지 않게 하려는 기본 정책이다. `--port 0`은 시험용 임시 포트를 배정하고 실제 포트를 첫 줄로 출력한다. 종료 시 HTTP 서버·작업 executor·Spring 컨텍스트를 정리한다.
 - CLI 정상 종료는 0, 파일·색인·임베딩·로그·서버 시작 실패는 1, 사용법·TOML 형식·타입·정답 경로 오류는 2다. 알 수 없는 인자나 중복 옵션을 거부한다. 벡터 실패를 BM25로 대체하지 않는다.
 
 ## 설정
@@ -139,7 +140,7 @@ curl --get 'http://127.0.0.1:8791/search' --data-urlencode 'q=스프링부트' -
 
 `GET /health`는 프로세스가 요청을 받으면 `{"status":"ok"}`를 반환한다. 색인 유무나 Ollama 품질을 검사하는 명령은 아니다.
 
-`GET /search`는 `q` 필수, `k=5`, `mode=hybrid`, `includeCompany=false`가 기본이다. `k`는 1~100, 질의는 최대 2,048 UTF-16 문자, 전체 인자 문자열은 최대 16,384자다. 중복·알 수 없는 인자·잘못된 불리언·잘못된 인코딩·너무 긴 입력은 400이다. 응답은 `{"hits":[...]}`이며 각 원소에 `path`, `noteTitle`, `heading`, `score`, `snippet`, `sensitivity`를 담는다.
+`GET /search`는 `q` 필수, `k=5`, `mode=hybrid`, `includeCompany=false`가 기본이다. `includeCompany`는 서버를 `--allow-company`로 켠 경우에만 `true`가 통하며, 기본 서버에서는 유효한 `includeCompany=true` 요청을 검색 전에 403으로 거부한다. `k`는 1~100, 질의는 최대 2,048 UTF-16 문자, 전체 인자 문자열은 최대 16,384자다. 중복·알 수 없는 인자·잘못된 불리언·잘못된 인코딩·너무 긴 입력은 400이다. 응답은 `{"hits":[...]}`이며 각 원소에 `path`, `noteTitle`, `heading`, `score`, `snippet`, `sensitivity`를 담는다.
 
 읽기 전용이며 비로컬 bind·Host·Origin을 차단한다. Origin이 있으면 HTTP 로컬 호스트와 현재 포트만 허용한다. CORS 허용 헤더는 보내지 않는다. GET 이외는 405, 없는 경로는 404, 색인·임베딩 실패는 503, 예상하지 못한 내부 실패는 500이다. 내부 오류 메시지나 실제 질의·응답·노트 내용을 서버 로그에 남기지 않으며 오류 응답에도 원문을 넣지 않는다. 응답은 `no-store`다.
 

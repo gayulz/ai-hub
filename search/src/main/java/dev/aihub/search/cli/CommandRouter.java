@@ -27,7 +27,7 @@ public class CommandRouter {
 	private static final String USAGE = "사용법: index [--search.vault=<경로>] [--no-vector]"
 			+ " | query \"질의\" [--k 5] [--include-company] [--mode bm25|vector|hybrid]"
 			+ " | eval [--set 경로] [--mode bm25|vector|hybrid] [--k 5] [--log 경로]"
-			+ " | serve [--bind 127.0.0.1] [--port 8791]";
+			+ " | serve [--bind 127.0.0.1] [--port 8791] [--allow-company]";
 	private final NoteIndexer indexer;
 	private final SearchService searchService;
 	private final SearchSettings settings;
@@ -193,10 +193,18 @@ public class CommandRouter {
 	private int serve(String[] args, PrintWriter out) throws IOException {
 		String bind = "127.0.0.1";
 		int port = 8791;
+		boolean allowCompany = false;
 		var seen = new HashSet<String>();
 		for (int i = 1; i < args.length; i++) {
 			String option = args[i];
-			if (!seen.add(option) || i + 1 >= args.length) {
+			if (!seen.add(option)) {
+				throw new IllegalArgumentException("serve 인자를 확인하세요");
+			}
+			if (option.equals("--allow-company")) {
+				allowCompany = true;
+				continue;
+			}
+			if (i + 1 >= args.length) {
 				throw new IllegalArgumentException("serve 인자를 확인하세요");
 			}
 			String value = args[++i];
@@ -212,8 +220,11 @@ public class CommandRouter {
 				default -> throw new IllegalArgumentException("serve 인자를 확인하세요");
 			}
 		}
-		server.start(bind, port);
+		server.start(bind, port, allowCompany);
 		out.println("로컬 검색 서버 실행 중 · 포트 " + server.port());
+		if (allowCompany) {
+			out.println("회사 노트 조회 허용 모드");
+		}
 		return 0;
 	}
 }

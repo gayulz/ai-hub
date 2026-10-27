@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
@@ -84,10 +85,53 @@ class LocalSearchServerTest {
 		for (String mode : List.of("bm25", "vector", "hybrid")) {
 			String path = "/search?q=" + encoded("임시저장") + "&mode=" + mode;
 			assertThat(get(path).body()).contains("p01.md").doesNotContain("p02.md");
+			var denied = get(path + "&includeCompany=true");
+			assertThat(denied.status()).isEqualTo(403);
+			assertThat(denied.body()).isEqualTo("{\"error\":\"회사 노트 조회는 허용되지 않습니다\"}")
+					.doesNotContain("p02.md", "sensitivity", "company");
+			assertThat(denied.headers()).contains("application/json; charset=utf-8", "no-store", "nosniff");
+		}
+	}
+
+	@Test
+	void includesCompanyInEveryModeOnlyWhenServerAllowsIt() throws IOException {
+		server.start("127.0.0.1", 0, true);
+		for (String mode : List.of("bm25", "vector", "hybrid")) {
+			String path = "/search?q=" + encoded("임시저장") + "&mode=" + mode;
+			assertThat(get(path).body()).contains("p01.md").doesNotContain("p02.md");
 			var included = get(path + "&includeCompany=true");
 			assertThat(included.status()).isEqualTo(200);
 			assertThat(included.body()).contains("p02.md", "\"sensitivity\":\"company\"");
 		}
+	}
+
+	@Test
+	void deniesCompanyBeforeCallingAnySearchMethod() throws IOException {
+		var calls = new AtomicInteger();
+		server = new LocalSearchServer(new SearchService(factory, settings, fake) {
+			@Override
+			public List<SearchHit> searchNotes(String query, int k, boolean company) {
+				calls.incrementAndGet();
+				return List.of();
+			}
+
+			@Override
+			public List<SearchHit> searchVector(String query, int k, boolean company) {
+				calls.incrementAndGet();
+				return List.of();
+			}
+
+			@Override
+			public List<SearchHit> searchHybrid(String query, int k, boolean company) {
+				calls.incrementAndGet();
+				return List.of();
+			}
+		});
+		server.start("127.0.0.1", 0);
+		for (String mode : List.of("bm25", "vector", "hybrid")) {
+			assertThat(get("/search?q=xyz&mode=" + mode + "&includeCompany=true").status()).isEqualTo(403);
+		}
+		assertThat(calls.get()).isZero();
 	}
 
 	@Test
@@ -118,6 +162,8 @@ class LocalSearchServerTest {
 				"/search?q=xyz&k=101", "/search?q=xyz&k=-1", "/search?q=xyz&k=abc", "/search?q=xyz&k=1&k=2",
 				"/search?q=xyz&q=acme", "/search?q=xyz&%71=acme", "/search?q=xyz&mode=xyz",
 				"/search?q=xyz&mode=bm25&mode=vector", "/search?q=xyz&includeCompany=1",
+				"/search?q=xyz&includeCompany=TRUE", "/search?q=xyz&k=0&includeCompany=true",
+				"/search?q=xyz&extra=acme&includeCompany=true",
 				"/search?q=xyz&includeCompany=false&includeCompany=true", "/search?q=xyz&extra=acme",
 				"/search?q=xyz&k", "/search?q=%FF", "/search?q=%00", "/search?q=%ZZ",
 				"/search?q=" + "x".repeat(2049), "/search?q=" + "x".repeat(16385), "/health?q=xyz")) {
@@ -180,8 +226,12 @@ class LocalSearchServerTest {
 		};
 		server = new LocalSearchServer(stub);
 		var router = new CommandRouter(indexer, stub, settings, server);
-		assertThat(run(router, "serve", "--port", "0").code()).isZero();
+		var result = run(router, "serve", "--port", "0");
+		assertThat(result.code()).isZero();
+		assertThat(result.out()).isEqualTo("로컬 검색 서버 실행 중 · 포트 " + server.port() + System.lineSeparator());
 		assertThat(server.isRunning()).isTrue();
+		assertThat(get("/search?q=xyz&includeCompany=true").status()).isEqualTo(403);
+		assertThat(thread.get()).isNull();
 		assertThat(get("/search?q=xyz").status()).isEqualTo(200);
 		int port = server.port();
 		assertThat(thread.get().isDaemon()).isFalse();
@@ -191,6 +241,37 @@ class LocalSearchServerTest {
 		assertThat(thread.get().isAlive()).isFalse();
 		assertThat(server.isRunning()).isFalse();
 		assertThatThrownBy(() -> new Socket("127.0.0.1", port)).isInstanceOf(IOException.class);
+	}
+
+	@Test
+	void cliAllowsCompanyOnlyWithFlagAndPreservesFirstOutputLine() throws IOException {
+		var router = new CommandRouter(indexer, service, settings, server);
+		for (String[] args : List.of(new String[] {"serve", "--port", "0", "--allow-company"},
+				new String[] {"serve", "--allow-company", "--port", "0"})) {
+			var result = run(router, args);
+			assertThat(result.code()).isZero();
+			assertThat(result.out().lines().toList()).containsExactly(
+					"로컬 검색 서버 실행 중 · 포트 " + server.port(), "회사 노트 조회 허용 모드");
+			var response = get("/search?q=" + encoded("임시저장") + "&includeCompany=true");
+			assertThat(response.status()).isEqualTo(200);
+			assertThat(response.body()).contains("p02.md");
+			server.close();
+		}
+	}
+
+	@Test
+	void rejectsDuplicateOrValuedCompanyFlagBeforeStarting() {
+		var router = new CommandRouter(indexer, service, settings, server);
+		for (String[] args : List.of(new String[] {"serve", "--allow-company", "--allow-company"},
+				new String[] {"serve", "--allow-company=true"},
+				new String[] {"serve", "--allow-company=true", "--port", "0"},
+				new String[] {"serve", "--allow-company", "true"})) {
+			var result = run(router, args);
+			assertThat(result.code()).isEqualTo(2);
+			assertThat(result.out()).isEmpty();
+			assertThat(result.err()).contains("serve 인자를 확인하세요", "[--allow-company]");
+			assertThat(server.isRunning()).isFalse();
+		}
 	}
 
 	@Test

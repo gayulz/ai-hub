@@ -36,6 +36,10 @@ public class LocalSearchServer implements AutoCloseable, DisposableBean {
 	}
 
 	public synchronized void start(String bind, int port) throws IOException {
+		start(bind, port, false);
+	}
+
+	public synchronized void start(String bind, int port, boolean allowCompany) throws IOException {
 		if (!HOSTS.contains(bind) || port < 0 || port > 65535) {
 			throw new IllegalArgumentException("서버는 로컬 호스트와 0~65535 포트만 허용합니다");
 		}
@@ -50,7 +54,7 @@ public class LocalSearchServer implements AutoCloseable, DisposableBean {
 		ExecutorService workers = Executors.newFixedThreadPool(4);
 		try {
 			candidate.setExecutor(workers);
-			candidate.createContext("/", this::handle);
+			candidate.createContext("/", exchange -> handle(exchange, allowCompany));
 			candidate.start();
 			server = candidate;
 			executor = workers;
@@ -72,7 +76,7 @@ public class LocalSearchServer implements AutoCloseable, DisposableBean {
 		return server.getAddress().getPort();
 	}
 
-	private void handle(HttpExchange exchange) throws IOException {
+	private void handle(HttpExchange exchange, boolean allowCompany) throws IOException {
 		try (exchange) {
 			if (!exchange.getRemoteAddress().getAddress().isLoopbackAddress()
 					|| !allowedHeader(exchange, "Host", false) || !allowedHeader(exchange, "Origin", true)) {
@@ -98,6 +102,10 @@ public class LocalSearchServer implements AutoCloseable, DisposableBean {
 					}
 					case "/search" -> {
 						var request = parse(uri.getRawQuery());
+						if (request.company() && !allowCompany) {
+							send(exchange, 403, "{\"error\":\"회사 노트 조회는 허용되지 않습니다\"}");
+							return;
+						}
 						send(exchange, 200, json(request.mode().search(service, request.query(), request.k(), request.company())));
 					}
 					default -> send(exchange, 404, "{\"error\":\"경로가 없습니다\"}");

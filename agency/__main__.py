@@ -60,7 +60,22 @@ def _check():
 	return 1 if problems else 0
 
 
+# 조각마다 자기 CLI 모듈을 가진다(접수 되묻기·PM 계획·실행기). 모듈은 부를 때만 불러온다.
+DELEGATES = {"intake": "intake_cli", "answer": "intake_cli", "plan": "plan_cli", "run": "runner_cli"}
+
+
+def _delegate(argv: list[str]) -> int | None:
+	if not argv or argv[0] not in DELEGATES:
+		return None
+	from importlib import import_module
+	return import_module(f"{__package__}.{DELEGATES[argv[0]]}").main(argv)
+
+
 def main(argv=None) -> int:
+	argv = sys.argv[1:] if argv is None else argv
+	delegated = _delegate(argv)
+	if delegated is not None:
+		return delegated
 	args = _parser().parse_args(argv)
 	try:
 		if args.command == "new":

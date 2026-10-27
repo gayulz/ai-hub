@@ -246,6 +246,8 @@ def update_task(identity: str, task_id: str, *, status=None, run_id=None, commit
 	if any(value is not None and (not isinstance(value, str) or "\x00" in value) for value in (run_id, commit)):
 		raise ValueError("작업 실행 식별자와 커밋은 문자열이어야 합니다")
 	with _edit(identity, "task_updated") as row:
+		if row["checkpoint"]["step"] == "meeting" and (status == "실행 중" or run_id or commit):
+			raise ValueError("회의 결정 전에 작업을 시작할 수 없습니다")
 		task = next((task for task in row["tasks"] if task["id"] == task_id), None)
 		if task is None:
 			raise ValueError("프로젝트에 해당 작업이 없습니다")
@@ -289,5 +291,11 @@ def set_checkpoint(identity: str, step: str, detail: str) -> dict:
 	if any(not isinstance(value, str) or "\x00" in value for value in (step, detail)):
 		raise ValueError("체크포인트 단계와 설명은 문자열이어야 합니다")
 	with _edit(identity, "checkpoint") as row:
+		current = row["checkpoint"]
+		meeting = row.get("meeting")
+		if (step == "meeting_done" or current["step"] == "meeting" and (step, detail) != ("meeting", current["detail"])
+				or meeting and (step == "meeting" or meeting.get("status") != "completed")
+				or step == "meeting" and any(task["status"] != "대기" or task["run_id"] or task["commit"] for task in row["tasks"])):
+			raise ValueError("회의 결정 전에 체크포인트를 바꿀 수 없습니다")
 		row["checkpoint"] = {"step": step, "detail": detail}
 	return row

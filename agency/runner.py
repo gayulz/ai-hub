@@ -13,7 +13,7 @@ from orchestrator.checks import git
 from orchestrator.flow import worktrees_dir
 from orchestrator.record import Run, runs_dir
 
-from . import project
+from . import meeting, project
 from .departments import load_departments
 
 
@@ -172,6 +172,20 @@ def run(identity: str) -> dict:
 			row = project.transition(identity, "실행 중")
 		if row["status"] != "실행 중":
 			raise ValueError("계획 또는 실행 중인 프로젝트만 실행할 수 있습니다")
+		try:
+			meeting.ensure(identity, department)
+		except Exception as exc:
+			message = str(exc)
+			if "외부 AI 금지" in message:
+				reason = "외부 AI 금지 부서는 회의를 호출할 수 없습니다"
+			elif "중단" in message or "불확실" in message:
+				reason = "회의 호출 중단 상태를 확인해야 합니다"
+			elif "예산" in message:
+				reason = "회의를 위한 프로젝트 예산이 부족하거나 소진됐습니다"
+			else:
+				reason = "회의 자문·결정 또는 설정을 확인해야 합니다"
+			return _result(project.transition(identity, "막힘", reason=reason))
+		row = project.load(identity)
 		branch = row["branch"]
 		ref = "refs/heads/" + branch
 		if not git(repo, "rev-parse", "--verify", ref, check=False).strip():

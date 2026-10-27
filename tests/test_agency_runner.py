@@ -5,8 +5,10 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -15,7 +17,7 @@ from agency.__main__ import main
 from agency.departments import load_departments
 from collector.backfill_common import locked
 from collector.config import ConfigError, load_plans
-from orchestrator import __main__ as orchestration, checks
+from orchestrator import __main__ as orchestration, checks, providers
 from orchestrator.branch_apply import apply_to_branch
 from orchestrator.flow import Flow
 from orchestrator.record import Run, new_run_id
@@ -173,6 +175,156 @@ budget = { calls = 20, minutes = 10 }
 		self.assertEqual(runner.run(row["id"])["status"], "검수")
 		self.assertEqual(self.bases, [self.head])
 		self.assertEqual(self.snapshot(), before)
+
+	def meeting_settings(self, row):
+		(self.hub / "redaction").mkdir()
+		(self.hub / "redaction/dictionary.json").write_text(json.dumps({"entries": [
+			{"value": "synthetic-corp", "kind": "회사명", "token": "company01"}]}))
+		with (self.hub / "plans.toml").open("a") as stream:
+			stream.write('\n[orchestration.meeting]\nbackend=["writer"]\nqa=["reviewer"]\n')
+		project.set_checkpoint(row["id"], "meeting", "합성 주제")
+		barrier = threading.Barrier(2)
+		calls = []
+		def call(plan, **kwargs):
+			calls.append(kwargs)
+			self.start_mock.assert_not_called()
+			self.assertEqual(checks.git(self.repo, "rev-parse", "--verify",
+				"refs/heads/" + row["branch"], check=False), "")
+			self.assertEqual(project.load(row["id"])["checkpoint"]["step"], "meeting")
+			if "recommendation" in kwargs["schema"]["properties"]:
+				barrier.wait(timeout=3)
+				return providers.Reply({"recommendation": "작게 수행", "reason": "검사 용이",
+					"counterexample": "누락 가능", "facts": [{"source": "spec", "text": "합성 기능"}]}, .2, {})
+			return providers.Reply({"chosen": "작게 수행", "rejected": "한 번에 수행하면 검사 어려움",
+				"assumptions": "시험 환경 사용", "verification": "합성 시험"}, .3, {})
+		return calls, call
+
+	def test_meeting_finishes_before_branch_and_first_task(self):
+		row = self.new()
+		calls, fake = self.meeting_settings(row)
+		with mock.patch.object(providers, "call", side_effect=fake):
+			result = runner.run(row["id"])
+		self.assertEqual(result["status"], "검수")
+		self.assertEqual(len(calls), 3)
+		self.assertEqual(calls[0]["prompt"], calls[1]["prompt"])
+		saved = project.load(row["id"])
+		self.assertEqual(saved["meeting"]["status"], "completed")
+		self.assertEqual(saved["decisions"][0]["topic"], "합성 주제")
+		self.assertEqual(saved["used"]["calls"], 5)
+		self.assertEqual(saved["checkpoint"]["step"], "task")
+
+	def test_quota_recovery_finishes_meeting_before_branch_and_task(self):
+		row = self.new()
+		calls, fake = self.meeting_settings(row)
+		plans = self.hub / "plans.toml"
+		plans.write_text(plans.read_text().replace('[orchestration]', '''[[plans]]
+id = "backup"
+tool = "agy"
+owner = "personal"
+allow = ["personal"]
+[orchestration]''').replace('qa=["reviewer"]', 'qa=["reviewer", "backup"]'))
+		departments = self.hub / "departments.toml"
+		departments.write_text(departments.read_text().replace('["writer", "reviewer"]', '["writer", "reviewer", "backup"]'))
+		seen = []
+		def call(plan, **kwargs):
+			seen.append(plan.id)
+			if plan.id == "backup":
+				calls.append(kwargs)
+				self.start_mock.assert_not_called()
+				self.assertEqual(checks.git(self.repo, "rev-parse", "--verify",
+					"refs/heads/" + row["branch"], check=False), "")
+				return providers.Reply({"recommendation": "작게 수행", "reason": "검사 용이",
+					"counterexample": "누락 가능", "facts": [{"source": "spec", "text": "합성 기능"}]}, .2, {})
+			result = fake(plan, **kwargs)
+			if plan.id == "reviewer":
+				raise providers.ProviderError("exit", "합성 종료 (한도 소진)")
+			return result
+		write = project._write
+		def interrupt(current, kind):
+			write(current, kind)
+			if kind == "meeting_advice" and current["meeting"]["status"] == "retry_advice":
+				raise KeyboardInterrupt
+		with mock.patch.object(providers, "call", side_effect=call), \
+				mock.patch.object(project, "_write", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+			runner.run(row["id"])
+		self.assertEqual(project.load(row["id"])["meeting"]["status"], "retry_advice")
+		with mock.patch.object(providers, "call", side_effect=call):
+			self.assertEqual(runner.run(row["id"])["status"], "검수")
+		saved = project.load(row["id"])
+		self.assertEqual(sorted(seen), ["backup", "reviewer", "writer", "writer"])
+		self.assertEqual(len({item["prompt"] for item in calls[:3]}), 1)
+		self.assertEqual(len(saved["decisions"]), 1)
+		self.assertEqual(saved["used"]["calls"], 6)
+
+	def test_pm_quota_record_survives_restart_without_repeated_advice(self):
+		row = self.new()
+		calls, fake = self.meeting_settings(row)
+		plans = self.hub / "plans.toml"
+		plans.write_text(plans.read_text().replace('[orchestration]', '[orchestration]\npm = ["writer", "reviewer"]'))
+		seen = []
+		def call(plan, **kwargs):
+			seen.append((plan.id, "chosen" in kwargs["schema"]["properties"]))
+			result = fake(plan, **kwargs)
+			if plan.id == "writer" and seen[-1][1]:
+				raise providers.ProviderError("exit", "합성 종료 (한도 소진)")
+			return result
+		write = project._write
+		def interrupt(current, kind):
+			write(current, kind)
+			if kind == "meeting_decision" and current["meeting"]["status"] == "advised":
+				raise KeyboardInterrupt
+		with mock.patch.object(providers, "call", side_effect=call), \
+				mock.patch.object(project, "_write", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+			runner.run(row["id"])
+		saved = project.load(row["id"])
+		self.assertEqual(saved["meeting"]["pm_exhausted"], ["writer"])
+		self.assertEqual(saved["used"]["calls"], 3)
+		with mock.patch.object(providers, "call", side_effect=call):
+			self.assertEqual(runner.run(row["id"])["status"], "검수")
+		self.assertEqual(seen.count(("writer", True)), 1)
+		self.assertEqual(seen.count(("reviewer", True)), 1)
+		self.assertEqual(len(calls), 4)
+		self.assertEqual(len(project.load(row["id"])["decisions"]), 1)
+
+	def test_failed_or_forbidden_meeting_never_creates_branch_or_task(self):
+		for forbidden in (False, True):
+			with self.subTest(forbidden=forbidden):
+				row = self.new()
+				if forbidden:
+					department = replace(self.department, external_ai=False)
+					patch = mock.patch.object(runner, "load_departments", return_value={"sample": department})
+				else:
+					patch = mock.patch.object(runner.meeting, "_parallel", return_value=([None, None], 1))
+				if not (self.hub / "redaction").exists():
+					self.meeting_settings(row)
+				else:
+					project.set_checkpoint(row["id"], "meeting", "합성 주제")
+				with patch, mock.patch.object(providers, "call", side_effect=AssertionError("호출 금지")) as provider:
+					result = runner.run(row["id"])
+					self.assertEqual(result["status"], "막힘")
+					self.assertEqual(runner.run(row["id"])["status"], "막힘")
+					provider.assert_not_called()
+				self.assertEqual(project.load(row["id"])["checkpoint"]["step"], "meeting")
+				self.assertEqual(checks.git(self.repo, "rev-parse", "--verify",
+					"refs/heads/" + row["branch"], check=False), "")
+		self.start_mock.assert_not_called()
+
+	def test_resume_after_meeting_does_not_repeat_calls_or_decision(self):
+		row = self.new()
+		calls, fake = self.meeting_settings(row)
+		git = runner.git
+		def interrupt(repo, *args, **kwargs):
+			if args[0] == "branch":
+				raise RuntimeError("합성 가지 중단")
+			return git(repo, *args, **kwargs)
+		with mock.patch.object(providers, "call", side_effect=fake), \
+				mock.patch.object(runner, "git", side_effect=interrupt), self.assertRaises(RuntimeError):
+			runner.run(row["id"])
+		self.assertEqual(project.load(row["id"])["checkpoint"]["step"], "meeting_done")
+		with mock.patch.object(providers, "call", side_effect=AssertionError("중복 호출 금지")):
+			self.assertEqual(runner.run(row["id"])["status"], "검수")
+		self.assertEqual(len(calls), 3)
+		self.assertEqual(len(project.load(row["id"])["decisions"]), 1)
 
 	def test_quota_failure_waits_and_next_invocation_finishes_remaining_dependencies(self):
 		row = self.new(2)

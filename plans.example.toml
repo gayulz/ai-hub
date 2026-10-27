@@ -46,3 +46,9 @@ batch_size = 10          # 한 묶음의 대화 결과 수
 # personal = ["p03", "p01", "p02"]
 # study = ["p03", "p01", "p02"]
 # career = ["p03", "p01", "p02"]
+
+# R4 판정 순서는 생략하면 agy-opus, agy-sonnet, codex-personal 순서다.
+# 아래 ID는 먼저 [[plans]]에 등록해야 하며, personal 소유와 personal 허용이 필요하다.
+# agy-opus, agy-sonnet, agy-argon의 도구는 agy, codex-personal의 도구는 codex여야 한다.
+# [vaultreorg]
+# r4_judges = ["agy-argon", "agy-sonnet", "codex-personal"]

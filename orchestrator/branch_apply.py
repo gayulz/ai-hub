@@ -44,5 +44,5 @@ def apply_to_branch(run_id: str, branch: str) -> str:
 	checks.git(run.repo, "worktree", "remove", "--force", run.worktree, check=False)
 	checks.git(run.repo, "branch", "-D", run.branch, check=False)
 	run.finish("완료", f"가지 {branch}에 반영 {commit[:12]}(push 안 함)")
-	finish_outputs(run)
+	finish_outputs(run, print_report=False)
 	return commit

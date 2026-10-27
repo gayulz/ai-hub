@@ -171,10 +171,9 @@ class BranchApplyTest(unittest.TestCase):
 		(self.repo / "tests/test_a.py").unlink()
 		(self.repo / "새 파일.txt").write_text("보존할 미커밋 파일", encoding="utf-8")
 		before = self.snapshot()
-		with mock.patch.object(cli, "finish_outputs", wraps=cli.finish_outputs) as finish, \
-				contextlib.redirect_stdout(io.StringIO()):
+		with contextlib.redirect_stdout(io.StringIO()) as output:
 			commit = apply_to_branch(run.run_id, BRANCH)
-			finish.assert_called_once()
+		self.assertEqual(output.getvalue(), "")
 		self.assertEqual(commit, self.git("rev-parse", REF))
 		self.assertEqual(self.git("rev-list", "--parents", "-n", "1", commit).split(), [commit, self.base])
 		self.assertEqual(self.git("rev-parse", commit + "^{tree}"), tree)
@@ -315,8 +314,37 @@ class BranchApplyTest(unittest.TestCase):
 				contextlib.redirect_stdout(io.StringIO()) as output:
 			self.assertEqual(cli.main(["apply", run.run_id, "--onto", BRANCH]), 0)
 			apply.assert_called_once_with(run.run_id, BRANCH)
-		self.assertEqual(output.getvalue().splitlines()[-1], self.git("rev-parse", REF)[:12])
+		self.assertEqual(output.getvalue(), self.git("rev-parse", REF)[:12] + "\n")
 		self.assertEqual(Run.load(run.run_id).status, "완료")
+
+	def test_execution_then_onto_prints_once_and_updates_the_existing_journal_block(self):
+		run = self.new_run()
+		fake = FakeAI([PASS], {"src/a.py": "VALUE = 2\n"})
+		with mock.patch("orchestrator.flow.call", fake), contextlib.redirect_stdout(io.StringIO()) as output:
+			self.assertEqual(cli.execute(run), 0)
+			first = output.getvalue()
+			self.assertEqual(first, cli.report(run) + "\n")
+			journal = next((self.vault / "📥 Inbox/AI").glob("*.md"))
+			self.assertIn("- 상태: 승인 필요", vault.block_body(journal, "run:" + run.run_id))
+			with journal.open("a", encoding="utf-8") as fh:
+				fh.write("\n사람이 남긴 메모\n")
+			self.assertEqual(cli.main(["apply", run.run_id, "--onto", BRANCH]), 0)
+		commit = self.git("rev-parse", REF)
+		self.assertEqual(output.getvalue(), first + commit[:12] + "\n")
+		self.assertEqual(output.getvalue().splitlines().count(f"# 오케스트레이션 실행 {run.run_id}"), 1)
+		saved = Run.load(run.run_id)
+		self.assertEqual(saved.status, "완료")
+		self.assertEqual((run.folder / "report.md").read_text(encoding="utf-8"), cli.report(saved))
+		self.assertIn(commit[:12], saved.end_reason)
+		body = vault.block_body(journal, "run:" + run.run_id)
+		self.assertIn("- 상태: 완료", body)
+		self.assertIn(saved.end_reason, body)
+		text = journal.read_text(encoding="utf-8")
+		self.assertEqual(text.count(f"<!-- ai-hub:run:{run.run_id} -->"), 1)
+		self.assertIn("사람이 남긴 메모", text)
+		with contextlib.redirect_stdout(io.StringIO()) as status:
+			self.assertEqual(cli.main(["status", run.run_id]), 0)
+		self.assertEqual(status.getvalue(), cli.report(saved) + "\n")
 
 	def test_module_cli_applies_to_project_branch_in_a_separate_process(self):
 		run = self.approved()
@@ -324,7 +352,7 @@ class BranchApplyTest(unittest.TestCase):
 		result = subprocess.run([sys.executable, "-m", "orchestrator", "apply", run.run_id, "--onto", BRANCH],
 			capture_output=True, text=True, check=False)
 		self.assertEqual(result.returncode, 0, result.stderr)
-		self.assertEqual(result.stdout.splitlines()[-1], self.git("rev-parse", REF)[:12])
+		self.assertEqual(result.stdout, self.git("rev-parse", REF)[:12] + "\n")
 		self.assertEqual(self.snapshot(), before)
 		self.assertEqual(Run.load(run.run_id).status, "완료")
 

@@ -88,8 +88,8 @@ def report(run: Run) -> str:
 	return "\n".join(lines) + "\n"
 
 
-def finish_outputs(run: Run) -> None:
-	"""보고서를 run 폴더에 쓰고, 볼트 일지(정해진 착지점)에 한 덩어리로 남긴다."""
+def finish_outputs(run: Run, *, print_report: bool = True) -> None:
+	"""보고서와 볼트 일지를 저장하고, 요청한 경우 본문을 출력한다."""
 	text = report(run)
 	(run.folder / "report.md").write_text(text, encoding="utf-8")
 	answered = sorted({c["tool"] for c in run.calls if c.get("ok")})
@@ -98,7 +98,8 @@ def finish_outputs(run: Run) -> None:
 	today = datetime.now().date()
 	vault.upsert_block(vault.daily_path(load_sources().vault, "personal", today), f"run:{run.run_id}", body,
 		"AI 오케스트레이션", today, "personal")
-	print(text)
+	if print_report:
+		print(text)
 
 
 def read_request(request_path: str) -> dict:

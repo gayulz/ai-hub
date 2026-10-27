@@ -1,4 +1,4 @@
-"""프로젝트 접수·조회·취소와 부서·스킬 설정 점검 명령."""
+"""프로젝트 접수·조회·취소, 회의 다시 열기와 부서·스킬 설정 점검 명령."""
 
 import argparse
 import sys
@@ -22,6 +22,8 @@ def _parser():
 	cancel = commands.add_parser("cancel", help="프로젝트 취소")
 	cancel.add_argument("id", help="프로젝트 식별자")
 	commands.add_parser("check", help="부서 설정과 참조 스킬 점검")
+	retry = commands.add_parser("meeting-retry", help="실패·중단된 회의를 다시 열기(받은 자문은 유지)")
+	retry.add_argument("id", help="프로젝트 식별자")
 	return parser
 
 
@@ -97,6 +99,10 @@ def main(argv=None) -> int:
 			print(f"{row['id']}: {row['status']}")
 		elif args.command == "check":
 			return _check()
+		elif args.command == "meeting-retry":
+			from . import meeting
+			row = meeting.retry(args.id)
+			print(f"{row['id']}: 회의 {row['meeting']['status']}, 이어서 python3 -m agency run {row['id']}")
 	except (ConfigError, ValueError) as exc:
 		print(f"오류: {exc}", file=sys.stderr)
 		return 1

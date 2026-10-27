@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from collector.backfill_common import locked, safe
+from collector.config import ConfigError
 from orchestrator import __main__ as orchestration, targets
 from orchestrator.branch_apply import apply_to_branch
 from orchestrator.checks import git
@@ -184,6 +185,10 @@ def run(identity: str) -> dict:
 				reason = "회의를 위한 프로젝트 예산이 부족하거나 소진됐습니다"
 			else:
 				reason = "회의 자문·결정 또는 설정을 확인해야 합니다"
+			# 직접 만든 오류 문구만 붙인다. 시스템 오류 문구에는 로컬 경로가 들어갈 수 있다.
+			reason += ": " + (message[:200] if isinstance(exc, (ValueError, ConfigError)) else type(exc).__name__)
+			if (project.load(identity).get("meeting") or {}).get("status") in ("failed", "uncertain"):
+				reason += f" (확인 뒤 python3 -m agency meeting-retry {identity})"
 			return _result(project.transition(identity, "막힘", reason=reason))
 		row = project.load(identity)
 		branch = row["branch"]

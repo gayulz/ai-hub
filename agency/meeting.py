@@ -371,6 +371,21 @@ def ensure(identity, department):
 		_ensure(identity, department)
 
 
+def retry(identity):
+	"""사용자 명령으로 실패·중단된 회의를 다시 연다. 받아 둔 자문은 버리지 않는다."""
+	with locked("agency-meeting:" + identity), project._edit(identity, "meeting_retry") as row:
+		state = row.get("meeting")
+		if (not isinstance(state, dict) or state.get("status") not in ("failed", "uncertain")
+				or row["checkpoint"]["step"] != "meeting"):
+			raise ValueError("실패하거나 중단된 회의만 다시 시도할 수 있습니다")
+		# 중단된 호출에 예약한 호출·시간은 이미 청구했으므로 돌려주지 않는다.
+		for key in ("error", "pending", "reserved_seconds", "pm"):
+			state.pop(key, None)
+		# 한도는 시간이 지나면 풀리므로, 사용자가 다시 열 때 소진 기록을 비운다.
+		state.update(status="advised" if "opinions" in state else "retry_advice", exhausted=[], pm_exhausted=[])
+	return row
+
+
 def _ensure(identity, department):
 	row = project.load(identity)
 	state, checkpoint = row.get("meeting"), row["checkpoint"]

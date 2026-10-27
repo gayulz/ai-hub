@@ -301,7 +301,7 @@ allow = ["personal"]
 					project.set_checkpoint(row["id"], "meeting", "합성 주제")
 				with patch, mock.patch.object(providers, "call", side_effect=AssertionError("호출 금지")) as provider:
 					result = runner.run(row["id"])
-					self.assertEqual(result["status"], "막힘")
+					self.assertEqual((result["status"], "meeting-retry" in result["blocked_reason"], ("외부 AI 금지" if forbidden else "자문 호출 또는 응답이 실패") in result["blocked_reason"]), ("막힘", not forbidden, True))
 					self.assertEqual(runner.run(row["id"])["status"], "막힘")
 					provider.assert_not_called()
 				self.assertEqual(project.load(row["id"])["checkpoint"]["step"], "meeting")

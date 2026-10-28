@@ -7,6 +7,10 @@ plugins {
 group = "dev.aihub"
 version = "0.1.0"
 
+springBoot {
+	buildInfo()
+}
+
 java {
 	toolchain {
 		languageVersion = JavaLanguageVersion.of(21)

@@ -52,7 +52,7 @@ def review_plans(department: Department, exclude: tuple[str, ...] = ()) -> list[
 
 
 def ask(department: Department, prompt: str, schema: dict, repo: Path | None = None, timeout: float = 570,
-		plans: list[Plan] | None = None) -> Answer:
+		plans: list[Plan] | None = None, caller=None) -> Answer:
 	"""읽기 전용으로 앞 요금제부터 최대 3개까지 부른다. 실패 메시지에는 요금제와 원인 분류만 담는다."""
 	plans = (pm_plans(department) if plans is None else plans)[:MAX_TRIES]
 	if not plans:
@@ -62,7 +62,7 @@ def ask(department: Department, prompt: str, schema: dict, repo: Path | None = N
 		with tempfile.TemporaryDirectory(prefix="agency-") as empty:
 			cwd = Path(empty) if repo is None or plan.tool in WRITE_UNSAFE_TOOLS else repo
 			try:
-				reply = providers.call(plan, writer=False, prompt=prompt, cwd=cwd, schema=schema, timeout=timeout)
+				reply = (caller or providers.call)(plan, writer=False, prompt=prompt, cwd=cwd, schema=schema, timeout=timeout)
 			except providers.ProviderError as exc:
 				causes.append(str(exc))
 				continue

@@ -11,7 +11,7 @@ from orchestrator.__main__ import read_request
 from orchestrator.prompts import DRAFT_SCHEMA
 from vaultfilter.public import Rules
 
-from . import ai, project, skills
+from . import ai, inputs, project, schedule, skills
 from .departments import load_departments, valid_text
 
 DECISION_FIELDS = ("chosen", "rejected", "assumptions", "verification")
@@ -118,8 +118,14 @@ def plan(identity: str) -> dict:
 	if department is None:
 		raise ValueError("프로젝트의 부서 설정이 없습니다")
 	if not department.external_ai:
+		if department.deliverable == "document" and department.prepare:
+			try:
+				inputs.collect(identity, department, include_materials=False)
+			except inputs.InputError as exc:
+				project.transition(identity, "막힘", reason=str(exc))
+				raise
 		raise ValueError("외부 AI 금지 부서는 PM 계획 호출을 쓸 수 없습니다")
-	selected = targets.target(department.repos[0]) if department.deliverable == "code" else None
+	selected = targets.target(schedule.target(row, department)) if department.deliverable == "code" else None
 	playbook = skills.prompt_block([skills.load(department.playbook)])
 	files = "\n".join(checks.git(selected.path, "ls-files").splitlines()[:400]) if selected else ""
 	prompt = (
@@ -176,6 +182,14 @@ def plan(identity: str) -> dict:
 	except ValueError as exc:
 		project.transition(identity, "막힘", reason=str(exc))
 		raise
+	if not selected and (department.prepare or department.inputs):
+		try:
+			paths = inputs.collect(identity, department)
+		except inputs.InputError as exc:
+			project.transition(identity, "막힘", reason=str(exc))
+			raise
+		for request in requests:
+			request["request"]["inputs"] = paths
 	folder = project._folder(identity) / "tasks"
 	try:
 		if folder.exists() and not folder.is_symlink():

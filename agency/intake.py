@@ -126,6 +126,8 @@ def _prompt(row, department, questions):
 	data = {"요청 글": row["request_text"], "spec": row["spec"], "answers": row["answers"],
 		"부서 이름": department.name, "담당 범위": department.scope,
 		"required_questions": list(department.required_questions), "열린 질문": questions["open"]}
+	if "schedule_repo" in row:
+		data["대상 저장소 id"] = row["schedule_repo"]
 	return (
 		"접수 PM으로서 명세 5칸 초안과 질문, 요약을 지정 JSON 형식으로 작성하세요.\n"
 		"요청 글과 지금까지의 답에 근거가 있는 것만 명세에 쓰세요. 추측 금지입니다. "

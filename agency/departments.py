@@ -13,7 +13,7 @@ from .skills import NAME
 
 ID = re.compile(r"[a-z][a-z0-9-]{0,30}")
 KEYS = {"id", "name", "scope", "repos", "allow_plans", "external_ai", "playbook", "skills", "deliverable",
-	"review_skill", "outward", "required_questions", "budget"}
+	"review_skill", "outward", "required_questions", "budget", "prepare", "prepare_timeout", "inputs", "schedule"}
 OUTWARD = ("merge", "push", "restart", "publish")
 BUDGET_LIMITS = {"calls": 200, "minutes": 1440}
 
@@ -42,6 +42,10 @@ class Department:
 	required_questions: tuple[str, ...]
 	budget: dict[str, int]
 	deliverable: str = "code"
+	prepare: tuple[tuple[str, ...], ...] = ()
+	prepare_timeout: int = 600
+	inputs: tuple[str, ...] = ()
+	schedule: tuple[dict, ...] = ()
 
 
 def _invalid(label, reason: str) -> ConfigError:
@@ -88,8 +92,27 @@ def _department(row, index, repos, plans) -> Department:
 		raise _invalid(label, "required_questions는 각 1~200자의 질문 0~10개여야 합니다")
 	if not valid_budget(row.get("budget")):
 		raise _invalid(label, "budget은 calls 1~200, minutes 1~1440 정수만 지정해야 합니다")
+	prepare, timeout, inputs, schedule = (row.get("prepare", []), row.get("prepare_timeout", 600),
+		row.get("inputs", []), row.get("schedule", []))
+	if (not isinstance(prepare, list) or any(not isinstance(command, list) or not command
+			or not valid_text(command[0], 4096) or any(not isinstance(arg, str) or "\x00" in arg
+				for arg in command) for command in prepare)):
+		raise _invalid(label, "prepare는 비어 있지 않은 명령 배열의 목록이어야 합니다")
+	if type(timeout) is not int or not 1 <= timeout <= 3600:
+		raise _invalid(label, "prepare_timeout은 1~3600 정수여야 합니다")
+	if not isinstance(inputs, list) or any(value != "jobs-allowed" for value in inputs) or len(inputs) != len(set(inputs)):
+		raise _invalid(label, "inputs는 중복 없는 허용 자료 이름 목록이어야 합니다")
+	if inputs and external and any("career" not in plans[identity].allow for identity in row["allow_plans"]):
+		raise _invalid(label, "허용 자료에는 career 허용 요금제만 지정해야 합니다")
+	if (not isinstance(schedule, list) or any(not isinstance(item, dict)
+			or item.keys() != {"repo", "every_days", "title", "request"}
+			or not isinstance(item["repo"], str) or item["repo"] not in row.get("repos", [])
+			or type(item["every_days"]) is not int or item["every_days"] < 1
+			or not valid_text(item["title"], 120) or not valid_text(item["request"], 4000) for item in schedule)):
+		raise _invalid(label, "schedule은 부서 저장소, 양의 일수, 제목과 요청의 목록이어야 합니다")
 	return Department(identity, row["name"], row["scope"], tuple(row.get("repos", [])), tuple(row["allow_plans"]),
-		external, playbook, tuple(skill_names), review, tuple(outward), tuple(questions), dict(row["budget"]), deliverable)
+		external, playbook, tuple(skill_names), review, tuple(outward), tuple(questions), dict(row["budget"]), deliverable,
+		tuple(tuple(command) for command in prepare), timeout, tuple(inputs), tuple(dict(item) for item in schedule))
 
 
 def load_departments() -> dict[str, Department]:

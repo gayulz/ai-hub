@@ -4,6 +4,7 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -18,6 +19,7 @@ from collector.config import ConfigError, load_plans
 from office.projects import read_projects
 from orchestrator import flow, prompts, providers
 from orchestrator.record import Run
+from jobs import materials, storage
 
 
 class DocumentAgencyTest(unittest.TestCase):
@@ -30,12 +32,17 @@ class DocumentAgencyTest(unittest.TestCase):
 id="writer"
 tool="codex"
 owner="personal"
-allow=["personal"]
+allow=["personal", "career"]
 [[plans]]
 id="reviewer"
 tool="agy"
 owner="personal"
-allow=["personal"]
+allow=["personal", "career"]
+[[plans]]
+id="private-reviewer"
+tool="claude"
+owner="personal"
+allow=["personal", "career"]
 [[plans]]
 id="local"
 tool="ollama"
@@ -77,7 +84,6 @@ budget={calls=20, minutes=30}
 			patch.start()
 			self.addCleanup(patch.stop)
 		self.department = load_departments()["docs"]
-
 	def fake(self, plan, writer, prompt, cwd, schema, timeout):
 		self.calls.append((plan.id, writer, prompt, cwd, schema))
 		self.assertFalse(writer)
@@ -104,7 +110,7 @@ budget={calls=20, minutes=30}
 				self.assertIn("문서 끝 표시", prompt)
 			data = {"verdict": self.task_review, "summary": "합성 판정", "findings": []}
 		elif schema is acceptance.SCHEMA:
-			self.assertEqual(plan.id, "reviewer")
+			self.assertIn(plan.id, ("reviewer", "private-reviewer"))
 			self.assertIn("자료 1 포함", prompt)
 			self.assertIn("자료 2 포함", prompt)
 			data = {"summary": "문서 대조", "criteria": [{"criterion": criterion, "verdict": self.verdict,
@@ -112,7 +118,6 @@ budget={calls=20, minutes=30}
 		else:
 			self.fail("예상하지 않은 공급자 호출")
 		return providers.Reply(data, 0.1, {})
-
 	def planned(self):
 		identity = project.new(self.department, "합성 문서", "두 문서를 작성해 주세요")["id"]
 		questions = intake.step(identity)["questions"]
@@ -121,13 +126,11 @@ budget={calls=20, minutes=30}
 		self.assertEqual(project.load(identity)["status"], "명세 확정")
 		planner.plan(identity)
 		return identity
-
 	def reviewed(self):
 		identity = self.planned()
 		self.assertEqual(runner.run(identity)["status"], "검수")
 		self.assertTrue(acceptance.review(identity)["passed"])
 		return identity
-
 	def test_intake_to_delivery_uses_readonly_analysis_and_preserves_office_status(self):
 		identity = self.planned()
 		row = project.load(identity)
@@ -166,7 +169,6 @@ budget={calls=20, minutes=30}
 		self.assertIn("자료 1 포함", second_prompt)
 		self.assertTrue(all(not str(cwd).startswith(str(project._folder(identity)))
 			for plan, _, _, cwd, _ in self.calls if plan == "reviewer"))
-
 	def test_fail_and_unverified_do_not_create_approval(self):
 		for verdict in ("fail", "unverified"):
 			with self.subTest(verdict=verdict):
@@ -177,7 +179,6 @@ budget={calls=20, minutes=30}
 				self.assertEqual((result["status"], result["passed"]), ("막힘", False))
 				self.assertEqual(result["failed"], self.spec["done_criteria"])
 				self.assertFalse((project._folder(identity) / "delivery.json").exists())
-
 	def test_task_blockers_and_review_changes_never_reach_project_review(self):
 		for reason in ("blockers", "changes"):
 			with self.subTest(reason=reason):
@@ -187,7 +188,6 @@ budget={calls=20, minutes=30}
 				result = runner.run(identity)
 				self.assertEqual(result["status"], "막힘")
 				self.assertFalse(documents.path(identity, "t1").exists())
-
 	def test_long_document_is_sent_in_full_to_task_reviewer_and_on_fix(self):
 		identity = self.planned()
 		self.long_document = True
@@ -197,7 +197,6 @@ budget={calls=20, minutes=30}
 			if schema is prompts.ANALYST_SCHEMA and "직전 문서 시작" in prompt]
 		self.assertEqual(len(fixes), 1)
 		self.assertIn("문서 끝 표시", fixes[0])
-
 	def test_tick_progresses_document_project_and_hooks_observe_changes(self):
 		identity = project.new(self.department, "합성 문서", "두 문서를 작성해 주세요")["id"]
 		with mock.patch("agency.hooks.changed") as changed:
@@ -208,7 +207,6 @@ budget={calls=20, minutes=30}
 				self.assertEqual(tick._advance(project.load(identity))["action"], expected)
 			self.assertEqual(project.load(identity)["status"], "납품 대기")
 			self.assertTrue(any(call.args[2] == "납품 대기" for call in changed.call_args_list))
-
 	def test_document_or_bundle_change_rejects_approval(self):
 		identity = self.reviewed()
 		bundle = delivery.load_bundle(identity)
@@ -222,7 +220,6 @@ budget={calls=20, minutes=30}
 		with self.assertRaises(ValueError):
 			delivery.approve(identity, "0" * 64)
 		self.assertEqual(project.load(identity)["status"], "납품 대기")
-
 	def test_change_during_review_or_approval_is_blocked(self):
 		identity = self.planned()
 		self.assertEqual(runner.run(identity)["status"], "검수")
@@ -243,7 +240,6 @@ budget={calls=20, minutes=30}
 		with mock.patch.object(delivery, "_append", side_effect=change_after_approval):
 			self.assertEqual(delivery.approve(identity, bundle["hash"])["status"], "막힘")
 		self.assertEqual(project.load(identity)["status"], "막힘")
-
 	def test_same_model_under_another_plan_is_not_an_independent_reviewer(self):
 		plans_path = self.hub / "plans.toml"
 		plans_path.write_text(plans_path.read_text().replace('[orchestration]', '''[[plans]]
@@ -408,3 +404,97 @@ allow=["personal"]
 		config.write_text(config.read_text().replace('allow_plans=["local"]', 'allow_plans=["writer"]'))
 		with self.assertRaises(ConfigError):
 			load_departments()
+
+	def test_prepared_and_allowed_inputs_reach_document_requests_and_fake_provider(self):
+		with storage.transaction() as root:
+			old, _ = materials.add(root, "합성 이전 입력")
+			materials.permission(root, old["id"], True)
+			latest, _ = materials.add(root, "합성 최신 입력", previous=old["id"])
+			materials.permission(root, latest["id"], True)
+			denied, _ = materials.add(root, "합성 비허용 입력")
+		config = self.hub / "departments.toml"
+		config.write_text(config.read_text().replace('allow_plans=["writer", "reviewer"]',
+			'allow_plans=["writer", "private-reviewer"]') + "\nprepare=[[" + json.dumps(sys.executable)
+			+ ', "-c", "print(123)"]]\ninputs=["jobs-allowed"]\n')
+		self.department = load_departments()["docs"]
+		identity = self.planned()
+		paths = [str(project._folder(identity) / "inputs/prepare-1.txt"),
+			str(project._folder(identity) / "inputs" / ("materials-" + latest["id"] + ".md"))]
+		for task in project.load(identity)["tasks"]:
+			request = tomllib.loads(Path(task["request_path"]).read_text())["request"]
+			self.assertEqual(request["inputs"], paths)
+		for value in (old["id"], denied["id"]):
+			self.assertFalse((project._folder(identity) / "inputs" / ("materials-" + value + ".md")).exists())
+		def locked_fake(*args, **kwargs):
+			if kwargs:
+				args = (args[0], *(kwargs[key] for key in ("writer", "prompt", "cwd", "schema", "timeout")))
+			with self.assertRaises(ConfigError):
+				with storage.transaction():
+					pass
+			reply = self.fake(*args)
+			if args[4] is acceptance.SCHEMA:
+				reply.data["summary"] = "합성 최신 입력"
+				for item in reply.data["criteria"]:
+					item["evidence"] = "합성 최신 입력"
+			if args[4] is prompts.REVIEW_SCHEMA:
+				reply.data["summary"] = "합성 최신 입력"
+			return reply
+		with mock.patch("agency.private_provider.call", side_effect=locked_fake):
+			self.assertEqual(runner.run(identity)["status"], "검수")
+			self.assertTrue(acceptance.review(identity)["passed"])
+		report = (project._folder(identity) / "report.md").read_text()
+		self.assertNotIn("합성 최신 입력", report)
+		self.assertNotIn("합성 최신 입력", (project._folder(identity) / "delivery.json").read_text())
+		with storage.transaction() as root:
+			materials.permission(root, latest["id"], False)
+		project.transition(identity, "실행 중")
+		project.transition(identity, "검수")
+		with mock.patch("agency.private_provider.call") as call:
+			self.assertEqual(acceptance.review(identity)["status"], "막힘")
+			call.assert_not_called()
+		for task in project.load(identity)["tasks"]:
+			execution = Run.load(task["run_id"])
+			self.assertEqual(execution.request["inputs"], paths)
+			report = (execution.folder / "report.md").read_text()
+			self.assertNotIn("합성 최신 입력", (execution.folder / "review-0.json").read_text())
+			self.assertIn("입력 자료: 2건", report)
+			self.assertNotIn("합성 최신 입력", report)
+			self.assertNotIn("123", report)
+		prompts_used = [prompt for _, _, prompt, _, schema in self.calls if schema is prompts.ANALYST_SCHEMA]
+		self.assertTrue(all(all(path in prompt for path in paths) for prompt in prompts_used))
+
+	def test_prepare_failure_blocks_plan_and_resume_does_not_repeat_success(self):
+		counter, ready = self.hub / "counter", self.hub / "ready"
+		command = [sys.executable, "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); "
+			"p.write_text((p.read_text() if p.exists() else '')+'x'); print('ok')", str(counter)]
+		failure = [sys.executable, "-c", "import pathlib,sys; sys.exit(0 if pathlib.Path(sys.argv[1]).exists() else 1)", str(ready)]
+		config = self.hub / "departments.toml"
+		config.write_text(config.read_text() + "\nprepare=" + json.dumps([command, failure]) + "\n")
+		self.department = load_departments()["docs"]
+		identity = project.new(self.department, "합성", "합성")["id"]
+		question = intake.step(identity)["questions"][0]
+		intake.answer(identity, question["no"], "맞아")
+		with self.assertRaisesRegex(ValueError, "2번 실패"):
+			planner.plan(identity)
+		self.assertEqual(project.load(identity)["status"], "막힘")
+		ready.touch()
+		project.resume(identity)
+		planner.plan(identity)
+		self.assertEqual(counter.read_text(), "x")
+
+	def test_revoked_material_blocks_execution_before_fake_provider(self):
+		with storage.transaction() as root:
+			item, _ = materials.add(root, "합성 허용 자료")
+			materials.permission(root, item["id"], True)
+		config = self.hub / "departments.toml"
+		config.write_text(config.read_text().replace('allow_plans=["writer", "reviewer"]',
+			'allow_plans=["writer", "private-reviewer"]') + '\ninputs=["jobs-allowed"]\n')
+		self.department = load_departments()["docs"]
+		identity = self.planned()
+		with storage.transaction() as root:
+			materials.permission(root, item["id"], False)
+		with mock.patch("agency.private_provider.call") as call:
+			self.assertEqual(runner.run(identity)["status"], "막힘")
+			self.assertEqual(runner.run(identity)["status"], "막힘")
+			self.assertEqual(project.load(identity)["blocked_from"], "실행 중")
+			call.assert_not_called()

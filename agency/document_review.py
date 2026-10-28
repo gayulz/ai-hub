@@ -3,9 +3,13 @@
 import hashlib
 import json
 import time
+from contextlib import nullcontext
 
 from collector.backfill_common import locked, now, private_write
-from . import ai, document_run, documents, project
+from collector.config import ConfigError, load_plans
+from jobs import storage
+from orchestrator import flow
+from . import ai, document_run, documents, inputs, private_provider, project
 
 
 def review(identity, department):
@@ -19,7 +23,7 @@ def review(identity, department):
 		if not row["spec_hash"] or row["spec_hash"] != confirmed:
 			raise ValueError("확정 명세가 바뀌었습니다")
 		manifest = documents.manifest(row)
-		contents, calls = [], []
+		contents, calls, executions = [], [], []
 		for task in row["tasks"]:
 			execution = document_run.load(task["run_id"])
 			document_run.check(identity, task, execution, workdir)
@@ -28,11 +32,18 @@ def review(identity, department):
 				raise ValueError("납품 문서가 통과한 실행 결과와 다릅니다")
 			contents.append(content)
 			calls.extend(execution.calls)
+			executions.append(execution)
+		private = any(execution.request.get("inputs") for execution in executions)
 		bundle = {"version": 2, "project": identity, "spec_hash": row["spec_hash"],
 			"documents": manifest, "criteria": [{"criterion": criterion, "verdict": "unverified",
 				"evidence": "검수 판정을 받지 못했습니다"} for criterion in row["spec"]["done_criteria"]],
 			"reviewer": "", "made": now().isoformat(timespec="seconds")}
-		plans = document_run.independent(ai.review_plans(department), calls)
+		try:
+			plans = (flow.role_plans(load_plans(), document_run._configuration(department), "review")
+				if private else ai.review_plans(department))
+		except (ConfigError, ValueError):
+			plans = []
+		plans = document_run.independent(plans, calls)
 		reason, summary = "", ""
 		if not plans:
 			reason = "구현에 쓰지 않은 검수 요금제가 없습니다"
@@ -46,7 +57,13 @@ def review(identity, department):
 				+ "\n납품 문서:\n" + json.dumps(contents, ensure_ascii=False))
 			started = time.monotonic()
 			try:
-				answer = ai.ask(department, prompt, acceptance.SCHEMA, repo=None, plans=plans)
+				with storage.transaction() if department.inputs else nullcontext(None) as root:
+					for execution in executions:
+						inputs.verify(identity, department, execution.request, root)
+					options = {"caller": private_provider.call} if private else {}
+					answer = ai.ask(department, prompt, acceptance.SCHEMA, repo=None, plans=plans, **options)
+			except (inputs.InputError, ConfigError, OSError):
+				reason = "입력 자료 또는 권한을 확인해야 합니다"
 			except RuntimeError as exc:
 				project.add_usage(identity, 1, time.monotonic() - started)
 				causes = [cause for cause in ("한도 소진", "로그인 확인 필요", "입력 길이 초과", "네트워크·서버 오류", "시간 초과")
@@ -59,7 +76,8 @@ def review(identity, department):
 						or not acceptance._valid(answer.data, row["spec"]["done_criteria"])):
 					reason = "검수 판정 형식 또는 요금제가 잘못됐습니다"
 				else:
-					bundle["criteria"] = answer.data["criteria"]
+					bundle["criteria"] = ([{**item, "evidence": "납품 문서 확인"} for item in answer.data["criteria"]]
+						if private else answer.data["criteria"])
 					summary = answer.data["summary"]
 					failed = sum(item["verdict"] == "fail" for item in bundle["criteria"])
 					unverified = sum(item["verdict"] == "unverified" for item in bundle["criteria"])
@@ -69,10 +87,12 @@ def review(identity, department):
 						reason = "프로젝트 예산을 넘었습니다"
 		if documents.manifest(row) != manifest:
 			reason = "검수 중 납품 문서가 바뀌었습니다"
-		lines = [f"# 프로젝트 검수 보고서: {row['title']}", "", reason or summary, "", "## 납품 문서", ""]
+		lines = [f"# 프로젝트 검수 보고서: {row['title']}", "",
+			reason or ("문서 검수 완료" if private else summary), "", "## 납품 문서", ""]
 		lines += [f"- {item['path']} (sha256: {item['sha256']})" for item in manifest]
 		lines += ["", "## 기준별 판정", ""]
-		lines += [f"- {item['criterion']}: {item['verdict']} — {item['evidence']}" for item in bundle["criteria"]]
+		lines += [f"- {item['criterion']}: {item['verdict']}"
+			+ ("" if private else f" — {item['evidence']}") for item in bundle["criteria"]]
 		report = project._folder(identity) / "report.md"
 		private_write(report, "\n".join(lines) + "\n")
 		delivery = ""

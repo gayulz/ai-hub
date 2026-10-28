@@ -13,7 +13,7 @@ from orchestrator import targets
 from orchestrator.checks import git
 from orchestrator.record import Run
 
-from . import ai, document_review, project, skills
+from . import ai, document_review, project, schedule, skills
 from .departments import load_departments, valid_text
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["criteria", "summary"],
@@ -114,7 +114,7 @@ def review(identity: str) -> dict:
 		raise ValueError("외부 AI 금지 부서는 검수 판정 호출을 쓸 수 없습니다")
 	if department.deliverable == "document":
 		return document_review.review(identity, department)
-	selected = targets.target(department.repos[0])
+	selected = targets.target(schedule.target(row, department))
 	with locked("agency-repo:" + str(selected.path)):
 		row = project.load(identity)
 		_ready(row)

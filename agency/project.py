@@ -90,12 +90,14 @@ def _edit(identity: str, kind: str):
 		_write(row, kind)
 
 
-def new(department: Department, title: str, request_text: str) -> dict:
+def new(department: Department, title: str, request_text: str, *, schedule_repo: str | None = None) -> dict:
 	if not valid_text(title, 120) or not valid_text(request_text, 4000):
 		raise ValueError("제목은 1~120자, 요청 글은 1~4000자여야 합니다")
 	if (not isinstance(department.id, str) or not DEPARTMENT_ID.fullmatch(department.id)
 			or not valid_budget(department.budget)):
 		raise ValueError("부서 식별자 또는 기본 예산이 잘못됐습니다")
+	if schedule_repo is not None and (not isinstance(schedule_repo, str) or schedule_repo not in department.repos):
+		raise ValueError("예약 저장소가 부서의 허용 목록에 없습니다")
 	root = _root()
 	root.mkdir(parents=True, exist_ok=True, mode=0o700)
 	root.chmod(0o700)
@@ -119,7 +121,11 @@ def new(department: Department, title: str, request_text: str) -> dict:
 			"budget": dict(department.budget), "used": {"calls": 0, "seconds": 0}, "decisions": [],
 			"checkpoint": {"step": "", "detail": ""}, "blocked_reason": "", "blocked_from": "",
 			"created": stamp, "updated": stamp}
-		_write(row, "new")
+		if schedule_repo is not None:
+			row["schedule_repo"] = schedule_repo
+			row["answers"] = [{"question": question, "answer": request_text, "at": stamp}
+				for question in department.required_questions]
+		_write(row, "schedule" if schedule_repo is not None else "new")
 	return row
 
 
@@ -196,6 +202,8 @@ def transition(identity: str, status: str, *, reason: str = "") -> dict:
 		elif status not in TRANSITIONS.get(before, ()):
 			raise ValueError("허용되지 않은 프로젝트 상태 전이입니다")
 		row["status"] = status
+		if status in ("완료", "취소"):
+			row["finished_at"] = now().isoformat(timespec="seconds")
 	return row
 
 

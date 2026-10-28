@@ -14,7 +14,7 @@ from orchestrator.checks import git
 from orchestrator.flow import worktrees_dir
 from orchestrator.record import Run, runs_dir
 
-from . import document_run, documents, meeting, project
+from . import document_run, documents, inputs, meeting, project, schedule
 from .departments import load_departments
 
 
@@ -37,7 +37,7 @@ def _validate(request: dict, repo: Path, branch: str, *, document=False) -> None
 def _usage(identity: str, execution: Run, previous_usage: dict | None = None) -> Run:
 	# 재개·반영 재시도로 같은 호출을 두 번 청구하지 않는다.
 	with orchestration.locked(execution):
-		latest = Run.load(execution.run_id)
+		latest = document_run.load(execution.run_id) if execution.kind == "analysis" else Run.load(execution.run_id)
 		if latest.run_id != execution.run_id:
 			raise ValueError("실행 기록의 번호가 다릅니다")
 		previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
@@ -168,8 +168,13 @@ def run(identity: str) -> dict:
 		raise ValueError("프로젝트의 부서 설정이 없습니다")
 	document = department.deliverable == "document"
 	if document and not department.external_ai:
+		if department.prepare and row["status"] in ("계획", "실행 중") and row["tasks"]:
+			try:
+				inputs.collect(identity, department, include_materials=False)
+			except inputs.InputError as exc:
+				return _result(project.transition(identity, "막힘", reason=str(exc)))
 		raise ValueError("외부 AI 금지 부서는 문서 실행 호출을 쓸 수 없습니다")
-	repo = project._folder(identity) / "work" if document else targets.target(department.repos[0]).path
+	repo = project._folder(identity) / "work" if document else targets.target(schedule.target(row, department)).path
 	with locked("agency-repo:" + str(repo)):
 		row = project.load(identity)
 		# 작업이 0건이면 아래 '모두 완료' 검사가 참이 되어 빈 프로젝트가 검수로 넘어간다. 상태를 바꾸기 전에 거부한다.
@@ -256,7 +261,10 @@ def run(identity: str) -> dict:
 				if execution.status not in ("승인 필요", "완료"):
 					previous_usage = execution.handoff.get("agency_usage")
 					if document:
-						document_run.resume(identity, task, execution, department, repo)
+						try:
+							document_run.resume(identity, task, execution, department, repo)
+						except inputs.InputError:
+							return _result(project.transition(identity, "막힘", reason="입력 자료 또는 권한을 확인해야 합니다"))
 					else:
 						orchestration.cmd_resume(execution.run_id, [])
 			execution = _usage(identity, execution, previous_usage)

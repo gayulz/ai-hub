@@ -23,7 +23,7 @@ class DepartmentsTest(unittest.TestCase):
 id = "xyz"
 tool = "codex"
 owner = "personal"
-allow = ["personal"]
+allow = ["personal", "career"]
 [[plans]]
 id = "local"
 tool = "ollama"
@@ -146,6 +146,28 @@ allow = ["personal", "company"]
 			self.invalid({**self.row, "deliverable": value})
 		self.invalid({**self.row, "deliverable": "code", "repos": []})
 		self.invalid({**self.row, "deliverable": "document", "repos": ["missing"]})
+
+	def test_prepare_inputs_and_schedule_validation(self):
+		valid = {**self.row, "deliverable": "document", "prepare": [["python3", "-c", "print(1)"]],
+			"prepare_timeout": 3600, "inputs": ["jobs-allowed"],
+			"schedule": [{"repo": "ai-hub", "every_days": 1, "title": "점검", "request": "합성 요청"}]}
+		self.write(valid)
+		loaded = departments.load_departments()["xyz"]
+		self.assertEqual((loaded.prepare, loaded.prepare_timeout, loaded.inputs, loaded.schedule[0]),
+			((("python3", "-c", "print(1)"),), 3600, ("jobs-allowed",), valid["schedule"][0]))
+		for key, values in {
+			"prepare": ["echo", ["echo"], [[]], [[""]], [[1]], [["a", 1]], [["a", "x\x00"]]],
+			"prepare_timeout": [0, 3601, True, 1.5, "1"],
+			"inputs": ["jobs-allowed", ["unknown"], [["jobs-allowed"]], ["jobs-allowed"] * 2],
+			"schedule": ["bad", [1], [{}], [{**valid["schedule"][0], "repo": "missing"}],
+				[{**valid["schedule"][0], "every_days": 0}], [{**valid["schedule"][0], "every_days": True}],
+				[{**valid["schedule"][0], "title": ""}], [{**valid["schedule"][0], "request": ""}],
+				[{**valid["schedule"][0], "extra": "x"}]]}.items():
+			for value in values:
+				with self.subTest(key=key, value_type=type(value).__name__):
+					self.invalid({**valid, key: value})
+		self.write({**valid, "external_ai": False, "allow_plans": ["local"]})
+		self.assertEqual(departments.load_departments()["xyz"].prepare, loaded.prepare)
 
 	def test_bad_document_and_dependency_errors_are_sanitized(self):
 		path = self.hub / "departments.toml"

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from collector.backfill_common import now, safe
 from collector.config import ConfigError, home
 
-from . import acceptance, hooks, intake, planner, project, runner
+from . import acceptance, hooks, intake, planner, project, runner, schedule
 from .departments import load_departments
 
 RETRY_MINUTES = 60
@@ -86,4 +86,6 @@ def tick() -> dict:
 			return {"skipped": True}
 		failures = hooks.before_tick()
 		rows = sorted(project.list_projects(), key=lambda row: row["id"])
+		schedule.receive(load_departments(), rows, now())
+		rows.sort(key=lambda row: row["id"])
 		return {"skipped": False, "hook_failures": failures, "projects": [_advance(row) for row in rows]}

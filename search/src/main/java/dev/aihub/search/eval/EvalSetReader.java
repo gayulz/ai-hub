@@ -14,6 +14,13 @@ import dev.aihub.search.vault.VaultReader;
 
 public class EvalSetReader {
 
+	public record Result(List<EvalQuery> queries, String sha256Prefix) {
+		@Override
+		public String toString() {
+			return "Result[sha256Prefix=" + sha256Prefix + "]";
+		}
+	}
+
 	private final Duration timeout;
 
 	public EvalSetReader() {
@@ -25,6 +32,10 @@ public class EvalSetReader {
 	}
 
 	public List<EvalQuery> read(Path source) throws IOException {
+		return readWithHash(source).queries();
+	}
+
+	public Result readWithHash(Path source) throws IOException {
 		Path directory = null;
 		Process process = null;
 		try {
@@ -108,8 +119,12 @@ public class EvalSetReader {
 		}
 	}
 
-	private List<EvalQuery> decode(Path result) throws IOException {
+	private Result decode(Path result) throws IOException {
 		try (var input = new DataInputStream(Files.newInputStream(result))) {
+			String sha256Prefix = string(input);
+			if (!sha256Prefix.matches("[0-9a-f]{12}")) {
+				throw new IOException();
+			}
 			int count = bounded(input.readInt(), 0, 10000);
 			var queries = new ArrayList<EvalQuery>();
 			for (int i = 0; i < count; i++) {
@@ -126,7 +141,7 @@ public class EvalSetReader {
 			if (input.read() != -1) {
 				throw new IOException();
 			}
-			return List.copyOf(queries);
+			return new Result(List.copyOf(queries), sha256Prefix);
 		}
 	}
 

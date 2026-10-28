@@ -17,7 +17,10 @@
 </dialog>
 <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-description">
 	<h2 id="action-title">반영 확인</h2><p id="action-description"></p>
+	<div id="action-blog-id-field" class="dev-editor" hidden><label for="action-blog-id">글 식별자</label><input id="action-blog-id" type="text" maxlength="255" autocomplete="off" aria-describedby="action-blog-id-help" required><small id="action-blog-id-help">영문·숫자·마침표·밑줄·하이픈을 255자 이내로 입력하세요.</small></div>
+	<div id="action-blog-kind-field" class="dev-editor" hidden><label for="action-blog-kind">클립 조회 종류</label><select id="action-blog-kind" required><option value="">조회 종류 선택</option><option value="comments">댓글</option><option value="followers">팔로워</option></select></div>
 	<p id="action-status" role="status" aria-live="polite"></p>
+	<pre id="action-blog-output" tabindex="0" aria-label="블로그 작업 상태" hidden></pre>
 	<div id="action-result" hidden><details id="action-details"><summary>마지막 출력 20줄</summary><pre id="action-output"></pre></details><p id="action-restart" hidden></p></div>
 	<div class="action-buttons"><button id="action-cancel" class="outline-button">취소</button><button id="action-confirm" class="apply-button">반영</button></div>
 </dialog>

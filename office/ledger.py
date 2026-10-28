@@ -13,6 +13,7 @@ from pathlib import Path
 from collector.backfill_store import Store
 from collector.config import ConfigError
 
+from . import blog_ops
 from .common import action_id, identifier, normal, regular, stamp, text, unavailable
 
 PARTS = ("progress", "batches", "active", "usage", "calls", "followups", "records")
@@ -47,6 +48,12 @@ def read_action_activity(root: Path) -> list[dict]:
 	for line in lines:
 		try:
 			row = json.loads(line)
+			if row["action"] in blog_ops.ACTIONS:
+				if row["result"] not in blog_ops.RESULTS:
+					continue
+				items.append({"at": stamp(row["at"]), "source": "office-action",
+					"text": blog_ops.LABELS[row["action"]] + " · " + row["result"]})
+				continue
 			identity = action_id(row["action"], row["id"])
 			items.append({"at": stamp(row["at"]), "source": "office-action",
 				"text": text(identity + " · " + row["message"])})

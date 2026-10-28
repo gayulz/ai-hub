@@ -201,12 +201,15 @@ button:disabled{opacity:.55;cursor:wait;filter:none}
 .action-dialog summary{cursor:pointer;min-height:44px;padding:10px 0}
 .action-dialog summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .action-dialog pre{max-height:35vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:12px;border-radius:8px;font-size:12px}
+#action-blog-output:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 .action-buttons{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap;margin-top:24px}
 .action-buttons .outline-button{width:auto;margin:0;min-width:88px}
 .action-buttons .apply-button{min-width:88px}
 .dev-editor{display:grid;gap:10px;min-width:0}
+.dev-editor[hidden]{display:none}
 .dev-editor label{font-weight:650}
 .dev-editor textarea,.dev-editor select{width:100%;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--paper);font-size:16px}
+.dev-editor input{width:100%;min-width:0;max-width:100%;min-height:44px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--paper);color:var(--ink);font-size:16px}
 .dev-editor textarea{resize:vertical;max-height:35dvh;min-height:100px}
 .dev-editor select{min-height:44px}
 #dev-status{margin-top:16px;font-weight:650;white-space:pre-line}

@@ -72,9 +72,10 @@ map.addEventListener('pointerup',e=>{pointers.delete(e.pointerId);if(!moved&&pre
 window.addEventListener('keydown',e=>{if($('agency-dialog').open||$('task-dialog').open||$('action-dialog').open||$('dev-dialog').open||$('blog-dialog').open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;const k=e.key.toLowerCase();if(world.classList?.contains('diorama-active')&&['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k))return;if(e.key==='Escape'){closePanel();return}if(['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)&&!(mobile.matches&&document.body.classList.contains('panel-open'))){keys.add(k);e.preventDefault()}if(e.code==='Space'&&near&&e.target===map){e.preventDefault();showPerson(near.id)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>keys.clear());
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
 let currentPanel=()=>overview(),refreshing=false,state=null;
-let officeToken=null,applying=false,chosenAction=null,actionFocus=null;
+let officeToken=null,applying=false,chosenAction=null,actionFocus=null,blogAction=null;
 let devBusy=false,devDraft=null,devFocus=null,devOrigin=null;
 const filterHelp={task:'직접 등록한 일입니다. 끝낸 일은 체크하면 완료 탭으로 옮겨집니다.',completed:'완료한 할 일과 결정입니다. 필요하면 다시 열 수 있습니다.',all:'직접 등록한 할 일과 승인·답변이 필요한 항목입니다.',c4:'지난 AI 대화를 정리한 노트를 볼트에 써도 되는지 승인합니다.',apply:'AI가 만들고 검토까지 마친 코드 변경을 저장소에 반영해도 되는지 승인합니다.',r1:'볼트 노트의 머리말(종류·공개 범위·날짜) 정리를 폴더 단위로 승인합니다.',draft:'기획 AI가 쓴 개발 지시 초안을 보고 실행할지 확인합니다.',decision:'계획 문서에서 사용자의 선택을 기다리는 결정입니다.',question:'회의와 대화의 AI가 정보가 모자라 묻는 질문입니다. 텔레그램에서도 답할 수 있습니다.'},actionFor={c4:'c4_apply',apply:'run_apply',r1:'r1_apply',draft:'dev_run'},devRoles={plan:'기획',backend:'백엔드',frontend:'프론트',design:'디자인'};
+const blogActions={blog_state:['작업 상태 보기','블로그 작업과 글 상태를 조회합니다.'],blog_stage_retry:['임시저장 다시 시도','입력한 글의 임시저장 작업을 요청합니다.'],blog_redraft:['초안 다시 쓰기','입력한 글의 초안을 다시 작성합니다. 기존 초안이 바뀔 수 있습니다.'],blog_clip_scan:['클립 스캔','선택한 종류의 클립 조회 작업을 요청합니다.']};
 function panel(title,html,view='status'){selected=null;previousFocus=$('side').hidden?document.activeElement:previousFocus;$('panel-title').textContent=title;$('panel-body').innerHTML=html;$('side').hidden=false;document.body.classList.add('panel-open');if(!refreshing)$('panel-body').scrollTop=0;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(!refreshing)$('live').textContent=title+' 패널을 열었습니다';world.inert=mobile.matches;if(mobile.matches&&!refreshing)$('close-panel').focus()}
 function closePanel(){selected=null;world.inert=false;$('side').hidden=true;document.body.classList.remove('panel-open');document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view==='office')));previousFocus?.focus({preventScroll:true});keys.clear()}
 
@@ -141,6 +142,7 @@ function openAction(kind,id,button){
 	if(!row||!actionFor[kind])return;
 	if(kind==='draft'&&devDraft?.id!==id)return;
 	chosenAction={action:actionFor[kind],id};actionFocus=button;keys.clear();
+	blogAction=null;$('action-blog-id-field').hidden=true;$('action-blog-kind-field').hidden=true;$('action-blog-output').hidden=true;
 	$('action-title').textContent=row.label+' 반영 확인';
 	const description=kind==='c4'?'지난 AI 대화를 정리한 노트 '+row.prepared+'건을 볼트에 씁니다. 보류 '+row.held+'건은 남습니다.\n기록: 볼트 노트·일지와 원장.\n되돌리기: 볼트 커밋이 생긴 뒤 해당 커밋을 되돌리고 원장 상태를 확인하세요.':kind==='r1'?'폴더의 노트 '+row.pending+'개에 머리말(종류·공개 범위·날짜)과 태그 정리를 반영합니다.\n기록: 로컬 볼트 커밋 한 개와 사무실 활동 기록.\n되돌리기: 해당 볼트 커밋을 되돌리세요.':'AI가 만들고 검토까지 마친 변경을 저장소에 한 커밋으로 반영합니다.\n기록: 로컬 squash 커밋 한 개와 볼트 일지.\n되돌리기: 해당 저장소 커밋을 되돌리세요.';
 	$('action-description').textContent=id+'\n'+description;
@@ -154,31 +156,80 @@ function openAction(kind,id,button){
 	$('action-cancel').disabled=false;$('action-cancel').textContent='취소';
 	$('action-dialog').showModal();$('action-cancel').focus();
 }
+function blogIdentity(){
+	if(blogAction==='blog_state')return 'state';
+	if(blogAction==='blog_clip_scan')return ['comments','followers'].includes($('action-blog-kind').value)?$('action-blog-kind').value:null;
+	const value=$('action-blog-id').value;
+	return value.length>0&&value.length<=255&&!/[^0-9a-zA-Z._-]/.test(value)&&!['.','..'].includes(value)?value:null;
+}
+function blogControls(){if(blogAction&&!applying)$('action-confirm').disabled=!blogIdentity()}
+function openBlogAction(action,button){
+	if(applying||devBusy||!officeToken||!Object.hasOwn(blogActions,action)||['agency-dialog','task-dialog','action-dialog','dev-dialog','blog-dialog','meeting-dialog','chat-dialog','shorts-dialog'].some(id=>$(id).open))return;
+	blogAction=action;chosenAction={action,id:'state'};actionFocus=button;keys.clear();
+	$('action-title').textContent=blogActions[action][0]+' 확인';$('action-description').textContent=blogActions[action][1];
+	$('action-blog-id-field').hidden=action==='blog_state'||action==='blog_clip_scan';
+	$('action-blog-kind-field').hidden=action!=='blog_clip_scan';
+	$('action-blog-id').value='';$('action-blog-kind').value='';$('action-blog-id').disabled=false;$('action-blog-kind').disabled=false;
+	$('action-blog-output').hidden=true;$('action-blog-output').textContent='';$('action-status').textContent='';$('action-result').hidden=true;
+	$('action-confirm').hidden=false;$('action-confirm').textContent=action==='blog_state'?'조회':'요청';
+	$('action-cancel').disabled=false;$('action-cancel').textContent='취소';blogControls();
+	$('action-dialog').showModal();$(action==='blog_state'?'action-cancel':action==='blog_clip_scan'?'action-blog-kind':'action-blog-id').focus();
+}
+function blogStateText(value){
+	const running=value.running_jobs,failures=value.recent_failures,circuits=value.circuits,counts=value.post_counts;
+	const statuses=['PLANNED','AWAITING_EXPERIENCE','DRAFTING','GATE_CHECK','POLISHING','REVIEWING','RENDERED','STAGING','STAGED','PUBLISHED','ARCHIVED','FAILED'];
+	const number=n=>Number.isInteger(n)&&n>=0,time=t=>t===null||typeof t==='string';
+	if(!Array.isArray(running)||!Array.isArray(failures)||!circuits||!counts||
+		!running.every(row=>row&&number(row.id)&&typeof row.kind==='string'&&time(row.started_at))||
+		!failures.every(row=>row&&typeof row.kind==='string'&&time(row.finished_at))||
+		!['STAGE','GENERATE'].every(name=>circuits[name]&&typeof circuits[name].open==='boolean'&&number(circuits[name].consecutive_failures))||
+		!statuses.every(name=>number(counts[name])))throw new Error('상태 형식 오류');
+	return ['진행 작업 ('+running.length+'건)',...(running.map(row=>'#'+row.id+' · '+row.kind+' · '+(row.started_at||'시각 미확인'))),
+		'최근 실패 ('+failures.length+'건)',...(failures.map(row=>row.kind+' · '+(row.finished_at||'시각 미확인'))),
+		'서킷',...['STAGE','GENERATE'].map(name=>name+' · '+(circuits[name].open?'열림':'닫힘')+' · 연속 실패 '+circuits[name].consecutive_failures+'건'),
+		'글 상태별 건수',...statuses.map(name=>name+' · '+counts[name]+'건')].join('\n');
+}
 function closeAction(){
 	if(applying)return;
+	const focus=actionFocus?.isConnected?actionFocus:blogAction?$('panel-body').querySelector('[data-blog-action="'+blogAction+'"]'):null;
 	$('action-dialog').close();chosenAction=null;
-	if(actionFocus?.isConnected)actionFocus.focus({preventScroll:true});else $('close-panel').focus();
+	blogAction=null;if(focus?.isConnected)focus.focus({preventScroll:true});else $('close-panel').focus();
 }
 async function submitAction(){
 	if(applying||!chosenAction||!officeToken)return;
+	if(blogAction){const id=blogIdentity();if(!id)return;chosenAction.id=id}
 	const running=chosenAction.action==='dev_run';
 	applying=true;$('action-confirm').disabled=true;$('action-cancel').disabled=true;
-	$('action-confirm').textContent=running?'실행 시작 중':'반영 중';$('action-status').textContent=(running?'실행 시작 중':'반영 중')+' · 결과를 기다려 주세요.';refreshPanel();
+	$('action-confirm').textContent=blogAction?'요청 중':running?'실행 시작 중':'반영 중';$('action-status').textContent=(blogAction?'요청 중':running?'실행 시작 중':'반영 중')+' · 결과를 기다려 주세요.';
+	if(blogAction){$('action-blog-id').disabled=true;$('action-blog-kind').disabled=true}else refreshPanel();
+	const controller=blogAction?new AbortController():null,timeout=controller?setTimeout(()=>controller.abort(),10000):null;
 	try{
-		const response=await fetch('/api/action',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Office-Token':officeToken},body:JSON.stringify(chosenAction)});
+		const response=await fetch('/api/action',{method:'POST',cache:'no-store',...(controller?{signal:controller.signal,redirect:'error'}:{}),headers:{'Content-Type':'application/json','X-Office-Token':officeToken},body:JSON.stringify(chosenAction)});
 		const data=await response.json();
+		if(blogAction){
+			if(!response.ok||data.ok!==true){$('action-status').textContent=(typeof data.message==='string'?data.message:'요청 결과를 확인할 수 없습니다.')+' 다시 요청하기 전에 블로그 상태를 확인하세요.'}
+			else if(blogAction==='blog_state'&&data.result==='조회 완료'){
+				$('action-blog-output').textContent=blogStateText(data.state);$('action-blog-output').hidden=false;$('action-status').textContent='블로그 상태 조회 완료';
+			}else if(blogAction!=='blog_state'&&data.result==='접수'&&Number.isInteger(data.job_id)&&data.job_id>0){
+				$('action-status').textContent='작업 접수 · 번호 '+data.job_id+' · 작업 완료 여부는 상태를 확인하세요.';
+			}else throw new Error('결과 확인 불가');
+			return;
+		}
 		$('action-status').textContent=data.message||'반영 결과를 확인할 수 없습니다.';
 		$('action-result').hidden=false;$('action-output').textContent=data.output||'출력이 없습니다.';
 		$('action-restart').hidden=!data.restart_needed;
 		$('action-restart').textContent=data.restart_needed?'사무실 재시작 필요: 터미널에서 launchctl kickstart -k gui/$(id -u)/com.$(id -un).ai-hub-office':'';
 	}catch{
-		$('action-status').textContent='반영 결과를 받지 못했습니다. 활동 기록과 상태를 확인한 뒤 다시 시도하세요.';
+		$('action-status').textContent=blogAction?'요청 결과를 확인할 수 없습니다. 다시 요청하기 전에 블로그 상태를 확인하세요.':'반영 결과를 받지 못했습니다. 활동 기록과 상태를 확인한 뒤 다시 시도하세요.';
 	}finally{
+		if(timeout!==null)clearTimeout(timeout);
 		applying=false;chosenAction=null;$('action-confirm').hidden=true;$('action-cancel').disabled=false;$('action-cancel').textContent='닫기';
-		await loadState();$('action-cancel').focus();
+		if(!blogAction)await loadState();$('action-cancel').focus();
 	}
 }
 $('action-confirm').onclick=submitAction;$('action-cancel').onclick=closeAction;
+$('action-blog-id').oninput=blogControls;$('action-blog-kind').onchange=blogControls;
+$('action-dialog').addEventListener('keydown',e=>{if(blogAction&&e.key==='Enter'&&e.target===$('action-blog-id')&&!$('action-confirm').disabled){e.preventDefault();return submitAction()}});
 $('action-dialog').addEventListener('cancel',e=>{e.preventDefault();closeAction()});
 const budgetText=budget=>budget.calls+'회 호출 · '+budget.minutes+'분 · 보완 '+budget.fixes+'회';
 const devTargets=()=>state?.dev_targets||[{id:'ai-hub',label:'ai-hub'}];
@@ -313,7 +364,7 @@ function showPerson(id,focus=true){
 	selected=a;
 	const role=Object.keys(devRoles).find(key=>devRoles[key]===a.name);
 	if(a.department==='dev'&&role)$('panel-body').innerHTML+='<button class="outline-button" data-dev="'+role+'" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
-	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>';
+	if(a.department==='blog')$('panel-body').innerHTML+='<button class="outline-button" data-dev="backend" data-team="blog" data-origin="'+a.id+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>개발 지시</button>'+Object.entries(blogActions).map(([action,[label]])=>'<button class="outline-button" data-blog-action="'+action+'"'+(devBusy||applying||!officeToken?' disabled':'')+'>'+label+'</button>').join('');
 	if(a.name==='PM')$('panel-body').innerHTML+=window.officeChat?.person()||'';
 	if(a.department==='shorts'&&a.name==='PD')$('panel-body').innerHTML+=window.officeShorts?.person()||'';
 	$('panel-body').innerHTML+=blogButton(a.blog_path,a.name);
@@ -329,15 +380,16 @@ function showMeeting(filter='all'){
 function showCharacters(){currentPanel=showCharacters;const list=[{...player,identity:'검은 머리 · 초록 캡 · 안경'},...actors];panel('캐릭터 23명','<p class="intro">역할마다 고정된 헤어·의상·소품을 사용해요.</p><div class="character-grid">'+list.map((a,i)=>'<div class="character-card"><canvas width="100" height="108" data-character="'+i+'" aria-label="'+esc(a.name)+' 캐릭터"></canvas><b>'+esc(a.name)+'</b><small>'+esc(a.identity||'')+'</small></div>').join('')+'</div>');document.querySelectorAll('[data-character]').forEach(c=>{const a=list[Number(c.dataset.character)],cx=c.getContext('2d');cx.imageSmoothingEnabled=false;cx.scale(1.7,1.7);art.drawActor(cx,{...a,x:29,y:59,walking:false,face:'down'},0)})}
 function showDirectory(){currentPanel=showDirectory;panel('부서 찾기','<p class="intro">부서나 직원을 선택해 살펴보세요.</p><button class="outline-button" data-characters="true" style="margin:0 0 16px">캐릭터 23명 한눈에 보기</button>'+D.rooms.map(r=>'<button class="row person-row" data-room="'+r.id+'"><span>'+esc(r.name)+'</span><span class="row-state">'+actors.filter(a=>a.department===r.id).length+'명</span></button>').join(''))}
 function view(v){if(v==='office'){if(mobile.matches&&!$('side').hidden)closePanel();else overview()}else if(v==='approvals')showApprovals();else if(v==='projects')showProjects();else if(v==='schedule')showSchedule();else showStatus()}
-document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.dataset.blogPath!==undefined)openBlog(b.dataset.blogPath,b.dataset.blogName,b);else if(b.dataset.dev)openDev(b.dataset.dev,b,b.dataset.team==='blog');else if(b.dataset.draft)showDraft(b.dataset.draft,b);else if(b.dataset.action)openAction(b.dataset.action,b.dataset.id,b);else if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.dataset.blogAction)openBlogAction(b.dataset.blogAction,b);else if(b.dataset.blogPath!==undefined)openBlog(b.dataset.blogPath,b.dataset.blogName,b);else if(b.dataset.dev)openDev(b.dataset.dev,b,b.dataset.team==='blog');else if(b.dataset.draft)showDraft(b.dataset.draft,b);else if(b.dataset.action)openAction(b.dataset.action,b.dataset.id,b);else if(b.dataset.characters)showCharacters();else if(b.dataset.meeting)showMeeting(b.dataset.meeting);else if(b.dataset.directory)showDirectory();else if(b.dataset.view)view(b.dataset.view);else if(b.dataset.filter)showApprovals(b.dataset.filter);else if(b.dataset.status)showStatus(b.dataset.status);else if(b.dataset.person!==undefined)showPerson(b.dataset.person);else if(b.dataset.room)showDepartment(b.dataset.room)});$('directory').onclick=showDirectory;$('close-panel').onclick=closePanel;$('nearby').onclick=()=>near&&showPerson(near.id);$('zoom-in').onclick=()=>zoomAt(S*1.25);$('zoom-out').onclick=()=>zoomAt(S/1.25);$('fit').onclick=()=>{fitMode=true;follow=false;resize()};$('me').onclick=()=>{fitMode=false;follow=true;S=mobile.matches?1.15:Math.max(1,S);resize()};
 
 function refreshPanel(){
-	if($('side').hidden)return;
+	if($('side').hidden||(blogAction&&$('action-dialog').open))return;
 	const body=$('panel-body'),scroll=body.scrollTop,buttons=[...body.querySelectorAll('button')],focus=buttons.indexOf(document.activeElement);
 	refreshing=true;
 	try{currentPanel();body.scrollTop=scroll;if(focus>=0)body.querySelectorAll('button')[focus]?.focus({preventScroll:true})}finally{refreshing=false}
 }
 async function loadState(){
+	if(blogAction&&$('action-dialog').open)return;
 	const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
 	try{
 		const response=await fetch('/api/state',{cache:'no-store',signal:controller.signal});

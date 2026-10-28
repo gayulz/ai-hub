@@ -17,7 +17,7 @@ from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator import targets
 
-from . import agency, chats, drafts, meetings, shorts, tasks
+from . import agency, blog_ops, chats, drafts, meetings, shorts, tasks
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -116,7 +116,7 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(payload, dict):
 			raise ValueError
 		action = payload.get("action")
-		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS, *tasks.ACTIONS, *agency.ACTIONS):
+		if not isinstance(action, str) or action not in (*COMMANDS, *blog_ops.ACTIONS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS, *tasks.ACTIONS, *agency.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
@@ -179,6 +179,9 @@ def apply(payload) -> tuple[int, dict]:
 			if action in agency.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
 					return agency.execute(root, payload, audit)
+			if action in blog_ops.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return blog_ops.execute(root, action, identity, audit)
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

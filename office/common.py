@@ -50,6 +50,12 @@ def action_id(action: str, value) -> str:
 		valid = re.fullmatch(r"p-[0-9]{8}-[0-9]{3}", value) and not value.endswith("-000")
 		if valid:
 			datetime.strptime(value[2:10], "%Y%m%d")
+	elif action == "blog_state":
+		valid = value == "state"
+	elif action in ("blog_stage_retry", "blog_redraft"):
+		valid = re.fullmatch(r"[0-9a-zA-Z._-]{1,255}", value) and value not in (".", "..")
+	elif action == "blog_clip_scan":
+		valid = value in ("comments", "followers")
 	else:
 		raise ValueError("허용하지 않는 동작")
 	if not valid:

@@ -1,5 +1,6 @@
 """원시 HTTP 요청으로 경로·Host·메서드 제한을 소켓 없이 확인한다."""
 
+import hashlib
 import http.client
 import http.server
 import io
@@ -72,6 +73,34 @@ class OfficeServerTest(OfficeCase):
 	def test_localhost_with_exact_port_is_also_allowed(self):
 		self.assertEqual(self.request(host=f"localhost:{self.httpd.server_port}")[0], 200)
 
+	def test_diorama_modules_are_explicitly_allowed_with_javascript_type(self):
+		for url in ("/diorama.js", "/diorama-world.js", "/vendor/three-0.160.0.module.min.js"):
+			with self.subTest(url=url):
+				status, headers, body = self.request(url)
+				self.assertEqual(status, 200)
+				self.assertEqual(headers["Content-Type"].split(";")[0], "text/javascript")
+				self.assertEqual(body, (server.STATIC / url.lstrip("/")).read_bytes())
+		vendor = (server.STATIC / "vendor/three-0.160.0.module.min.js").read_bytes()
+		self.assertEqual(hashlib.sha256(vendor).hexdigest(), "3e690ac7d180b0aadf0891bea39eec643e29e2d3e75c99b18689518665f69ba6")
+		self.assertIn(b"SPDX-License-Identifier: MIT", vendor[:200])
+		self.assertEqual(self.request("/vendor/../office.js")[0], 404)
+
+	def test_state_endpoint_returns_only_synthetic_project_summary(self):
+		identity = "p-20261028-001"
+		folder = self.hub / "projects" / identity
+		folder.mkdir(parents=True)
+		row = {"version": 1, "id": identity, "title": "합성 작업", "department": "dev", "status": "납품 대기",
+			"tasks": [{"status": "완료"}], "budget": {"calls": 5, "minutes": 30}, "used": {"calls": 2, "seconds": 10},
+			"request_text": "비공개 요청", "spec": {"goal": "비공개 명세"}, "decisions": [{"topic": "비공개 결정"}]}
+		(folder / "project.json").write_text(json.dumps(row, ensure_ascii=False))
+		status, _, body = self.request("/api/state")
+		self.assertEqual(status, 200)
+		payload = json.loads(body)
+		self.assertEqual(payload["projects"]["items"][0]["id"], identity)
+		self.assertEqual(payload["projects"]["items"][0]["completed"], 1)
+		for value in ("비공개 요청", "비공개 명세", "비공개 결정"):
+			self.assertNotIn(value, body.decode())
+
 	def test_chat_scripts_are_allowed_with_javascript_type_and_no_socket(self):
 		for name in ("chat.js", "chat_dock.js"):
 			with self.subTest(name=name):
@@ -128,7 +157,7 @@ class OfficeServerTest(OfficeCase):
 		self.assertIn("fetch('/api/session'", js)
 		for value in ('alert(', 'confirm(', 'localStorage', 'sessionStorage'):
 			self.assertNotIn(value, js)
-		for path in [*Path("office").glob("*.py"), *server.STATIC.iterdir()]:
+		for path in [*Path("office").glob("*.py"), *(p for p in server.STATIC.iterdir() if p.is_file())]:
 			self.assertLessEqual(len(path.read_text().splitlines()), 500)
 
 	def test_cli_rejects_invalid_ports(self):

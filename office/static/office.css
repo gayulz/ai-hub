@@ -126,6 +126,35 @@ body:not(.panel-open) .world{right:16px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}
 }
 
+#diorama-world{display:none;position:absolute;inset:0;background:#aedbd5;overflow:hidden}
+.diorama-active #diorama-world{display:block}
+.diorama-active #map,.diorama-active #labels,.diorama-active #location,.diorama-active #nearby,.diorama-active .map-tools{display:none!important}
+#diorama-canvas{display:block;width:100%;height:100%;touch-action:none;outline-offset:-5px}
+.diorama-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.diorama-room-label{position:absolute;left:0;top:0;min-width:0;min-height:0;white-space:nowrap;background:#fffef9ed;border:1px solid #c4d0bc;border-radius:3px;padding:4px 8px;font-size:11px;font-weight:650;pointer-events:auto}
+button.diorama-room-label{min-width:44px;min-height:44px}
+.diorama-room-label small{display:block;text-align:center;font-size:8px;color:#536653}
+.diorama-room-leader{position:absolute;left:0;top:0;height:1px;background:#8e9c83a0;transform-origin:0 0}
+.agent-marker{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;gap:4px;width:max-content;min-width:44px;min-height:44px;max-width:calc(100% - 8px);pointer-events:auto;padding:0;border:0;background:transparent;transform-origin:0 0}
+.agent-marker .team-label,.agent-marker .name-label{background:#fffef9ed;border-radius:3px;padding:0 4px;white-space:nowrap;font-size:10px;line-height:15px;color:#536653}
+.agent-marker .name-label{font-size:12px;font-weight:750;color:#293d34}
+.agent-marker.distant .team-label,.agent-marker.distant .name-label{display:none}
+.agent-marker.compact .status-bubble,.agent-marker.compact .team-label{display:none}
+.agent-marker.compact .name-label,.agent-marker.compact.distant .name-label{display:block;font-size:10px;line-height:14px}
+.status-bubble{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;border:1px solid #cdd7e4;border-radius:7px;padding:3px 7px;font-size:11px;font-weight:600;line-height:18px;color:#647488;background:#f5f7fa}
+.status-bubble.working{color:#397451;background:#f1f8ed;border-color:#b9d5ac}
+.status-bubble.question{color:#956620;background:#fff8e9;border-color:#e5c789}
+.mailbox-marker{position:absolute;z-index:5;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:2px solid #fff4d2;border-radius:4px;background:#c65b46;color:#fffdf5;font-size:22px;line-height:40px;font-weight:700;transform:translate(-50%,-100%);animation:diorama-bounce .85s ease-in-out infinite}
+@keyframes diorama-bounce{50%{translate:0 -7px;scale:1.12}}
+.diorama-controls{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;gap:2px;padding:3px;background:#fffefaeF;border:1px solid #dce3da;border-radius:10px}
+.diorama-controls button{min-width:44px;min-height:44px;font-size:17px}
+.diorama-controls output{min-width:42px;text-align:center;font-size:11px}
+.diorama-error{position:absolute;left:12px;bottom:70px;max-width:calc(100% - 24px);padding:7px;background:var(--paper);border-radius:6px;font-size:12px}
+.project-card{padding:14px;margin:10px 0;border:1px solid var(--line);border-radius:9px;overflow-wrap:anywhere}
+.project-card h3{margin:0 0 6px}.project-card p{margin:5px 0}.project-card small{color:var(--muted)}
+@media(max-width:500px){.diorama-controls{right:6px;bottom:6px}.diorama-controls output{min-width:34px}}
+@media(prefers-reduced-motion:reduce){.mailbox-marker{animation:none}}
+
 
 .board-control{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;padding:0;display:flex;align-items:flex-end;justify-content:center;border-radius:8px}
 .board-control:hover{outline:2px solid var(--accent);outline-offset:3px;filter:none}

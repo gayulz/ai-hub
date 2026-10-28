@@ -154,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(200, {"ok": True, "draft": drafts.card(row, data)})
 			except (OSError, ValueError, TypeError, KeyError, RecursionError):
 				self.respond_json(409, actions.result(False, "대기 중인 초안을 확인할 수 없습니다."))
-		elif target in ("/", "/office.js", "/tasks.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/shorts.js", "/shorts_wizard.js", "/office.css", "/scene.json"):
+		elif target in ("/", "/office.js", "/tasks.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/shorts.js", "/shorts_wizard.js", "/office.css", "/scene.json", "/diorama.js", "/diorama-world.js", "/vendor/three-0.160.0.module.min.js"):
 			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
 				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/meeting.js": ("meeting.js", "text/javascript"),
 				"/tasks.js": ("tasks.js", "text/javascript"),
@@ -162,7 +162,9 @@ class Handler(BaseHTTPRequestHandler):
 				"/chat.js": ("chat.js", "text/javascript"), "/chat_dock.js": ("chat_dock.js", "text/javascript"),
 				"/shorts.js": ("shorts.js", "text/javascript"), "/shorts_wizard.js": ("shorts_wizard.js", "text/javascript"),
 				"/office.css": ("office.css", "text/css"),
-				"/scene.json": ("scene.json", "application/json")}[target]
+				"/scene.json": ("scene.json", "application/json"),
+				"/diorama.js": ("diorama.js", "text/javascript"), "/diorama-world.js": ("diorama-world.js", "text/javascript"),
+				"/vendor/three-0.160.0.module.min.js": ("vendor/three-0.160.0.module.min.js", "text/javascript")}[target]
 			self.respond(200, (STATIC / name).read_bytes(), kind + "; charset=utf-8")
 		else:
 			self.respond(404, "페이지가 없습니다".encode())

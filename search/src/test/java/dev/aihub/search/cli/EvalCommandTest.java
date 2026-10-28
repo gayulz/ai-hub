@@ -4,11 +4,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 
+import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.store.FSDirectory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -116,6 +125,67 @@ class EvalCommandTest {
 		assertThat(log).doesNotExist();
 		assertThat(run("eval", "--set", temp.resolve("missing.toml").toString(), "--log", log.toString()).code())
 				.isEqualTo(1);
+	}
+
+	@Test
+	void appendsConditionsAndOrdinalsWithoutRewritingExistingLog() throws Exception {
+		String queries = "[[query]]\nid='private-one'\ntext='임시저장'\ncompany=false\nanswers=['p01.md']\n"
+				+ "[[query]]\nid='private-two'\ntext='임시저장'\ncompany=false\nanswers=['p01.md']\n";
+		Files.writeString(source, queries);
+		byte[] old = "# 기존 점수\n\n기존 내용\n".getBytes(StandardCharsets.UTF_8);
+		Files.write(log, old);
+		String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(source)))
+				.substring(0, 12);
+		for (String mode : List.of("bm25", "vector", "hybrid")) {
+			var result = run("eval", "--set", source.toString(), "--mode", mode, "--log", log.toString());
+			assertThat(result.code()).isZero();
+			assertThat(result.out()).contains("private-one", "private-two");
+		}
+		byte[] now = Files.readAllBytes(log);
+		assertThat(now).startsWith(old);
+		String text = new String(now, StandardCharsets.UTF_8);
+		assertThat(text).contains(hash, "실행 파일", "색인", "근사", "| 1 |", "| 2 |", "bm25", "vector", "hybrid")
+				.doesNotContain("private-one", "private-two", "임시저장", "p01.md", source.getFileName().toString(), temp.toString());
+	}
+
+	@Test
+	void doesNotAppendOrPrintScoresWhenTheIndexCommitChanges() throws Exception {
+		byte[] previous = "# 기존 점수\n".getBytes(StandardCharsets.UTF_8);
+		Files.write(log, previous);
+		var fake = new FakeEmbedder(4);
+		var changed = new AtomicBoolean();
+		router = router(texts -> {
+			if (changed.compareAndSet(false, true)) {
+				try (var directory = FSDirectory.open(settings.getIndexDir()); var analyzer = new StandardAnalyzer();
+						var writer = new IndexWriter(directory, new IndexWriterConfig(analyzer))) {
+					writer.addDocument(new Document());
+					writer.commit();
+				} catch (IOException exception) {
+					throw new EmbeddingException("합성 색인 갱신 실패");
+				}
+			}
+			return fake.embed(texts);
+		});
+		var result = run("eval", "--set", source.toString(), "--mode", "vector", "--log", log.toString());
+		assertThat(changed).isTrue();
+		assertThat(result.code()).isEqualTo(1);
+		assertThat(result.out()).isEmpty();
+		assertThat(result.err()).doesNotContain(temp.toString(), source.getFileName().toString());
+		assertThat(Files.readAllBytes(log)).isEqualTo(previous);
+	}
+
+	@Test
+	void missingIndexInformationDoesNotCreateAnIndexOrAppendScores() throws Exception {
+		byte[] previous = "# 기존 점수\n".getBytes(StandardCharsets.UTF_8);
+		Files.write(log, previous);
+		Path missing = temp.resolve("missing-synthetic-index");
+		settings.setIndexDir(missing);
+		var result = run("eval", "--set", source.toString(), "--log", log.toString());
+		assertThat(result.code()).isEqualTo(1);
+		assertThat(result.out()).isEmpty();
+		assertThat(result.err()).doesNotContain(temp.toString(), missing.getFileName().toString());
+		assertThat(missing).doesNotExist();
+		assertThat(Files.readAllBytes(log)).isEqualTo(previous);
 	}
 
 	private String query(boolean company, String answer) {

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.text.Normalizer;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -204,14 +205,23 @@ class EvalSetReaderTest {
 		Path log = temp.resolve("logs/scores.md");
 		var writer = new EvalLog();
 		String fingerprint = new DefaultAnalyzerFactory(settings).fingerprint();
-		writer.append(log, "hybrid", 5, settings, fingerprint, report);
-		writer.append(log, "bm25", 5, settings, fingerprint, report);
+		var executable = new EvalContext.Executable("jar", "0123456789ab", null);
+		var index = new EvalContext.IndexState(1, Instant.parse("2026-10-28T01:02:03Z"), 1, "synthetic",
+				EvalContext.TimeSource.SEGMENTS_FILE_MTIME_APPROXIMATION);
+		writer.append(log, "hybrid", 5, settings, fingerprint, report, "abcdef012345", executable, index);
+		writer.append(log, "bm25", 5, settings, fingerprint, report, "abcdef012345", executable, index);
 		String text = Files.readString(log);
 		assertThat(text).contains("hybrid", "bm25", "DISCARD", fingerprint, "k1=1.2", "b=0.3", "bge-m3",
-				"1024", "Hit@5 (recallAt5): 1.000000", "MRR@5: 1.000000", "| q1 | 1 | 1.000000 |");
+				"1024", "Hit@5 (recallAt5): 1.000000", "MRR@5: 1.000000", "| 1 | 1 | 1.000000 |");
 		assertThat(text.lines().filter(line -> line.startsWith("## "))).hasSize(2);
-		assertThat(text).doesNotContain("acme-private-query", "acme/p01.md", temp.toString(), "rankedPaths");
-		assertThatThrownBy(() -> writer.append(temp, "bm25", 5, settings, fingerprint, report))
+		assertThat(text).doesNotContain("acme-private-query", "acme/p01.md", temp.toString(), "rankedPaths", "q1");
+		byte[] previous = Files.readAllBytes(log);
+		assertThatThrownBy(() -> writer.append(log, "bm25", 5, settings, fingerprint, report, "invalid-private-hash", executable, index))
+				.isInstanceOf(IOException.class).hasMessageNotContaining("invalid-private-hash").hasNoCause();
+		assertThatThrownBy(() -> writer.append(log, "bm25", 5, settings, fingerprint, report, "abcdef012345", null, index))
+				.isInstanceOf(IOException.class).hasNoCause();
+		assertThat(Files.readAllBytes(log)).isEqualTo(previous);
+		assertThatThrownBy(() -> writer.append(temp, "bm25", 5, settings, fingerprint, report, "abcdef012345", executable, index))
 				.isInstanceOf(IOException.class).hasMessageNotContaining(temp.toString());
 	}
 }

@@ -17,6 +17,7 @@ Claude·Codex·Gemini·AGY가 모두 이 파일을 읽는다. `CLAUDE.md`·`GEMI
 | `search/` 검색 엔진 — 볼트 노트를 조각내 Lucene(Nori 한국어 분석기)으로 색인하고 BM25·벡터(Ollama `bge-m3`, 로컬 전용)·RRF 하이브리드로 검색한다. 명령은 `index`·`query`·`eval`·`serve`, 회사 노트는 기본 검색에서 제외한다. 색인 `~/.ai-hub/index`, 평가 점수 로그 `~/.ai-hub/search-eval-log.md`. 로컬 REST는 `127.0.0.1:8791`(launchd 상시 실행, 증분 색인은 매시 40분 예약)이며 회사 노트 조회(`includeCompany=true`)는 `serve --allow-company`가 있을 때만 허용하고 기본은 403이다. 시험은 `cd search && ./gradlew test --offline`(계획: 볼트 `261024-04`) | Java 21/Spring Boot + Lucene + Nori | 사용 중 |
 | `agency/` 사무실 대행사 엔진 — 큰 그림 접수 → 되묻기 → PM 계획 → 프로젝트 가지에 연속 실행 → 독립 검수 → 납품 승인 1회. 지금은 프로젝트 원장(`~/.ai-hub/projects/`)·부서 설정(`~/.ai-hub/departments.toml`, 외부 AI 금지 부서는 로컬 요금제만)·스킬 불러오기(`skills/`, 비공개는 `~/.ai-hub/skills/`가 먼저)·CLI `python3 -m agency`까지. 오케스트레이터의 `base_branch`·`apply <run> --onto <가지>`로 프로젝트 가지에 쌓고, 본 가지 병합·push는 납품 승인 때만 한다(계획: 볼트 `261027-01`) | Python(표준 라이브러리만) | 0단계 만드는 중 |
 | `hubmcp/` 기억 서버(MCP) — 위 검색을 Claude·Codex·Gemini·AGY에 도구 `memory_search` 하나로 연다(stdio). 개인 노트 결과만 돌려주고 회사 노트 조회 인자를 보낼 길이 없다. 실행기 `~/.ai-hub/bin/ai-hub-memory-mcp`, 네 도구에 이름 `ai-hub-memory`로 사용자 범위 등록. 시험은 `python3 -m unittest discover -s tests -p 'test_hubmcp_*.py'` | Python(표준 라이브러리만) | 사용 중 |
+| `jobs/` 맞춤 입사지원 — 개인 자료·공고·마감과 공고별 서류 버전을 로컬에 보관하고 명시 허용 자료의 근거 발췌로 이력서·자소서 초안을 작성한다. 실제 제출 기능은 없다. 명령은 `python3 -m jobs` | Python(표준 라이브러리만) | 구현 1~2단계 |
 
 ## 작업 전에 반드시 읽을 것
 

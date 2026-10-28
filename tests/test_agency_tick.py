@@ -348,9 +348,89 @@ class AgencyTickTest(unittest.TestCase):
 
 	def test_main_delegates_tick_without_telegram_module(self):
 		identity = self.new()["id"]
+		waiting = self.new("납품 대기")["id"]
+		snapshot = self.files(waiting)
 		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
-			self.assertEqual(self.cli(["tick"], entry=main), (0, f"{identity} 접수 중 -> 접수 중 (intake)\n", ""))
+			self.assertEqual(self.cli(["tick"], entry=main), (0, "", ""))
 		self.steps["intake"].assert_called_once_with(identity)
+		self.assertEqual(self.files(waiting), snapshot)
+
+	def test_main_is_silent_for_empty_and_waiting_ledgers(self):
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0, "", ""))
+			self.new("납품 대기")
+			self.new("완료")
+			self.assertEqual(self.cli(["tick"], entry=main), (0, "", ""))
+		for function in self.steps.values():
+			function.assert_not_called()
+
+	def test_main_prints_changed_status_from_actual_tick(self):
+		identity = self.new("명세 확정")["id"]
+		self.steps["plan"].side_effect = lambda value: project.transition(value, "계획")
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0, f"{identity} 명세 확정 -> 계획 (plan)\n", ""))
+		self.steps["plan"].assert_called_once_with(identity)
+		self.assertEqual(project.load(identity)["status"], "계획")
+
+	def test_main_prints_error_when_status_is_unchanged(self):
+		identity = self.new()["id"]
+		self.steps["intake"].side_effect = RuntimeError("합성 실패")
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0,
+				f"{identity} 접수 중 -> 접수 중 (intake)\n  오류: RuntimeError: 합성 실패\n", ""))
+		self.steps["intake"].assert_called_once_with(identity)
+
+	def test_main_prints_changed_status_and_error_once(self):
+		identity = self.new("계획")["id"]
+
+		def fail_after_transition(value):
+			project.transition(value, "막힘", reason="합성 원인")
+			raise RuntimeError("합성 실패")
+
+		self.steps["plan"].side_effect = fail_after_transition
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0,
+				f"{identity} 계획 -> 막힘 (plan)\n  오류: RuntimeError: 합성 실패\n", ""))
+		self.steps["plan"].assert_called_once_with(identity)
+
+	def test_main_prints_only_changes_and_errors_in_project_order(self):
+		rows = [self.new("납품 대기"), self.new("명세 확정"), self.new(), self.new("계획"),
+			self.new("검수"), self.new("취소"), self.new("명세 확정")]
+
+		def plan(value):
+			if value == rows[3]["id"]:
+				raise RuntimeError("합성 계획 실패")
+			project.transition(value, "계획")
+
+		def review(value):
+			project.transition(value, "막힘", reason="합성 원인")
+			raise RuntimeError("합성 검수 실패")
+
+		self.steps["plan"].side_effect = plan
+		self.steps["review"].side_effect = review
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0,
+				f"{rows[1]['id']} 명세 확정 -> 계획 (plan)\n"
+				f"{rows[3]['id']} 계획 -> 계획 (plan)\n  오류: RuntimeError: 합성 계획 실패\n"
+				f"{rows[4]['id']} 검수 -> 막힘 (review)\n  오류: RuntimeError: 합성 검수 실패\n"
+				f"{rows[6]['id']} 명세 확정 -> 계획 (plan)\n", ""))
+		self.assertEqual(self.steps["plan"].call_args_list, [mock.call(rows[index]["id"]) for index in (1, 3, 6)])
+		self.steps["intake"].assert_called_once_with(rows[2]["id"])
+		self.steps["review"].assert_called_once_with(rows[4]["id"])
+
+	def test_main_preserves_hook_failure_and_busy_lock_output(self):
+		self.new("납품 대기")
+
+		def broken():
+			raise RuntimeError("합성 연결 실패")
+
+		hooks.on_before_tick(broken)
+		with mock.patch.dict(sys.modules, {"agency.telegram_link": None}):
+			self.assertEqual(self.cli(["tick"], entry=main), (0, "알림 연결 실패: broken\n", ""))
+			path = self.hub / "run" / "locks" / "agency-tick.lock"
+			with path.open("a+") as lock:
+				fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+				self.assertEqual(self.cli(["tick"], entry=main), (0, "다른 진행이 이미 돌고 있습니다\n", ""))
 
 	def test_cli_valid_arguments_always_return_zero_on_failure(self):
 		for exception in (ValueError, RuntimeError, ConfigError, OSError, Exception):

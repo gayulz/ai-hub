@@ -26,6 +26,8 @@ def main(argv: list[str]) -> int:
 	for name in result.get("hook_failures", []):
 		print(f"알림 연결 실패: {name}")
 	for row in result["projects"]:
+		if row["before"] == row["after"] and not row["error"]:
+			continue
 		print(f"{row['id']} {row['before']} -> {row['after']} ({row['action']})")
 		if row["error"]:
 			print("  오류: " + row["error"])

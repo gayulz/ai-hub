@@ -18,6 +18,7 @@ role은 plan·backend·frontend·design 중 하나이며 생략하면 backend다
 from __future__ import annotations
 
 import fcntl
+import math
 import shlex
 import shutil
 import subprocess
@@ -127,7 +128,7 @@ def read_request(request_path: str) -> dict:
 	return data
 
 
-def start_run(request_path: str) -> Run:
+def start_run(request_path: str, *, on_created=None) -> Run:
 	data = read_request(request_path)
 	request = data["request"]
 	kind = request.get("kind", "code")
@@ -137,11 +138,22 @@ def start_run(request_path: str) -> Run:
 	if "minutes" in extra:
 		budget["seconds"] = int(extra["minutes"] * 60)
 	run = Run(run_id=new_run_id(), request=request, repo=str(Path(request.get("repo", ".")).resolve()), kind=kind, budget=budget)
-	shutil.copy(request_path, run.folder / "request.toml")
-	run.save()
-	run.event("start", goal=request["goal"], kind=kind)
-	# 명령의 종료 코드는 execute의 반환값을 그대로 보존한다.
-	run._exit_code = execute(run)
+	def record():
+		shutil.copy(request_path, run.folder / "request.toml")
+		run.save()
+		run.event("start", goal=request["goal"], kind=kind)
+	if on_created is None:
+		record()
+		run._exit_code = execute(run)
+	else:
+		with locked(run):
+			record()
+			try:
+				on_created(run)
+			except Exception:
+				run.finish("실패", "실행 번호 연결 실패")
+				raise
+			run._exit_code = _execute_locked(run)
 	return run
 
 
@@ -160,6 +172,43 @@ def _execute_locked(run: Run) -> int:
 	return 0 if run.status in ("승인 필요", "완료") else 1
 
 
+def unmeasured_call_time(calls: list) -> bool:
+	return any(not isinstance(call, dict) or "started" in call and (
+		type(call.get("seconds")) not in (int, float) or call["seconds"] < 0
+		or type(call["seconds"]) is float and not math.isfinite(call["seconds"])) for call in calls)
+
+
+def _check_agency_owner(run: Run, owner) -> None:
+	from agency import project
+	from collector.backfill_common import safe
+	from .flow import worktrees_dir
+	if (not isinstance(owner, dict) or set(owner) != {"project", "task"}
+			or not isinstance(owner["project"], str) or not project.ID.fullmatch(owner["project"])
+			or not isinstance(owner["task"], str)):
+		raise RuntimeError("재개할 실행의 프로젝트 소유 관계가 잘못됐습니다")
+	row = project.load(owner["project"])
+	matches = [task for task in row["tasks"] if task["run_id"] == run.run_id]
+	active = len(matches) == 1 and matches[0]["status"] in ("실행 중", "대기", "실패") and (
+		row["status"] == "실행 중" or row["status"] == "막힘" and row["blocked_from"] == "실행 중")
+	if (not active or row["branch"] != run.request.get("base_branch") or matches[0]["id"] != owner["task"]):
+		raise RuntimeError("다른 실행으로 교체된 작업은 재개할 수 없습니다")
+	path = Path(matches[0]["request_path"])
+	if not path.is_absolute() or not safe(path) or not path.resolve().is_relative_to(project._folder(owner["project"]).resolve()):
+		raise RuntimeError("재개할 실행의 요청서 경로가 잘못됐습니다")
+	data = read_request(str(path))
+	copy = run.folder / "request.toml"
+	if not safe(copy):
+		raise RuntimeError("재개할 실행의 기록 경로가 잘못됐습니다")
+	with copy.open("rb") as stream:
+		copied = tomllib.load(stream)
+	if data != copied or run.request != data["request"] or str(Path(run.request.get("repo", ".")).resolve()) != run.repo:
+		raise RuntimeError("재개할 실행의 요청서 또는 저장소가 바뀌었습니다")
+	if run.worktree:
+		path = Path(run.worktree)
+		if path != worktrees_dir() / run.run_id or not safe(path) or run.branch != "orch/" + run.run_id:
+			raise RuntimeError("재개할 실행의 작업 폴더 소유 관계가 다릅니다")
+
+
 def cmd_resume(run_id: str, options: list[str]) -> int:
 	run = Run.load(run_id)
 	if run.run_id != run_id:
@@ -171,22 +220,38 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		if run.status in ("승인 필요", "완료", "취소"):
 			print(f"{run_id} 는 이미 끝났습니다: {run.status}")
 			return 0
+		if run.end_reason == "실행 번호 연결 실패":
+			raise RuntimeError("연결 실패 기록을 확인하기 전에는 재개할 수 없습니다")
 		if run.worktree and not Path(run.worktree).is_dir():
 			raise RuntimeError("재개할 실행의 작업 폴더가 없습니다")
-		if not run.worktree and "agency_usage" in run.handoff:
+		project_id = ""
+		if "agency_owner" in run.handoff:
+			_check_agency_owner(run, run.handoff["agency_owner"])
+			project_id = run.handoff["agency_owner"]["project"]
+		elif "agency_usage" in run.handoff or (isinstance(run.request.get("base_branch"), str)
+				and run.request["base_branch"].startswith("agency/p-")):
 			from agency import project
 			branch = run.request.get("base_branch", "")
 			identity = branch.removeprefix("agency/") if isinstance(branch, str) and branch.startswith("agency/") else ""
 			if not project.ID.fullmatch(identity):
 				raise RuntimeError("재개할 실행의 프로젝트를 확인할 수 없습니다")
 			row = project.load(identity)
-			if row["branch"] != branch or sum(task.get("run_id") == run_id for task in row["tasks"]) != 1:
+			matches = [task for task in row["tasks"] if task.get("run_id") == run_id]
+			if row["branch"] != branch or len(matches) != 1:
 				raise RuntimeError("다른 실행으로 교체된 작업은 재개할 수 없습니다")
+			_check_agency_owner(run, {"project": identity, "task": matches[0]["id"]})
+			project_id = identity
+		if ("agency_owner" in run.handoff or isinstance(run.request.get("base_branch"), str)
+				and run.request["base_branch"].startswith("agency/p-")) and unmeasured_call_time(run.calls):
+			raise RuntimeError("중단된 호출의 사용 시간을 확인하기 전에는 재개할 수 없습니다")
 		for flag, value in zip(options[::2], options[1::2]):
 			if flag == "--calls":
 				run.budget["calls"] += int(value)
 			elif flag == "--minutes":
 				run.budget["seconds"] += int(value) * 60
+		if project_id:
+			from agency import project
+			project.cap_run_budget(project.load(project_id), run)
 		run.status, run.end_reason = "작업 중", ""
 		run.event("resume", budget=run.budget)
 		run.save()

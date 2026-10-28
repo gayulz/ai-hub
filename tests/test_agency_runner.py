@@ -1,5 +1,4 @@
 """임시 홈·Git 저장소와 가짜 실행으로 순차 실행·반영·재개를 검사한다."""
-
 import io
 import json
 import os
@@ -101,10 +100,12 @@ budget = { calls = 20, minutes = 10 }
 			project.add_task(identity, f"합성 작업 {number}", str(path), [f"t{number - 1}"] if number > 1 else [])
 		return project.load(identity)
 
-	def execution(self, task, status="승인 필요", reason="합성 검토 통과"):
+	def execution(self, task, status="승인 필요", reason="합성 검토 통과", *, on_created=None):
 		request = orchestration.read_request(task["request_path"])["request"]
 		execution = Run(new_run_id(), request, str(self.repo))
 		shutil.copyfile(task["request_path"], execution.folder / "request.toml")
+		execution.save()
+		if on_created: on_created(execution)
 		execution.calls = [dict(call) for call in self.calls]
 		execution.save()
 		if status == "승인 필요":
@@ -117,7 +118,7 @@ budget = { calls = 20, minutes = 10 }
 		execution.finish(status, reason)
 		return execution
 
-	def start(self, request_path):
+	def start(self, request_path, *, on_created=None):
 		identity = Path(request_path).parent.name
 		row = project.load(identity)
 		task = next(task for task in row["tasks"] if task["request_path"] == request_path)
@@ -128,7 +129,7 @@ budget = { calls = 20, minutes = 10 }
 		with self.assertRaises(ConfigError), locked("agency-repo:" + str(self.repo)):
 			self.fail("저장소 잠금이 유지되어야 합니다")
 		self.order.append(task["id"])
-		return self.execution(task, *self.outcomes.pop(0)) if self.outcomes else self.execution(task)
+		return self.execution(task, *self.outcomes.pop(0), on_created=on_created) if self.outcomes else self.execution(task, on_created=on_created)
 
 	def running(self, row, execution):
 		project.transition(row["id"], "실행 중")
@@ -421,7 +422,7 @@ allow = ["personal"]
 		project.transition(row["id"], "실행 중")
 		project.update_task(row["id"], "t1", status="실행 중")
 		self.assertEqual(runner.run(row["id"])["status"], "검수")
-		self.start_mock.assert_called_once_with(row["tasks"][0]["request_path"])
+		self.start_mock.assert_called_once_with(row["tasks"][0]["request_path"], on_created=mock.ANY)
 
 	def test_apply_error_fails_task_and_blocks_project(self):
 		row = self.new(2)
@@ -494,7 +495,5 @@ allow = ["personal"]
 			with self.subTest(error=error), mock.patch.object(runner_cli, "run", side_effect=error("합성 오류")):
 				self.assertEqual(self.cli(["run", "id"]), (1, "", "오류: 합성 오류\n"))
 		self.assertEqual(self.cli(["run", "invalid"])[0], 1)
-
-
 if __name__ == "__main__":
 	unittest.main()

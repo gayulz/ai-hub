@@ -128,8 +128,10 @@ budget = { calls = 20, minutes = 10 }
 		request = cli.read_request(row["tasks"][0]["request_path"])["request"]
 		execution = Run(new_run_id(), request, str(self.repo))
 		execution.save()
+		(execution.folder / "request.toml").write_bytes(Path(row["tasks"][0]["request_path"]).read_bytes())
 		Flow(execution, load_plans(), cli.orchestration_config()).prepare()
-		execution.calls = [{"role": "implement", "plan": "codex-personal", "tool": "codex", "ok": None}]
+		execution.calls = [{"role": "implement", "plan": "codex-personal", "tool": "codex",
+			"started": "2026-01-01T00:00:00+00:00", "seconds": 0, "ok": None}]
 		execution.finish("호출 한도 소진", "합성 중단")
 		project.transition(row["id"], "실행 중")
 		project.update_task(row["id"], "t1", status="실행 중", run_id=execution.run_id)

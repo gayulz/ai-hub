@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -76,25 +77,50 @@ class Flow:
 					r.event("review_skip_same_plan", plan=plan.id)
 			plans = [plan for plan in plans if plan.id not in implemented]
 		for plan in plans[:MAX_PLAN_TRIES]:
+			owner = r.handoff.get("agency_owner")
+			branch = r.request.get("base_branch", "")
+			if owner is None and isinstance(branch, str) and branch.startswith("agency/p-"):
+				owner = {"project": branch.removeprefix("agency/")}
+			if owner is not None:
+				from agency import project
+				self.save()
+				row = project.load(owner["project"])
+				if row["branch"] != branch:
+					raise ValueError("실행과 프로젝트의 기준 가지가 다릅니다")
+				project.cap_run_budget(row, r)
 			if r.seconds_left() <= 0:
 				r.finish("시간 초과", f"{role} 호출 전에 시간 한도({r.budget['seconds']}초)를 다 썼습니다. 이어 가려면 resume --minutes")
 				return None
 			if r.calls_left() <= 0:
 				r.finish("호출 한도 소진", f"{role} 호출 전에 호출 한도({r.budget['calls']}회)를 다 썼습니다. 이어 가려면 resume --calls")
 				return None
+			if owner is not None and r.seconds_left() < 31:
+				r.finish("시간 초과", "프로젝트에 안전한 최소 호출 시간 30초가 남지 않았습니다")
+				return None
 			record = {"role": role, "plan": plan.id, "tool": plan.tool, "started": now(), "ok": None}
 			r.calls.append(record)
 			r.agent, r.current_action = plan.tool, f"{role} · {plan.id}"
 			r.event("call", role=role, plan=plan.id)
 			self.save()
+			timeout = r.seconds_left() - 1 if owner is not None else r.seconds_left()
+			if owner is not None and timeout < 30:
+				r.calls.pop()
+				r.event("call_cancelled", role=role, plan=plan.id, reason="프로젝트 남은 시간 부족")
+				r.finish("시간 초과", "프로젝트에 안전한 최소 호출 시간 30초가 남지 않았습니다")
+				return None
+			started = time.monotonic()
 			try:
-				reply = self.caller(plan, writer, prompt, Path(r.worktree), schema, r.seconds_left())
+				reply = self.caller(plan, writer, prompt, Path(r.worktree), schema, timeout)
 			except ProviderError as exc:
-				record.update(ok=False, error=f"{exc.kind}: {exc}")
+				seconds = time.monotonic() - started
+				record.update(ok=False, error=f"{exc.kind}: {exc}",
+					seconds=math.ceil(seconds * 1000) / 1000 if owner is not None else round(seconds, 1))
 				r.event("call_failed", role=role, plan=plan.id, error_kind=exc.kind)
 				self.save()
 				continue
-			record.update(ok=True, seconds=round(reply.seconds, 1), usage=reply.usage)
+			seconds = max(reply.seconds, time.monotonic() - started) if owner is not None else reply.seconds
+			record.update(ok=True, seconds=math.ceil(seconds * 1000) / 1000 if owner is not None else round(seconds, 1),
+				usage=reply.usage)
 			self.save()
 			return reply.data
 		if r.status == "작업 중":
@@ -128,6 +154,7 @@ class Flow:
 	def absorb(self, data: dict) -> bool:
 		"""구현 결과를 받아 작업 가지에 커밋한다. 커밋 전 검사가 거부하면 그 출력을 열린 지적으로 남기고 False."""
 		r = self.run
+		protected = {key: r.handoff[key] for key in ("agency_owner", "agency_usage") if key in r.handoff}
 		if r.kind == "analysis":
 			r.document = data.get("document", "")
 			(r.folder / "document.md").write_text(r.document, encoding="utf-8")
@@ -135,6 +162,7 @@ class Flow:
 		else:
 			keys = ("summary", "changed_files", "verification", "blockers", "next_required_step")
 			r.handoff = {key: data.get(key) for key in keys}
+			r.handoff.update(protected)
 			try:
 				_, outside = checks.commit_owned(Path(r.worktree), r.request.get("owned_paths", []),
 					f"orchestrator {r.run_id} 시도 {r.fixes + 1}")
@@ -145,6 +173,7 @@ class Flow:
 				r.event("commit_rejected", attempt=r.fixes)
 				return False
 			r.handoff["outside_paths"] = outside
+		r.handoff.update(protected)
 		r.event("implemented", attempt=r.fixes, summary=str(data.get("summary", ""))[:300])
 		return True
 

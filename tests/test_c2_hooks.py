@@ -78,6 +78,9 @@ class = "company"
 			text = path.read_text()
 			for value in ("s01", "/w/", "대화 원문", "transcript", "prompt"):
 				self.assertNotIn(value, text)
+		deadline = time.monotonic() + 3
+		while time.monotonic() < deadline and not (self.log.exists() and self.log.read_text().splitlines()):
+			time.sleep(0.05)
 		self.assertEqual(len(self.log.read_text().splitlines()), 1)
 
 	def test_active_signal_cancels_only_its_own_delayed_marker(self):

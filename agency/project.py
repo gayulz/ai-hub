@@ -9,6 +9,7 @@ import os
 import re
 import stat
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
 from collector.backfill_common import locked, now, private_write, safe
@@ -266,6 +267,34 @@ def update_task(identity: str, task_id: str, *, status=None, run_id=None, commit
 	return row
 
 
+def link_run(identity: str, task_id: str, run_id: str, branch: str) -> dict:
+	from orchestrator.record import Run, runs_dir
+	if not isinstance(run_id, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{3}", run_id) or run_id.endswith("-000"):
+		raise ValueError("실행 번호 형식이 잘못됐습니다")
+	try:
+		date.fromisoformat(run_id[:10])
+	except ValueError:
+		raise ValueError("실행 번호 날짜가 잘못됐습니다") from None
+	if not safe(runs_dir() / run_id) or not safe(runs_dir() / run_id / "run.json"):
+		raise ValueError("실행 기록에 심볼릭 링크를 사용할 수 없습니다")
+	execution = Run.load(run_id)
+	if execution.handoff.get("agency_owner") != {"project": identity, "task": task_id}:
+		raise ValueError("실행의 프로젝트 소유 관계가 다릅니다")
+	with _edit(identity, "run_linked") as row:
+		matches = [task for task in row["tasks"] if task["id"] == task_id]
+		if (row["status"] != "실행 중" or row["branch"] != branch
+				or row["checkpoint"] != {"step": "task", "detail": task_id} or len(matches) != 1
+				or matches[0]["status"] != "실행 중" or matches[0]["run_id"] or matches[0]["commit"]
+				or any(task["run_id"] == run_id for task in row["tasks"])):
+			raise ValueError("연결할 프로젝트 작업의 상태가 바뀌었습니다")
+		usage = row.setdefault("execution_usage", {})
+		if not isinstance(usage, dict) or run_id in usage:
+			raise ValueError("실행 사용량 기록이 이미 있거나 올바르지 않습니다")
+		matches[0]["run_id"] = run_id
+		usage[run_id] = {"calls": 0, "seconds": 0}
+	return row
+
+
 def next_ready_tasks(project: dict) -> list[dict]:
 	tasks = project["tasks"]
 	_check_tasks(tasks)
@@ -273,13 +302,89 @@ def next_ready_tasks(project: dict) -> list[dict]:
 	return [task for task in tasks if task["status"] == "대기" and all(item in completed for item in task["depends_on"])]
 
 
-def add_usage(identity: str, calls: int, seconds: float) -> dict:
+def _usage_values(calls: int, seconds: float) -> None:
 	if (type(calls) is not int or calls < 0 or type(seconds) not in (int, float)
 			or type(seconds) is float and not math.isfinite(seconds) or seconds < 0):
 		raise ValueError("호출 수는 0 이상 정수, 시간은 0 이상 유한한 초 단위 숫자여야 합니다")
+
+
+def cap_run_budget(row: dict, execution, *, new: bool = False) -> None:
+	"""아직 정산되지 않은 실행 사용량까지 포함해 프로젝트 잔여 예산으로 제한한다."""
+	calls = len(execution.calls)
+	seconds = 0.0
+	for call in execution.calls:
+		if not isinstance(call, dict) or "started" in call and "seconds" not in call:
+			raise ValueError("실행 호출 시간을 확인해야 합니다")
+		value = call.get("seconds", 0)
+		_usage_values(0, value)
+		seconds += value
+	_usage_values(row["used"]["calls"], row["used"]["seconds"])
+	_usage_values(0, execution.elapsed)
+	if new:
+		if calls:
+			raise ValueError("새 실행에 이미 호출 기록이 있습니다")
+		previous = {"calls": 0, "seconds": 0}
+	else:
+		tasks = [task for task in row["tasks"] if task["run_id"] == execution.run_id]
+		owner = execution.handoff.get("agency_owner")
+		active = row["status"] == "실행 중" or row["status"] == "막힘" and row["blocked_from"] == "실행 중"
+		if (len(tasks) != 1 or owner is not None and owner != {"project": row["id"], "task": tasks[0]["id"]}
+				or not active or tasks[0]["status"] not in ("실행 중", "대기", "실패")):
+			raise ValueError("실행의 프로젝트 소유 관계를 확인할 수 없습니다")
+		usage = row.get("execution_usage", {})
+		if not isinstance(usage, dict):
+			raise ValueError("실행 사용량 기록이 올바르지 않습니다")
+		previous = usage.get(execution.run_id)
+		if previous is None:
+			if row["used"] != {"calls": 0, "seconds": 0} or execution.handoff.get("agency_usage", {"calls": 0, "seconds": 0}) != {"calls": 0, "seconds": 0}:
+				raise ValueError("이전 사용량의 중복 여부를 확인해야 합니다")
+			previous = {"calls": 0, "seconds": 0}
+	if not isinstance(previous, dict) or set(previous) != {"calls", "seconds"}:
+		raise ValueError("이전 실행 사용량이 올바르지 않습니다")
+	_usage_values(previous["calls"], previous["seconds"])
+	if previous["calls"] > calls or previous["seconds"] > seconds:
+		raise ValueError("기록된 실행 사용량이 줄었습니다")
+	remaining_calls = max(0, row["budget"]["calls"] - row["used"]["calls"] - calls + previous["calls"])
+	remaining_seconds = max(0, row["budget"]["minutes"] * 60 - row["used"]["seconds"] - seconds + previous["seconds"])
+	execution.budget["calls"] = min(execution.budget["calls"], calls + remaining_calls)
+	execution.budget["seconds"] = min(execution.budget["seconds"], execution.elapsed + remaining_seconds)
+
+
+def budget_exhausted(row: dict) -> bool:
+	return row["used"]["calls"] >= row["budget"]["calls"] or row["used"]["seconds"] >= row["budget"]["minutes"] * 60
+
+def add_usage(identity: str, calls: int, seconds: float) -> dict:
+	_usage_values(calls, seconds)
 	with _edit(identity, "usage") as row:
 		row["used"]["calls"] += calls
 		row["used"]["seconds"] += seconds
+	return row
+
+
+def settle_run_usage(identity: str, task_id: str, run_id: str, calls: int, seconds: float, *, legacy_previous=None) -> dict:
+	_usage_values(calls, seconds)
+	with _edit(identity, "run_usage") as row:
+		matches = [task for task in row["tasks"] if task["id"] == task_id and task["run_id"] == run_id]
+		usage = row.get("execution_usage")
+		previous = usage.get(run_id) if isinstance(usage, dict) else None
+		active = row["status"] == "실행 중" or row["status"] == "막힘" and row["blocked_from"] == "실행 중"
+		if not active or len(matches) != 1 or usage is not None and not isinstance(usage, dict):
+			raise ValueError("실행 사용량의 소유 관계를 확인할 수 없습니다")
+		if isinstance(usage, dict) and run_id in usage and previous is None:
+			raise ValueError("실행 사용량 기록이 올바르지 않습니다")
+		if previous is None and legacy_previous is not None:
+			if legacy_previous != {"calls": 0, "seconds": 0} or row["used"] != {"calls": 0, "seconds": 0}:
+				raise ValueError("이전 사용량의 중복 여부를 확인해야 합니다")
+			usage = row.setdefault("execution_usage", {})
+			previous = {"calls": 0, "seconds": 0}
+		if not isinstance(previous, dict) or set(previous) != {"calls", "seconds"}:
+			raise ValueError("실행 사용량의 소유 관계를 확인할 수 없습니다")
+		_usage_values(previous["calls"], previous["seconds"])
+		if calls < previous["calls"] or seconds < previous["seconds"]:
+			raise ValueError("기록된 실행 사용량이 줄었습니다")
+		row["used"]["calls"] += calls - previous["calls"]
+		row["used"]["seconds"] += seconds - previous["seconds"]
+		usage[run_id] = {"calls": calls, "seconds": seconds}
 	return row
 
 

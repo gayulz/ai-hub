@@ -24,12 +24,14 @@ class CleanupTest(unittest.TestCase):
 	new = fixtures.RunnerTest.new
 	start = fixtures.RunnerTest.start
 
-	def execution(self, task, status="승인 필요", reason="합성 검토 통과"):
+	def execution(self, task, status="승인 필요", reason="합성 검토 통과", *, on_created=None):
 		if "(한도 소진)" not in reason:
-			return fixtures.RunnerTest.execution(self, task, status, reason)
+			return fixtures.RunnerTest.execution(self, task, status, reason, on_created=on_created)
 		request = orchestration.read_request(task["request_path"])["request"]
 		execution = Run(new_run_id(), request, str(self.repo))
 		shutil.copyfile(task["request_path"], execution.folder / "request.toml")
+		execution.save()
+		if on_created: on_created(execution)
 		execution.calls = [dict(call) for call in self.calls]
 		execution.save()
 		if getattr(self, "prepare_quota", True):
@@ -115,7 +117,7 @@ class CleanupTest(unittest.TestCase):
 		for retry in range(2):
 			with self.subTest(retry=retry):
 				old_records = self.records(previous)
-				def start_after_cleanup(request_path):
+				def start_after_cleanup(request_path, *, on_created=None):
 					self.assert_removed(previous)
 					self.assertEqual(self.records(previous), old_records)
 					self.assertEqual(Run.load(previous.run_id).run_id, previous.run_id)
@@ -127,7 +129,7 @@ class CleanupTest(unittest.TestCase):
 						self.assertEqual(self.git("rev-parse", other.branch), other_tips[index])
 						self.assertEqual(self.worktree_snapshot(other), other_values[index])
 						self.assertEqual(self.records(other), other_records[index])
-					return self.start(request_path)
+					return self.start(request_path, on_created=on_created)
 				self.start_mock.side_effect = start_after_cleanup
 				self.outcomes = [("실패", "합성 실패 (한도 소진)")] if retry == 0 else []
 				result = runner.run(row["id"])

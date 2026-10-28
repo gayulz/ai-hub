@@ -49,7 +49,7 @@ class ResumeSafetyTest(unittest.TestCase):
 			self.assertTrue(self.registered(execution))
 			self.assertTrue(self.ref_exists(execution.branch))
 
-	def test_resume_reloads_budget_and_holds_lock_through_flow_and_report(self):
+	def test_resume_reloads_budget_caps_it_and_holds_lock_through_flow_and_report(self):
 		row = self.new()
 		execution = self.quota(row)
 		original = orchestration.locked
@@ -62,8 +62,9 @@ class ResumeSafetyTest(unittest.TestCase):
 			with original(current):
 				yield
 		def run_flow(current, *_):
-			self.assertEqual(current.budget["calls"], 23)
-			self.assertEqual(current.budget["seconds"], 720)
+			self.assertEqual(current.budget["calls"], 20)
+			used = project.load(row["id"])["used"]["seconds"]
+			self.assertAlmostEqual(current.budget["seconds"], current.elapsed + 600 - used)
 			self.assertEqual(current.status, "작업 중")
 			with self.assertRaises(RuntimeError), original(current):
 				self.fail("실행 중 잠금이 해제됐습니다")
@@ -177,13 +178,13 @@ class ResumeSafetyTest(unittest.TestCase):
 		row = self.new()
 		execution = self.quota(row, prepare=False)
 		before = self.records(execution)
-		def start_after_cleanup(request_path):
+		def start_after_cleanup(request_path, *, on_created=None):
 			self.assertEqual(project.load(row["id"])["tasks"][0]["run_id"], "")
 			with mock.patch.object(orchestration, "Flow") as flow, self.assertRaises(RuntimeError):
 				orchestration.cmd_resume(execution.run_id, ["--calls", "3"])
 			flow.assert_not_called()
 			self.assertEqual(self.records(execution), before)
-			return self.start(request_path)
+			return self.start(request_path, on_created=on_created)
 		self.start_mock.side_effect = start_after_cleanup
 		self.assertEqual(runner.run(row["id"])["status"], "검수")
 		self.assertEqual(self.records(execution), before)

@@ -40,12 +40,58 @@ def _usage(identity: str, execution: Run, previous_usage: dict | None = None) ->
 		latest = document_run.load(execution.run_id) if execution.kind == "analysis" else Run.load(execution.run_id)
 		if latest.run_id != execution.run_id:
 			raise ValueError("실행 기록의 번호가 다릅니다")
-		previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+		if latest.kind == "code" and orchestration.unmeasured_call_time(latest.calls):
+			raise ValueError("실행의 호출 시간을 확인해야 합니다")
 		usage = {"calls": len(latest.calls), "seconds": sum(call.get("seconds", 0) for call in latest.calls)}
-		project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
+		owner = latest.handoff.get("agency_owner")
+		if owner is not None:
+			if not isinstance(owner, dict) or set(owner) != {"project", "task"} or owner["project"] != identity:
+				raise ValueError("실행 사용량의 프로젝트 소유 관계가 다릅니다")
+			project.settle_run_usage(identity, owner["task"], latest.run_id, usage["calls"], usage["seconds"])
+		elif latest.kind == "analysis":
+			previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+			project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
+		else:
+			row = project.load(identity)
+			matches = [task for task in row["tasks"] if task["run_id"] == latest.run_id]
+			if len(matches) != 1:
+				raise ValueError("실행 사용량의 프로젝트 작업을 확인할 수 없습니다")
+			_request_matches(identity, matches[0], Path(latest.repo), row["branch"], latest)
+			previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+			project.settle_run_usage(identity, matches[0]["id"], latest.run_id, usage["calls"], usage["seconds"], legacy_previous=previous)
 		latest.handoff["agency_usage"] = usage
 		latest.save()
 		return latest
+
+
+def _request_matches(identity: str, task: dict, repo: Path, branch: str, execution: Run) -> None:
+	path = Path(task["request_path"])
+	if not path.is_absolute() or not safe(path) or not path.resolve().is_relative_to(project._folder(identity).resolve()):
+		raise ValueError("프로젝트 작업 요청서 경로가 올바르지 않습니다")
+	data = orchestration.read_request(str(path))
+	copy = execution.folder / "request.toml"
+	if not safe(copy) or not safe(execution.folder / "run.json"):
+		raise ValueError("실행 기록에 심볼릭 링크를 사용할 수 없습니다")
+	with copy.open("rb") as stream:
+		copied = tomllib.load(stream)
+	if data != copied or execution.request != data["request"]:
+		raise ValueError("새 실행과 프로젝트 작업의 요청서가 다릅니다")
+	_validate(execution.request, repo, branch)
+
+
+def _link(identity: str, task_id: str, repo: Path, branch: str, execution: Run) -> None:
+	row = project.load(identity)
+	matches = [task for task in row["tasks"] if task["id"] == task_id]
+	if (len(matches) != 1 or row["status"] != "실행 중" or row["branch"] != branch
+			or matches[0]["status"] != "실행 중" or matches[0]["run_id"] or matches[0]["commit"]
+			or execution.status != "작업 중" or execution.kind != "code" or execution.repo != str(repo)
+			or execution.step != "prepare" or execution.worktree or execution.calls or execution.handoff):
+		raise ValueError("새 실행과 프로젝트 작업의 소유 관계가 다릅니다")
+	_request_matches(identity, matches[0], repo, branch, execution)
+	project.cap_run_budget(row, execution, new=True)
+	execution.handoff["agency_owner"] = {"project": identity, "task": task_id}
+	execution.save()
+	project.link_run(identity, task_id, execution.run_id, branch)
 
 
 def _worktrees(repo: Path) -> list[tuple[str, str]]:
@@ -226,6 +272,8 @@ def run(identity: str) -> dict:
 				task = None
 			previous_usage = None
 			if task is None:
+				if not document and project.budget_exhausted(row):
+					return _result(project.transition(identity, "막힘", reason="프로젝트 예산을 모두 사용했습니다"))
 				ready = project.next_ready_tasks(row)
 				if not ready:
 					return _result(project.transition(identity, "막힘", reason="실행할 수 있는 대기 작업이 없습니다"))
@@ -242,7 +290,8 @@ def run(identity: str) -> dict:
 				project.set_checkpoint(identity, "task", task["id"])
 				try:
 					execution = (document_run.start(identity, task, department, repo) if document
-						else orchestration.start_run(task["request_path"]))
+						else orchestration.start_run(task["request_path"], on_created=lambda run:
+							_link(identity, task["id"], repo, branch, run)))
 				except (OSError, ValueError, RuntimeError):
 					if not document:
 						raise
@@ -250,7 +299,11 @@ def run(identity: str) -> dict:
 					if not current["run_id"]:
 						project.update_task(identity, task["id"], status="대기")
 					return _result(project.transition(identity, "막힘", reason="문서 실행 준비 또는 기록에 실패했습니다"))
-				project.update_task(identity, task["id"], run_id=execution.run_id)
+				if document:
+					project.update_task(identity, task["id"], run_id=execution.run_id)
+				elif not any(item["id"] == task["id"] and item["run_id"] == execution.run_id
+						for item in project.load(identity)["tasks"]):
+					raise ValueError("새 실행 번호가 프로젝트 작업에 연결되지 않았습니다")
 			else:
 				execution = document_run.load(task["run_id"]) if document else Run.load(task["run_id"])
 				if document:
@@ -266,8 +319,18 @@ def run(identity: str) -> dict:
 						except inputs.InputError:
 							return _result(project.transition(identity, "막힘", reason="입력 자료 또는 권한을 확인해야 합니다"))
 					else:
+						try:
+							execution = _usage(identity, execution, previous_usage)
+						except (OSError, ValueError):
+							return _result(project.transition(identity, "막힘", reason="실행 사용량을 확인하지 못했습니다. 이전 기록을 대조해야 합니다"))
+						if project.over_budget(project.load(identity)):
+							return _result(project.transition(identity, "막힘", reason="프로젝트 예산을 넘었습니다"))
+						previous_usage = execution.handoff.get("agency_usage")
 						orchestration.cmd_resume(execution.run_id, [])
-			execution = _usage(identity, execution, previous_usage)
+			try:
+				execution = _usage(identity, execution, previous_usage)
+			except (OSError, ValueError):
+				return _result(project.transition(identity, "막힘", reason="실행 사용량을 확인하지 못했습니다. 이전 기록을 대조해야 합니다"))
 			reason = ""
 			if execution.status in ("승인 필요", "완료"):
 				try:

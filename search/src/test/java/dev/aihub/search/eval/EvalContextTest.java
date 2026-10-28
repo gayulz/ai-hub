@@ -27,6 +27,8 @@ import org.apache.lucene.store.FSDirectory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.aihub.search.index.NoteIndexer;
+
 class EvalContextTest {
 
 	@TempDir
@@ -88,9 +90,10 @@ class EvalContextTest {
 	}
 
 	@Test
-	void readsCommitFileTimeAsAnExplicitApproximationWithoutWritingTheIndex() throws Exception {
+	void readsTheCommittedTimeIndependentlyOfFileModificationTime() throws Exception {
 		Path index = Files.createDirectory(temp.resolve("private-index"));
-		commit(index, "first");
+		Instant committed = Instant.parse("2026-10-26T01:02:03Z");
+		commit(index, "first", Map.of(NoteIndexer.COMMIT_TIME_KEY, committed.toString()));
 		Path segments;
 		try (var directory = FSDirectory.open(index)) {
 			segments = index.resolve(DirectoryReader.listCommits(directory).getLast().getSegmentsFileName());
@@ -101,11 +104,39 @@ class EvalContextTest {
 		var state = EvalContext.indexState(index);
 		assertThat(state.generation()).isPositive();
 		assertThat(state.modifiedTime()).isEqualTo(modified);
-		assertThat(state.timeSource()).isEqualTo(EvalContext.TimeSource.SEGMENTS_FILE_MTIME_APPROXIMATION);
+		assertThat(state.commitTime()).isEqualTo(committed);
 		assertThat(state.toString()).doesNotContain(temp.toString(), index.getFileName().toString(), segments.getFileName().toString());
 		assertThat(fileHashes(index)).isEqualTo(before);
 		EvalContext.requireUnchanged(index, state);
 		assertThat(fileHashes(index)).isEqualTo(before);
+	}
+
+	@Test
+	void oldIndexesHaveUnknownCommitTimeAndCopiedIndexesKeepTheirRecordedTime() throws Exception {
+		Path index = Files.createDirectory(temp.resolve("old-index"));
+		commit(index, "old");
+		assertThat(EvalContext.indexState(index).commitTime()).isNull();
+		Instant committed = Instant.parse("2026-10-26T01:02:03Z");
+		commit(index, "new", Map.of(NoteIndexer.COMMIT_TIME_KEY, committed.toString()));
+		Path copy = Files.createDirectory(temp.resolve("copied-index"));
+		try (var files = Files.list(index)) {
+			for (Path file : files.filter(Files::isRegularFile).toList()) {
+				Files.copy(file, copy.resolve(file.getFileName()));
+			}
+		}
+		try (var directory = FSDirectory.open(copy)) {
+			Path segments = copy.resolve(DirectoryReader.listCommits(directory).getLast().getSegmentsFileName());
+			Files.setLastModifiedTime(segments, FileTime.from(Instant.parse("2030-01-01T00:00:00Z")));
+		}
+		assertThat(EvalContext.indexState(copy).commitTime()).isEqualTo(committed);
+	}
+
+	@Test
+	void rejectsInvalidCommitTimeWithoutExposingItsContents() throws Exception {
+		Path index = Files.createDirectory(temp.resolve("bad-index"));
+		commit(index, "bad", Map.of(NoteIndexer.COMMIT_TIME_KEY, "private-invalid-time"));
+		assertThatThrownBy(() -> EvalContext.indexState(index)).isInstanceOf(IOException.class)
+				.hasMessageNotContaining("private-invalid-time").hasMessageNotContaining(index.toString()).hasNoCause();
 	}
 
 	@Test
@@ -129,11 +160,16 @@ class EvalContextTest {
 	}
 
 	private void commit(Path index, String value) throws Exception {
+		commit(index, value, Map.of());
+	}
+
+	private void commit(Path index, String value, Map<String, String> metadata) throws Exception {
 		try (var directory = FSDirectory.open(index); var analyzer = new StandardAnalyzer();
 				var writer = new IndexWriter(directory, new IndexWriterConfig(analyzer))) {
 			var document = new Document();
 			document.add(new StringField("id", value, StringField.Store.YES));
 			writer.addDocument(document);
+			writer.setLiveCommitData(metadata.entrySet());
 			writer.commit();
 		}
 	}

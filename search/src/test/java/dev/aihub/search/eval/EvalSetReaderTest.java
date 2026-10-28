@@ -207,7 +207,7 @@ class EvalSetReaderTest {
 		String fingerprint = new DefaultAnalyzerFactory(settings).fingerprint();
 		var executable = new EvalContext.Executable("jar", "0123456789ab", null);
 		var index = new EvalContext.IndexState(1, Instant.parse("2026-10-28T01:02:03Z"), 1, "synthetic",
-				EvalContext.TimeSource.SEGMENTS_FILE_MTIME_APPROXIMATION);
+				Instant.parse("2026-10-28T01:02:03Z"));
 		writer.append(log, "hybrid", 5, settings, fingerprint, report, "abcdef012345", executable, index);
 		writer.append(log, "bm25", 5, settings, fingerprint, report, "abcdef012345", executable, index);
 		String text = Files.readString(log);

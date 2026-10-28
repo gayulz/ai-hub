@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -66,6 +67,35 @@ class NoteIndexerTest {
 			for (int i = 0; i < before.size(); i++) {
 				assertThat(reader.storedFields().document(i).toString()).isEqualTo(before.get(i).toString());
 			}
+		}
+	}
+
+	@Test
+	void recordsCommitTimeOnlyWhenANewCommitIsMade() throws Exception {
+		write("p01.md", "처음 본문");
+		Instant started = Instant.now();
+		indexer.index(vault, false);
+		Instant completed = Instant.now();
+		long generation;
+		String firstTime;
+		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
+			generation = reader.getIndexCommit().getGeneration();
+			firstTime = reader.getIndexCommit().getUserData().get(NoteIndexer.COMMIT_TIME_KEY);
+			assertThat(Instant.parse(firstTime)).isBetween(started, completed);
+		}
+		indexer.index(vault, false);
+		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
+			assertThat(reader.getIndexCommit().getGeneration()).isEqualTo(generation);
+			assertThat(reader.getIndexCommit().getUserData()).containsEntry(NoteIndexer.COMMIT_TIME_KEY, firstTime);
+		}
+		write("p01.md", "변경된 본문");
+		started = Instant.now();
+		indexer.index(vault, false);
+		completed = Instant.now();
+		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
+			assertThat(reader.getIndexCommit().getGeneration()).isGreaterThan(generation);
+			assertThat(Instant.parse(reader.getIndexCommit().getUserData().get(NoteIndexer.COMMIT_TIME_KEY)))
+					.isBetween(started, completed);
 		}
 	}
 

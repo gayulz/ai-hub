@@ -32,7 +32,8 @@ public final class EvalLog {
 		} else {
 			text.append("빌드 ").append(executable.identifier()).append(" · 빌드 시각 ").append(executable.buildTime());
 		}
-		text.append('\n').append("- 색인 커밋 파일 시각(UTC, 근사): ").append(index.modifiedTime()).append('\n');
+		text.append('\n').append("- 색인 커밋 시각(UTC): ")
+				.append(index.commitTime() == null ? "미확인" : index.commitTime()).append('\n');
 		text.append(String.format(Locale.ROOT, "- Hit@%d (recallAt5): %.6f · MRR@%d: %.6f%n%n",
 				k, report.recallAt5(), k, report.mrr()));
 		text.append("| 순번 | 적중 | 역순위 |\n|---|---:|---:|\n");
@@ -51,7 +52,7 @@ public final class EvalLog {
 	}
 	private void validate(String hash, EvalContext.Executable executable, EvalContext.IndexState index) throws IOException {
 		if (hash == null || !hash.matches("[0-9a-f]{12}") || executable == null || index == null
-				|| index.modifiedTime() == null || index.timeSource() != EvalContext.TimeSource.SEGMENTS_FILE_MTIME_APPROXIMATION) {
+				|| index.modifiedTime() == null) {
 			throw new IOException("평가 조건을 확인하지 못했습니다");
 		}
 		String value = executable.identifier();

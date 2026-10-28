@@ -2,6 +2,7 @@ package dev.aihub.search.index;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,6 +39,8 @@ import dev.aihub.search.vector.OllamaEmbedder;
 
 @Service
 public class NoteIndexer {
+
+	public static final String COMMIT_TIME_KEY = "commit_time";
 
 	// 빈 노트는 조각 문서가 없으므로 커밋 메타데이터에 해시만 보관한다.
 	private static final String EMPTY_PREFIX = "empty:";
@@ -147,6 +150,7 @@ public class NoteIndexer {
 				metadata.put("reindex", String.join(",", reasons));
 			}
 			emptyNotes.forEach((path, hash) -> metadata.put(EMPTY_PREFIX + path, hash));
+			metadata.put(COMMIT_TIME_KEY, Instant.now().toString());
 			writer.setLiveCommitData(metadata.entrySet());
 			writer.commit();
 		}

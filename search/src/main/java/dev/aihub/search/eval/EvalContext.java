@@ -21,21 +21,19 @@ import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.store.FSDirectory;
 
-public final class EvalContext {
+import dev.aihub.search.index.NoteIndexer;
 
-	public enum TimeSource {
-		SEGMENTS_FILE_MTIME_APPROXIMATION
-	}
+public final class EvalContext {
 
 	public record Executable(String kind, String identifier, Instant buildTime) {
 	}
 
 	public record IndexState(long generation, Instant modifiedTime, long size, String fileIdentity,
-			TimeSource timeSource) {
+			Instant commitTime) {
 		@Override
 		public String toString() {
 			return "IndexState[generation=" + generation + ", modifiedTime=" + modifiedTime
-					+ ", timeSource=" + timeSource + "]";
+					+ ", commitTime=" + commitTime + "]";
 		}
 	}
 
@@ -123,8 +121,10 @@ public final class EvalContext {
 					throw new IOException();
 				}
 				String identity = HexFormat.of().formatHex(sha256().digest(first.fileKey().toString().getBytes(StandardCharsets.UTF_8)));
+				String storedTime = before.getUserData().get(NoteIndexer.COMMIT_TIME_KEY);
+				Instant commitTime = storedTime == null ? null : Instant.parse(storedTime);
 				return new IndexState(before.getGeneration(), first.lastModifiedTime().toInstant(), first.size(), identity,
-						TimeSource.SEGMENTS_FILE_MTIME_APPROXIMATION);
+						commitTime);
 			}
 		} catch (IOException | RuntimeException exception) {
 			throw new IOException("색인 커밋 정보를 확인하지 못했습니다");

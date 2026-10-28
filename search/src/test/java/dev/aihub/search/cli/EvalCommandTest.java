@@ -10,11 +10,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.store.FSDirectory;
@@ -144,8 +146,31 @@ class EvalCommandTest {
 		byte[] now = Files.readAllBytes(log);
 		assertThat(now).startsWith(old);
 		String text = new String(now, StandardCharsets.UTF_8);
-		assertThat(text).contains(hash, "실행 파일", "색인", "근사", "| 1 |", "| 2 |", "bm25", "vector", "hybrid")
+		String committed;
+		try (var directory = FSDirectory.open(settings.getIndexDir()); var reader = DirectoryReader.open(directory)) {
+			committed = reader.getIndexCommit().getUserData().get(NoteIndexer.COMMIT_TIME_KEY);
+		}
+		assertThat(text).contains(hash, "실행 파일", "색인 커밋 시각(UTC): " + committed, "| 1 |", "| 2 |", "bm25", "vector", "hybrid")
 				.doesNotContain("private-one", "private-two", "임시저장", "p01.md", source.getFileName().toString(), temp.toString());
+	}
+
+	@Test
+	void evaluatesOldIndexWithUnknownTimeAndPreservesExistingLog() throws Exception {
+		try (var directory = FSDirectory.open(settings.getIndexDir());
+				var reader = DirectoryReader.open(directory); var analyzer = new StandardAnalyzer()) {
+			var data = new HashMap<>(reader.getIndexCommit().getUserData());
+			data.remove(NoteIndexer.COMMIT_TIME_KEY);
+			try (var writer = new IndexWriter(directory, new IndexWriterConfig(analyzer))) {
+				writer.setLiveCommitData(data.entrySet());
+				writer.commit();
+			}
+		}
+		byte[] previous = "# 기존 기록\n한글 점수\n".getBytes(StandardCharsets.UTF_8);
+		Files.write(log, previous);
+		assertThat(run("eval", "--set", source.toString(), "--log", log.toString()).code()).isZero();
+		byte[] result = Files.readAllBytes(log);
+		assertThat(result).startsWith(previous);
+		assertThat(new String(result, StandardCharsets.UTF_8)).contains("색인 커밋 시각(UTC): 미확인");
 	}
 
 	@Test

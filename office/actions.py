@@ -17,7 +17,7 @@ from collector.redact import redact
 from collector.redact_pii import redact_pii
 from orchestrator import targets
 
-from . import chats, drafts, meetings, shorts, tasks
+from . import agency, chats, drafts, meetings, shorts, tasks
 from .agents import read_runs
 from .common import action_id, regular
 from .ledger import read_ledger, read_r1
@@ -116,7 +116,7 @@ def apply(payload) -> tuple[int, dict]:
 		if not isinstance(payload, dict):
 			raise ValueError
 		action = payload.get("action")
-		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS, *tasks.ACTIONS):
+		if not isinstance(action, str) or action not in (*COMMANDS, *drafts.ACTIONS, *meetings.ACTIONS, *chats.ACTIONS, *shorts.ACTIONS, *tasks.ACTIONS, *agency.ACTIONS):
 			raise ValueError
 		keys = {"action", "id", "text"} if action in ("dev_draft", "dev_redraft") else {"action", "id"}
 		if action == "dev_draft":
@@ -130,10 +130,13 @@ def apply(payload) -> tuple[int, dict]:
 		if action in tasks.ACTIONS:
 			tasks.validate(payload)
 			keys = tasks.KEYS if action == "task_create" else tasks.KEYS | {"kind", "version"}
+		if action in agency.ACTIONS:
+			agency.validate(payload)
+			keys = agency.KEYS[action]
 		if set(payload) != keys:
 			raise ValueError
 		identity = action_id(action, payload["id"])
-		if "text" in keys:
+		if "text" in keys and action not in agency.ACTIONS:
 			drafts.string(payload["text"], "사용자 글", 2000)
 		if action in ("dev_draft", "meeting_analyze"):
 			if type(payload["origin"]) is not int or not any(person["id"] == payload["origin"] for person in scene()["people"]):
@@ -173,6 +176,9 @@ def apply(payload) -> tuple[int, dict]:
 			if action in shorts.ACTIONS:
 				with private_file(root, "logs", "office-actions.jsonl") as audit:
 					return shorts.execute(root, payload, audit)
+			if action in agency.ACTIONS:
+				with private_file(root, "logs", "office-actions.jsonl") as audit:
+					return agency.execute(root, payload, audit)
 			if not pending(root, action, identity):
 				return 409, result(False, "결재함에 반영 대기 항목이 없습니다. 상태를 다시 읽어 주세요.")
 			with private_file(root, "logs", "office-actions.jsonl") as audit:

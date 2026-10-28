@@ -10,6 +10,11 @@
 		<div class="diorama-controls" aria-label="숲속 사무실 보기"><button id="diorama-rotate-left" aria-label="왼쪽으로 회전">↶</button><button id="diorama-rotate-right" aria-label="오른쪽으로 회전">↷</button><button id="diorama-zoom-out" aria-label="축소">−</button><output id="diorama-zoom-label">100%</output><button id="diorama-zoom-in" aria-label="확대">+</button><button id="diorama-reset">전체</button></div>
 	</div><p id="diorama-error" class="diorama-error" role="status" hidden>3차원 장면을 열 수 없어 기존 2D 사무실을 표시합니다.</p></main>
 <aside class="side" id="side" aria-labelledby="panel-title" hidden><header class="side-head"><div><h2 id="panel-title">오늘의 오피스</h2><small id="updated">자료 조회 중</small></div><button id="close-panel" class="close" aria-label="패널 닫기">×</button></header><div id="panel-body" class="side-body"></div></aside>
+<dialog id="agency-dialog" class="action-dialog agency-dialog" aria-labelledby="agency-title">
+	<h2 id="agency-title" tabindex="-1">대행사</h2><div id="agency-body"></div>
+	<p id="agency-status" role="status" aria-live="polite"></p>
+	<div class="action-buttons"><button id="agency-close" class="outline-button">닫기</button><button id="agency-reject" class="outline-button" hidden>반려</button><button id="agency-submit" class="apply-button" hidden>승인</button></div>
+</dialog>
 <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-description">
 	<h2 id="action-title">반영 확인</h2><p id="action-description"></p>
 	<p id="action-status" role="status" aria-live="polite"></p>
@@ -81,6 +86,7 @@
 </dialog>
 <script src="/pixel-art.js" defer></script>
 <script src="/office.js" defer></script>
+<script src="/agency.js" defer></script>
 <script src="/tasks.js" defer></script>
 <script src="/meeting.js" defer></script>
 <script src="/meeting_scene.js" defer></script>

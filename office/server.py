@@ -9,9 +9,9 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from collector.config import home
+from collector.config import ConfigError, home
 
-from . import actions, chats, drafts, meetings, remote, shorts
+from . import actions, agency, chats, drafts, meetings, remote, shorts
 from .state import build_state
 
 STATIC = Path(__file__).with_name("static")
@@ -126,6 +126,18 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(200, shorts.steps())
 			except OSError:
 				self.respond_json(503, {"message": "폴더 선택지를 확인할 수 없습니다."})
+		elif target == "/api/agency" or target.startswith("/api/agency?"):
+			match = re.fullmatch(r"/api/agency\?id=(p-[0-9]{8}-[0-9]{3})&view=(questions|delivery)", target)
+			tokens = self.headers.get_all("X-Office-Token", [])
+			if len(tokens) != 1 or not hmac.compare_digest(tokens[0].encode("utf-8"), self.server.office_token.encode("ascii")):
+				self.respond_json(403, {"message": "화면의 세션을 확인할 수 없습니다."})
+			elif not match:
+				self.respond_json(400, {"message": "프로젝트 또는 조회 형식이 올바르지 않습니다."})
+			else:
+				try:
+					self.respond_json(200, agency.detail(match[1], match[2]))
+				except (OSError, ValueError, TypeError, KeyError, RuntimeError, ConfigError):
+					self.respond_json(409, {"message": "프로젝트 상태 또는 자료를 확인할 수 없습니다."})
 		elif target == "/api/meeting" or target.startswith("/api/meeting?"):
 			match = re.fullmatch(r"/api/meeting\?id=(m-[a-f0-9]{32})", target)
 			if not match:
@@ -154,8 +166,9 @@ class Handler(BaseHTTPRequestHandler):
 				self.respond_json(200, {"ok": True, "draft": drafts.card(row, data)})
 			except (OSError, ValueError, TypeError, KeyError, RecursionError):
 				self.respond_json(409, actions.result(False, "대기 중인 초안을 확인할 수 없습니다."))
-		elif target in ("/", "/office.js", "/tasks.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/shorts.js", "/shorts_wizard.js", "/office.css", "/scene.json", "/diorama.js", "/diorama-world.js", "/vendor/three-0.160.0.module.min.js"):
+		elif target in ("/", "/office.js", "/agency.js", "/tasks.js", "/pixel-art.js", "/meeting.js", "/meeting_panel.js", "/meeting_scene.js", "/chat.js", "/chat_dock.js", "/shorts.js", "/shorts_wizard.js", "/office.css", "/scene.json", "/diorama.js", "/diorama-world.js", "/vendor/three-0.160.0.module.min.js"):
 			name, kind = {"/": ("index.html", "text/html"), "/office.js": ("office.js", "text/javascript"),
+				"/agency.js": ("agency.js", "text/javascript"),
 				"/pixel-art.js": ("pixel-art.js", "text/javascript"), "/meeting.js": ("meeting.js", "text/javascript"),
 				"/tasks.js": ("tasks.js", "text/javascript"),
 				"/meeting_panel.js": ("meeting_panel.js", "text/javascript"), "/meeting_scene.js": ("meeting_scene.js", "text/javascript"),

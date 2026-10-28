@@ -46,6 +46,10 @@ def action_id(action: str, value) -> str:
 		valid = re.fullmatch(r"s-[a-f0-9]{32}", value)
 	elif action in ("task_create", "task_update", "task_complete", "task_reopen"):
 		return identifier(value)
+	elif action in ("agency_answer", "agency_approve", "agency_reject"):
+		valid = re.fullmatch(r"p-[0-9]{8}-[0-9]{3}", value) and not value.endswith("-000")
+		if valid:
+			datetime.strptime(value[2:10], "%Y%m%d")
 	else:
 		raise ValueError("허용하지 않는 동작")
 	if not valid:

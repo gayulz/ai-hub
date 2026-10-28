@@ -336,6 +336,11 @@ class AgencyTickTest(unittest.TestCase):
 				f"{identity} 계획 -> 막힘 (plan)\n  오류: RuntimeError: 합성 실패\n", ""))
 		self.assertEqual(order, ["agency.telegram_link", "tick"])
 
+	def test_cli_prints_hook_failures_before_projects(self):
+		report = {"skipped": False, "hook_failures": ["sync"], "projects": []}
+		with mock.patch.object(tick_cli.importlib, "import_module"), mock.patch.object(tick_cli, "tick", return_value=report):
+			self.assertEqual(self.cli(["tick"]), (0, "알림 연결 실패: sync\n", ""))
+
 	def test_cli_missing_telegram_module_and_busy_message(self):
 		with mock.patch.object(tick_cli.importlib, "import_module", side_effect=ModuleNotFoundError), \
 				mock.patch.object(tick_cli, "tick", return_value={"skipped": True}):

@@ -22,6 +22,9 @@ def main(argv: list[str]) -> int:
 	if result["skipped"]:
 		print("다른 진행이 이미 돌고 있습니다")
 		return 0
+	# 알림 연결(텔레그램 등)이 실패해도 진행은 계속하지만, 로그에는 남겨야 놓친 질문을 찾을 수 있다.
+	for name in result.get("hook_failures", []):
+		print(f"알림 연결 실패: {name}")
 	for row in result["projects"]:
 		print(f"{row['id']} {row['before']} -> {row['after']} ({row['action']})")
 		if row["error"]:

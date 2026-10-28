@@ -42,9 +42,13 @@ def detail(identity, view):
 	if view != "delivery" or row["status"] != "납품 대기":
 		raise ValueError("해당 상태의 프로젝트가 아닙니다")
 	bundle = delivery.load_bundle(identity)
+	criteria = [{"criterion": item["criterion"], "verdict": item["verdict"]} for item in bundle["criteria"]]
+	if bundle.get("version") == 2:
+		# 문서 부서 묶음: 시험·병합·push 대신 납품 문서만 확정한다.
+		return {"id": identity, "title": row["title"], "hash": bundle["hash"], "criteria": criteria, "kind": "document",
+			"documents": [item["task"] for item in bundle["documents"]], "actions": ["document"], "restart_notice": ""}
 	tests = bundle["tests"]
-	return {"id": identity, "title": row["title"], "hash": bundle["hash"],
-		"criteria": [{"criterion": item["criterion"], "verdict": item["verdict"]} for item in bundle["criteria"]],
+	return {"id": identity, "title": row["title"], "hash": bundle["hash"], "criteria": criteria, "kind": "code",
 		"tests": {"ok": tests.get("ok") is True, "detail": str(tests.get("summary", tests.get("detail", "")))},
 		"changed": len(bundle["changed"]), "actions": bundle["actions"], "restart_notice": bundle["restart_notice"]}
 
@@ -96,7 +100,9 @@ def execute(root, payload, audit):
 					"remote_matches": result.get("remote_matches", False), "restart_notice": result.get("restart_notice", "")}
 			else:
 				# shortcut: 반려 함수에 hash 인자가 없어 저장소 잠금으로 보완, 대행사에서 직접 재검증 필요.
-				with locked("agency-repo:" + bundle["repo"]):
+				# 문서 묶음에는 저장소가 없어 문서 납품과 같은 작업 폴더 잠금을 쓴다.
+				repo = bundle["repo"] if bundle.get("version") != 2 else str(project._folder(identity) / "work")
+				with locked("agency-repo:" + repo):
 					if delivery.load_bundle(identity)["hash"] != payload["hash"]:
 						raise ValueError("납품 묶음이 바뀌었습니다")
 					reserve(root, identity, payload["hash"])

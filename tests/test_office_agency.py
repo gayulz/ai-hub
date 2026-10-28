@@ -148,6 +148,19 @@ class OfficeAgencyTest(ActionCase):
 			call.assert_called_once_with(self.identity, self.bundle["hash"])
 		self.assertNotIn("합성 push 실패", json.dumps(self.logs(), ensure_ascii=False))
 
+	def test_document_bundle_detail_and_rejection_use_project_workdir(self):
+		self.waiting()
+		document = {"version": 2, "hash": "c" * 64, "criteria": [{"criterion": "합성 기준", "verdict": "pass"}],
+			"documents": [{"task": "t1", "path": "합성", "sha256": "d" * 64}]}
+		with mock.patch.object(agency.delivery, "load_bundle", return_value=document):
+			detail = agency.detail(self.identity, "delivery")
+			self.assertEqual((detail["kind"], detail["documents"], detail["actions"]), ("document", ["t1"], ["document"]))
+			self.assertNotIn("tests", detail)
+			with mock.patch.object(agency.delivery, "reject", side_effect=lambda identity, reason:
+					project.transition(identity, "막힘", reason="납품 반려: " + reason)) as call:
+				self.assertEqual(self.post(action="agency_reject", hash=document["hash"], text="합성 반려 사유")[0], 200)
+			call.assert_called_once_with(self.identity, "합성 반려 사유")
+
 	def test_rejection_checks_hash_and_duplicate(self):
 		self.waiting()
 		def reject(identity, reason):

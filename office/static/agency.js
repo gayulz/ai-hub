@@ -2,7 +2,7 @@
 (()=>{
 const $=id=>document.getElementById(id),dialog=$('agency-dialog'),body=$('agency-body'),status=$('agency-status');
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const labels={merge:'본 가지 병합(시험 후 빨리 감기)',push:'push 및 원격 해시 확인',restart:'재기동 안내만 남김'};
+const labels={merge:'본 가지 병합(시험 후 빨리 감기)',push:'push 및 원격 해시 확인',restart:'재기동 안내만 남김',document:'납품 문서 확정(병합·push 없음)'};
 let data=null,view='',stage='',busy=false,uncertain=false,focus=null;
 const actions=()=>'<ul>'+data.actions.map(action=>'<li>'+esc(labels[action]||action)+'</li>').join('')+'</ul>';
 function buttons(close,back,submit){
@@ -19,7 +19,7 @@ function questions(values={}){
 function delivery(){
 	stage='delivery';$('agency-title').textContent='납품 묶음 확인';
 	const verdict={pass:'통과',fail:'실패',unverified:'미검증'};
-	body.innerHTML='<p>'+esc(data.title)+' · '+esc(data.id)+'</p><h3>기준별 판정</h3><ul>'+data.criteria.map(item=>'<li>'+esc(item.criterion)+' · '+esc(verdict[item.verdict])+'</li>').join('')+'</ul><h3>시험 결과</h3><p>'+esc(data.tests.ok?'통과':'실패 또는 미실행')+(data.tests.detail?' · '+esc(data.tests.detail):'')+'</p><p>바뀐 파일 '+esc(data.changed)+'개 · 묶음 hash '+esc(data.hash.slice(0,12))+'</p><h3>승인하면 실행될 바깥 작업</h3>'+actions()+(data.restart_notice?'<p>'+esc(data.restart_notice)+'</p>':'');
+	body.innerHTML='<p>'+esc(data.title)+' · '+esc(data.id)+'</p><h3>기준별 판정</h3><ul>'+data.criteria.map(item=>'<li>'+esc(item.criterion)+' · '+esc(verdict[item.verdict])+'</li>').join('')+'</ul>'+(data.kind==='document'?'<h3>납품 문서</h3><p>'+esc(data.documents.join(', '))+' · 묶음 hash '+esc(data.hash.slice(0,12))+'</p>':'<h3>시험 결과</h3><p>'+esc(data.tests.ok?'통과':'실패 또는 미실행')+(data.tests.detail?' · '+esc(data.tests.detail):'')+'</p><p>바뀐 파일 '+esc(data.changed)+'개 · 묶음 hash '+esc(data.hash.slice(0,12))+'</p>')+'<h3>승인하면 실행될 바깥 작업</h3>'+actions()+(data.restart_notice?'<p>'+esc(data.restart_notice)+'</p>':'');
 	buttons('닫기','반려','승인');
 }
 function confirmation(number){
@@ -95,7 +95,7 @@ async function submit(){
 		status.textContent=result.message;
 		if(!result.ok&&!result.status)return;
 		stage='result';$('agency-title').textContent=rejecting?'반려 결과':'납품 결과';
-		body.innerHTML='<p>상태: '+esc(result.status||'확인 불가')+'</p>'+(result.reason?'<p>이유: '+esc(result.reason)+'</p>':'')+(rejecting?'':'<p>push: '+(result.pushed?'완료':'실행되지 않음')+'</p><p>원격 대조: '+(result.remote_matches?'일치':'미확인 또는 불일치')+'</p>')+(result.restart_notice?'<p>재기동 안내: '+esc(result.restart_notice)+'</p>':'');
+		body.innerHTML='<p>상태: '+esc(result.status||'확인 불가')+'</p>'+(result.reason?'<p>이유: '+esc(result.reason)+'</p>':'')+(rejecting||data.kind==='document'?'':'<p>push: '+(result.pushed?'완료':'실행되지 않음')+'</p><p>원격 대조: '+(result.remote_matches?'일치':'미확인 또는 불일치')+'</p>')+(result.restart_notice?'<p>재기동 안내: '+esc(result.restart_notice)+'</p>':'');
 		buttons('닫기',null,null);await window.officeBridge.refresh();
 	}
 }

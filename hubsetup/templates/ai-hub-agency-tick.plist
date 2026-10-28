@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>$user_home</string>
+$hub_environment		<key>PATH</key>
+		<string>$path</string>
+	</dict>
+	<key>Label</key>
+	<string>$label_prefix.ai-hub-agency-tick</string>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$python</string>
+		<string>-m</string>
+		<string>agency</string>
+		<string>tick</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>$hub_home/logs/agency-tick.log</string>
+	<key>StandardOutPath</key>
+	<string>$hub_home/logs/agency-tick.log</string>
+	<key>StartInterval</key>
+	<integer>600</integer>
+	<key>WorkingDirectory</key>
+	<string>$repo</string>
+</dict>
+</plist>

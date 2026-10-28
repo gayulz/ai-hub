@@ -9,6 +9,8 @@
 $hub_environment		<key>PATH</key>
 		<string>$path</string>
 	</dict>
+	<key>KeepAlive</key>
+	<true/>
 	<key>Label</key>
 	<string>$label_prefix.ai-hub-office</string>
 	<key>ProgramArguments</key>
@@ -18,8 +20,6 @@ $hub_environment		<key>PATH</key>
 		<string>office</string>
 	</array>
 	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
 	<true/>
 	<key>StandardErrorPath</key>
 	<string>$hub_home/logs/office.log</string>

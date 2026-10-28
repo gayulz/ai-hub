@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>$user_home</string>
+$hub_environment		<key>PATH</key>
+		<string>/usr/bin:/bin</string>
+	</dict>
+	<key>Label</key>
+	<string>$label_prefix.ai-hub-search-index</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>exec "$$(/usr/libexec/java_home -v 21)/bin/java" -Xmx1g --enable-native-access=ALL-UNNAMED -jar $search_jar index $search_vault</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>$hub_home/logs/search-index.log</string>
+	<key>StandardOutPath</key>
+	<string>$hub_home/logs/search-index.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Minute</key>
+		<integer>40</integer>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>$hub_home</string>
+</dict>
+</plist>

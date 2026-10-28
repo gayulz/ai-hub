@@ -13,7 +13,7 @@ from xml.sax.saxutils import escape
 from .config import Context, SetupError
 
 TEMPLATES = Path(__file__).with_name("templates")
-MODULES = ("collector", "vaultsync", "backup", "office")
+MODULES = ("collector", "vaultsync", "backup", "office", "search", "search-index", "agency-tick")
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,9 @@ def render(ctx: Context, include_records: bool = True) -> list[Item]:
 	values["path"] = escape(path)
 	values["hub_environment"] = ("\t\t<key>AI_HUB_HOME</key>\n"
 		f"\t\t<string>{escape(str(ctx.hub_home))}</string>\n") if custom_home else ""
+	# 검색 서비스는 /bin/sh -c 한 줄로 JDK 21을 찾아 띄우므로 경로는 셸 인용까지 한다(공백 없으면 그대로).
+	values["search_jar"] = escape(shlex.quote(str(ctx.hub_home / "bin/ai-hub-search.jar")))
+	values["search_vault"] = escape(shlex.quote("--search.vault=" + str(ctx.vault)))
 	for module in MODULES:
 		text = Template((TEMPLATES / f"ai-hub-{module}.plist").read_text(encoding="utf-8")).substitute(values)
 		data = plistlib.loads(text.encode("utf-8"))

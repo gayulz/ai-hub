@@ -151,9 +151,9 @@ class HubSetupInstallTest(HubSetupCase):
 	def test_render_has_no_remaining_placeholders_and_schedules_are_preserved(self):
 		ctx = config.context("com.acme")
 		items = templates.render(ctx)
-		self.assertEqual(len(items), 14)
+		self.assertEqual(len(items), 17)
 		for item in items:
-			self.assertIsNone(re.search(r"\$(?:user_home|hub_home|repo|python|path|label_prefix|handoff|hub_export|hub_environment)\b", item.text))
+			self.assertIsNone(re.search(r"\$(?:user_home|hub_home|repo|python|path|label_prefix|handoff|hub_export|hub_environment|search_jar|search_vault)\b", item.text))
 		jobs = {item.label: plistlib.loads(item.text.encode()) for item in items if item.label}
 		self.assertEqual(jobs["com.acme.ai-hub-collector"]["StartCalendarInterval"], {"Minute": 10})
 		self.assertTrue(jobs["com.acme.ai-hub-collector"]["RunAtLoad"])
@@ -177,6 +177,15 @@ class HubSetupInstallTest(HubSetupCase):
 			self.assertEqual(office[name], str(self.hub / "logs/office.log"))
 		self.assertEqual(backup["EnvironmentVariables"]["PATH"],
 			f"{self.user}/.nvm/versions/node/v22.22.1/bin:{self.user}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+		search, index, tick = (jobs[f"com.acme.ai-hub-{module}"] for module in ("search", "search-index", "agency-tick"))
+		self.assertTrue(search["KeepAlive"] and search["RunAtLoad"])
+		self.assertTrue(search["ProgramArguments"][2].endswith(str(self.hub / "bin/ai-hub-search.jar") + " serve"))
+		self.assertEqual(index["StartCalendarInterval"], {"Minute": 40})
+		self.assertTrue(index["ProgramArguments"][2].endswith("index --search.vault=" + str(ctx.vault)))
+		self.assertEqual((search["WorkingDirectory"], index["WorkingDirectory"]), (str(self.hub), str(self.hub)))
+		self.assertEqual((tick["StartInterval"], tick["RunAtLoad"]), (600, False))
+		self.assertEqual(tick["ProgramArguments"], [sys.executable, "-m", "agency", "tick"])
+		self.assertEqual(tick["WorkingDirectory"], str(ctx.repo))
 
 	def test_default_install_changes_nothing_including_git_config(self):
 		before = self.snapshot()
@@ -184,14 +193,14 @@ class HubSetupInstallTest(HubSetupCase):
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertIn("--- 현재", result.stdout)
 		self.assertIn("+++ 템플릿", result.stdout)
-		self.assertIn("변경 파일 14개", result.stdout)
+		self.assertIn("변경 파일 17개", result.stdout)
 		self.assertEqual(before, self.snapshot())
 		self.assertEqual(self.calls(), [])
 		self.assertNotIn("xyz@example.invalid", result.stdout)
 
 	def test_apply_is_idempotent_and_uses_expected_launchctl_arguments(self):
 		first = self.apply()
-		self.assertIn("변경 파일 14개", first.stdout)
+		self.assertIn("변경 파일 17개", first.stdout)
 		self.assertEqual(self.git("config", "--local", "user.name"), "acme")
 		self.assertEqual(self.git("config", "--local", "user.email"), "xyz@example.invalid")
 		domain = f"gui/{os.getuid()}"
@@ -288,7 +297,7 @@ class HubSetupInstallTest(HubSetupCase):
 		self.assertEqual(result.returncode, 1)
 		self.assertIn("예약 작업 등록에 실패", result.stderr)
 		result = self.apply()
-		self.assertIn("변경 파일 3개 · 작성자 설정 0개 · 예약 등록 4개", result.stdout)
+		self.assertIn("변경 파일 6개 · 작성자 설정 0개 · 예약 등록 7개", result.stdout)
 
 	def test_template_paths_escape_shell_and_xml_and_propagate_custom_hub_home(self):
 		python = self.user / 'python xyz & "$(xyz)`acme`'
@@ -299,7 +308,8 @@ class HubSetupInstallTest(HubSetupCase):
 		for item in items:
 			if item.label:
 				data = plistlib.loads(item.text.encode())
-				self.assertEqual(data["WorkingDirectory"], str(ctx.repo))
+				# 검색 서비스는 jar 와 색인을 ~/.ai-hub 기준으로 쓰므로 작업 폴더가 허브 폴더다.
+				self.assertEqual(data["WorkingDirectory"], str(ctx.hub_home if "search" in item.label else ctx.repo))
 				self.assertEqual(data["EnvironmentVariables"]["AI_HUB_HOME"], str(ctx.hub_home))
 		wrapper = next(item for item in items if item.path.name == "vf")
 		self.assertIn('export AI_HUB_HOME="$HOME/', wrapper.text)

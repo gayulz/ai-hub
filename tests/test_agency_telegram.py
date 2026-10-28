@@ -290,6 +290,15 @@ class AgencyTelegramTest(unittest.TestCase):
 			self.link.notify(self.identity, "실행 중", after)
 		self.assertEqual(self.client.sent, [("회사 프로젝트 1건 상태 변경, 사무실에서 확인", None)] * 3)
 
+	def test_document_completion_uses_same_notice_without_claiming_a_merge(self):
+		department = replace(self.department, deliverable="document", repos=())
+		with mock.patch.object(departments, "load_departments", return_value={"xyz": department}):
+			self.link.notify(self.identity, "검수", "납품 대기")
+			self.link.notify(self.identity, "납품 중", "완료")
+		self.assertIn("[납품 승인 필요]", self.client.sent[0][0])
+		self.assertIn("결과: 문서 납품 완료", self.client.sent[1][0])
+		self.assertNotIn("본 가지", self.client.sent[1][0])
+
 	def test_sensitive_reason_drops_third_line_and_failed_notice_can_retry(self):
 		with project._edit(self.identity, "시험") as row:
 			row["blocked_reason"] = "민감한 이유"

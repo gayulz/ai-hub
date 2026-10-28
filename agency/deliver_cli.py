@@ -9,6 +9,15 @@ from . import delivery, project
 
 
 def _show(identity: str, bundle: dict) -> None:
+	if bundle["version"] == 2:
+		print(f"프로젝트: {identity}\n납품 문서:")
+		for item in bundle["documents"]:
+			print(f"- {item['path']} (sha256: {item['sha256']})")
+		print("기준별 판정:")
+		for item in bundle["criteria"]:
+			print(f"- {item['criterion']}: {item['verdict']}")
+		print(f"승인 명령: python3 -m agency deliver {identity} --approve {bundle['hash']}")
+		return
 	print(f"프로젝트: {identity}\n가지: {bundle['branch']}\n가지 끝: {bundle['branch_tip']}")
 	print("기준별 판정:")
 	labels = {"pass": "통과", "fail": "실패", "unverified": "미검증"}
@@ -48,6 +57,8 @@ def main(argv: list[str]) -> int:
 			return 0
 		result = delivery.approve(args.id, args.approve) if args.approve is not None else delivery.reject(args.id, args.reject)
 		print("상태: " + result["status"])
+		for path in result.get("documents", []):
+			print("납품 문서: " + path)
 		if result.get("merge_commit"):
 			print("병합 커밋: " + result["merge_commit"])
 		if "pushed" in result:

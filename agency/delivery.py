@@ -16,7 +16,7 @@ from collector.config import ConfigError
 from orchestrator import targets
 from orchestrator.checks import changed_paths, git
 
-from . import project
+from . import document_delivery, project
 from .departments import valid_text
 
 KEYS = {"version", "project", "target", "repo", "branch", "branch_tip", "base", "actions",
@@ -47,6 +47,11 @@ def _read(path: Path, *, missing: str | None = None) -> str:
 def load_bundle(identity: str) -> dict:
 	try:
 		bundle = json.loads(_read(project._folder(identity) / "delivery.json"))
+	except (ValueError, TypeError, RecursionError):
+		raise ValueError("납품 묶음의 형식 또는 hash가 잘못됐습니다") from None
+	if isinstance(bundle, dict) and type(bundle.get("version")) is int and bundle["version"] == 2:
+		return document_delivery.validate(identity, bundle)
+	try:
 		if (not isinstance(bundle, dict) or bundle.keys() != KEYS
 				or type(bundle["version"]) is not int or bundle["version"] != 1 or bundle["project"] != identity):
 			raise ValueError
@@ -152,6 +157,8 @@ def approve(identity: str, bundle_hash: str) -> dict:
 	with locked("agency-delivery:" + identity):
 		_waiting(identity)
 		bundle = load_bundle(identity)
+		if bundle["version"] == 2:
+			return document_delivery.approve(identity, bundle_hash, bundle)
 		repo = Path(bundle["repo"])
 		with locked("agency-repo:" + str(repo)):
 			row = _waiting(identity)

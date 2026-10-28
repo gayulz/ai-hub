@@ -143,7 +143,7 @@ def notify(identity, before, after):
 			elif after == "납품 대기":
 				lines.append("할 일: 사무실 화면에서 납품 묶음을 확인하고 승인하세요")
 			else:
-				lines.append("결과: 본 가지 반영 완료")
+				lines.append("결과: 문서 납품 완료" if department.deliverable == "document" else "결과: 본 가지 반영 완료")
 			value = "\n".join(lines)
 			if client.sensitive(value):
 				value = "\n".join(lines[:2])

@@ -131,6 +131,22 @@ allow = ["personal", "company"]
 		self.invalid({**self.row, "external_ai": False})
 		self.invalid({**self.row, "external_ai": False, "allow_plans": ["local", "xyz"]})
 
+	def test_document_without_repos_needs_no_target_and_code_remains_default(self):
+		self.write(self.row)
+		self.assertEqual(departments.load_departments()["xyz"].deliverable, "code")
+		for remove_repos in (False, True):
+			row = {**self.row, "deliverable": "document", "repos": []}
+			if remove_repos:
+				row.pop("repos")
+			self.write(row)
+			with mock.patch.object(departments, "targets", side_effect=AssertionError("저장소 조회 금지")):
+				loaded = departments.load_departments()["xyz"]
+			self.assertEqual((loaded.deliverable, loaded.repos), ("document", ()))
+		for value in ("", "other", 1, False, []):
+			self.invalid({**self.row, "deliverable": value})
+		self.invalid({**self.row, "deliverable": "code", "repos": []})
+		self.invalid({**self.row, "deliverable": "document", "repos": ["missing"]})
+
 	def test_bad_document_and_dependency_errors_are_sanitized(self):
 		path = self.hub / "departments.toml"
 		for text in ('other = "/xyz/private"', 'department = "bad"', 'department = [1]',

@@ -14,7 +14,7 @@ from orchestrator.checks import git
 from orchestrator.flow import worktrees_dir
 from orchestrator.record import Run, runs_dir
 
-from . import meeting, project
+from . import document_run, documents, meeting, project
 from .departments import load_departments
 
 
@@ -23,7 +23,12 @@ def _result(row: dict) -> dict:
 		"blocked_reason": row["blocked_reason"]}
 
 
-def _validate(request: dict, repo: Path, branch: str) -> None:
+def _validate(request: dict, repo: Path, branch: str, *, document=False) -> None:
+	if document:
+		if (request.get("kind") != "analysis" or request.get("workdir") != str(repo)
+				or any(key in request for key in ("repo", "base_branch", "owned_paths")) or not safe(repo)):
+			raise ValueError("문서 요청서는 프로젝트의 읽기 전용 작업 폴더를 사용해야 합니다")
+		return
 	if (Path(request.get("repo", ".")).resolve() != repo or request.get("base_branch") != branch
 			or request.get("kind", "code") != "code"):
 		raise ValueError("작업 요청서는 부서의 저장소와 프로젝트 가지를 기준으로 한 코드 작업이어야 합니다")
@@ -161,7 +166,10 @@ def run(identity: str) -> dict:
 	department = load_departments().get(row["department"])
 	if department is None:
 		raise ValueError("프로젝트의 부서 설정이 없습니다")
-	repo = targets.target(department.repos[0]).path
+	document = department.deliverable == "document"
+	if document and not department.external_ai:
+		raise ValueError("외부 AI 금지 부서는 문서 실행 호출을 쓸 수 없습니다")
+	repo = project._folder(identity) / "work" if document else targets.target(department.repos[0]).path
 	with locked("agency-repo:" + str(repo)):
 		row = project.load(identity)
 		# 작업이 0건이면 아래 '모두 완료' 검사가 참이 되어 빈 프로젝트가 검수로 넘어간다. 상태를 바꾸기 전에 거부한다.
@@ -193,7 +201,7 @@ def run(identity: str) -> dict:
 		row = project.load(identity)
 		branch = row["branch"]
 		ref = "refs/heads/" + branch
-		if not git(repo, "rev-parse", "--verify", ref, check=False).strip():
+		if not document and not git(repo, "rev-parse", "--verify", ref, check=False).strip():
 			if any(task["status"] == "대기" and task["run_id"] for task in row["tasks"]):
 				raise ValueError("직전 실행의 프로젝트 기준 가지가 없습니다")
 			head = git(repo, "rev-parse", "HEAD").strip()
@@ -218,27 +226,52 @@ def run(identity: str) -> dict:
 					return _result(project.transition(identity, "막힘", reason="실행할 수 있는 대기 작업이 없습니다"))
 				task = ready[0]
 				if task["run_id"]:
-					_cleanup_previous(identity, task, repo, branch)
+					if document:
+						document_run.retry(identity, task, document_run.load(task["run_id"]), repo)
+						_validate(orchestration.read_request(task["request_path"])["request"], repo, branch, document=True)
+					else:
+						_cleanup_previous(identity, task, repo, branch)
 				else:
-					_validate(orchestration.read_request(task["request_path"])["request"], repo, branch)
+					_validate(orchestration.read_request(task["request_path"])["request"], repo, branch, document=document)
 					project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
 				project.set_checkpoint(identity, "task", task["id"])
-				execution = orchestration.start_run(task["request_path"])
+				try:
+					execution = (document_run.start(identity, task, department, repo) if document
+						else orchestration.start_run(task["request_path"]))
+				except (OSError, ValueError, RuntimeError):
+					if not document:
+						raise
+					current = next(item for item in project.load(identity)["tasks"] if item["id"] == task["id"])
+					if not current["run_id"]:
+						project.update_task(identity, task["id"], status="대기")
+					return _result(project.transition(identity, "막힘", reason="문서 실행 준비 또는 기록에 실패했습니다"))
 				project.update_task(identity, task["id"], run_id=execution.run_id)
 			else:
-				execution = Run.load(task["run_id"])
-				_validate({**execution.request, "repo": execution.repo, "kind": execution.kind}, repo, branch)
+				execution = document_run.load(task["run_id"]) if document else Run.load(task["run_id"])
+				if document:
+					_validate(execution.request, repo, branch, document=True)
+					document_run.check(identity, task, execution, repo)
+				else:
+					_validate({**execution.request, "repo": execution.repo, "kind": execution.kind}, repo, branch)
 				if execution.status not in ("승인 필요", "완료"):
 					previous_usage = execution.handoff.get("agency_usage")
-					orchestration.cmd_resume(execution.run_id, [])
+					if document:
+						document_run.resume(identity, task, execution, department, repo)
+					else:
+						orchestration.cmd_resume(execution.run_id, [])
 			execution = _usage(identity, execution, previous_usage)
 			reason = ""
 			if execution.status in ("승인 필요", "완료"):
 				try:
-					commit = (apply_to_branch(execution.run_id, branch) if execution.status == "승인 필요"
-						else git(repo, "rev-parse", ref).strip())
-				except RuntimeError as exc:
-					reason = f"작업 {task['id']} 실패: " + str(exc)[:200]
+					if document:
+						documents.save(identity, task["id"], execution.document)
+						commit = ""
+					else:
+						commit = (apply_to_branch(execution.run_id, branch) if execution.status == "승인 필요"
+							else git(repo, "rev-parse", ref).strip())
+				except (RuntimeError, ValueError, OSError) as exc:
+					message = (str(exc) if not document or type(exc) is ValueError else "납품 문서 저장 실패")
+					reason = f"작업 {task['id']} 실패: " + message[:200]
 					project.update_task(identity, task["id"], status="실패")
 				else:
 					project.update_task(identity, task["id"], status="완료", commit=commit)

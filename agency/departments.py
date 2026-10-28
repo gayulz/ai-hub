@@ -12,7 +12,7 @@ from orchestrator.targets import targets
 from .skills import NAME
 
 ID = re.compile(r"[a-z][a-z0-9-]{0,30}")
-KEYS = {"id", "name", "scope", "repos", "allow_plans", "external_ai", "playbook", "skills",
+KEYS = {"id", "name", "scope", "repos", "allow_plans", "external_ai", "playbook", "skills", "deliverable",
 	"review_skill", "outward", "required_questions", "budget"}
 OUTWARD = ("merge", "push", "restart", "publish")
 BUDGET_LIMITS = {"calls": 200, "minutes": 1440}
@@ -41,6 +41,7 @@ class Department:
 	outward: tuple[str, ...]
 	required_questions: tuple[str, ...]
 	budget: dict[str, int]
+	deliverable: str = "code"
 
 
 def _invalid(label, reason: str) -> ConfigError:
@@ -57,9 +58,12 @@ def _department(row, index, repos, plans) -> Department:
 	for key, limit in (("name", 40), ("scope", 300)):
 		if not valid_text(row.get(key), limit):
 			raise _invalid(label, f"{key}는 1~{limit}자여야 합니다")
+	deliverable = row.get("deliverable", "code")
+	if deliverable not in ("code", "document"):
+		raise _invalid(label, "deliverable은 code 또는 document여야 합니다")
 	for key, allowed in (("repos", repos), ("allow_plans", plans)):
-		values = row.get(key)
-		if (not isinstance(values, list) or not values
+		values = row.get(key, [] if key == "repos" and deliverable == "document" else None)
+		if (not isinstance(values, list) or not values and not (key == "repos" and deliverable == "document")
 				or any(not isinstance(value, str) or value not in allowed for value in values)):
 			raise _invalid(label, f"{key}에 등록된 식별자를 1개 이상 지정해야 합니다")
 	external = row.get("external_ai", True)
@@ -84,8 +88,8 @@ def _department(row, index, repos, plans) -> Department:
 		raise _invalid(label, "required_questions는 각 1~200자의 질문 0~10개여야 합니다")
 	if not valid_budget(row.get("budget")):
 		raise _invalid(label, "budget은 calls 1~200, minutes 1~1440 정수만 지정해야 합니다")
-	return Department(identity, row["name"], row["scope"], tuple(row["repos"]), tuple(row["allow_plans"]),
-		external, playbook, tuple(skill_names), review, tuple(outward), tuple(questions), dict(row["budget"]))
+	return Department(identity, row["name"], row["scope"], tuple(row.get("repos", [])), tuple(row["allow_plans"]),
+		external, playbook, tuple(skill_names), review, tuple(outward), tuple(questions), dict(row["budget"]), deliverable)
 
 
 def load_departments() -> dict[str, Department]:
@@ -102,7 +106,9 @@ def load_departments() -> dict[str, Department]:
 	if not rows:
 		return {}
 	try:
-		repos, plans = targets(), load_plans().plans
+		needs_repos = any(not isinstance(row, dict) or row.get("deliverable", "code") != "document"
+			or row.get("repos") for row in rows)
+		repos, plans = targets() if needs_repos else {}, load_plans().plans
 	except (ConfigError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
 		raise _invalid(1, "저장소 또는 요금제 참조 설정이 잘못됐습니다") from None
 	found = {}

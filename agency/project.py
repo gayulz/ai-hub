@@ -114,7 +114,8 @@ def new(department: Department, title: str, request_text: str) -> dict:
 		row = {"version": 1, "id": identity, "department": department.id, "title": title,
 			"request_text": request_text, "status": "접수 중", "spec": {"goal": "", "target": "",
 				"out_of_scope": "", "done_criteria": [], "budget": dict(department.budget)},
-			"spec_hash": "", "answers": [], "tasks": [], "branch": "agency/" + identity,
+			"spec_hash": "", "answers": [], "tasks": [],
+			"branch": "agency/" + identity if department.deliverable == "code" else "",
 			"budget": dict(department.budget), "used": {"calls": 0, "seconds": 0}, "decisions": [],
 			"checkpoint": {"step": "", "detail": ""}, "blocked_reason": "", "blocked_from": "",
 			"created": stamp, "updated": stamp}

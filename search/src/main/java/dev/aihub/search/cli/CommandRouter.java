@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import dev.aihub.search.SearchSettings;
+import dev.aihub.search.eval.EvalContext;
 import dev.aihub.search.eval.EvalLog;
 import dev.aihub.search.eval.EvalRunnerImpl;
 import dev.aihub.search.eval.EvalSetReader;
@@ -167,18 +168,21 @@ public class CommandRouter {
 		} catch (IOException exception) {
 			throw new IOException("평가 원본·로그 파일을 확인하지 못했습니다");
 		}
-		var queries = new EvalSetReader().read(source);
+		var input = new EvalSetReader().readWithHash(source);
 		SearchMode selected = mode;
 		try {
-			var report = new EvalRunnerImpl().run(queries, (text, limit, company) -> {
+			var executable = EvalContext.executable();
+			var index = EvalContext.indexState(settings.getIndexDir());
+			var report = new EvalRunnerImpl().run(input.queries(), (text, limit, company) -> {
 				try {
 					return selected.search(searchService, text, limit, company).stream().map(hit -> hit.path()).toList();
 				} catch (IOException exception) {
 					throw new UncheckedIOException(exception);
 				}
 			}, k);
+			EvalContext.requireUnchanged(settings.getIndexDir(), index);
 			new EvalLog().append(log, mode.toString(), k, settings,
-					searchService.analyzerFingerprint(), report);
+					searchService.analyzerFingerprint(), report, input.sha256Prefix(), executable, index);
 			out.printf(Locale.ROOT, "모드 %s · Hit@%d (recallAt5) %.6f · MRR@%d %.6f%n",
 					mode, k, report.recallAt5(), k, report.mrr());
 			for (var row : report.rows()) {

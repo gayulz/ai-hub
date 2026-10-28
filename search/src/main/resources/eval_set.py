@@ -1,3 +1,4 @@
+import hashlib
 import re
 import struct
 import sys
@@ -68,6 +69,7 @@ def main():
 			raise ValueError()
 		rows.append((identifier, question, company, [answer(value) for value in answers]))
 	with open(sys.argv[2], "wb") as output:
+		write_string(output, hashlib.sha256(raw).hexdigest()[:12])
 		output.write(struct.pack(">I", len(rows)))
 		for identifier, question, company, answers in rows:
 			write_string(output, identifier)

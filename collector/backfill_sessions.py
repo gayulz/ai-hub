@@ -171,7 +171,7 @@ def inventory(repo: Repo, sources: Sources, since: date, until: datetime) -> dic
 				parts, prompt_reason = prompts(session)
 				digest = pipeline.digest(session)
 				task = {"key": session.key, "hash": digest, "type": "session", "archive": clean(rel),
-					"tool": tool, "sid": clean(session.sid), "day": session.started.date().isoformat(),
+					"tool": tool, "sid": clean(session.sid), "day": session.last.date().isoformat(),
 					"started": session.started.isoformat(), "last": session.last.isoformat(),
 					"material": sha("".join(parts)), "parts": len(parts), "reason": reason or prompt_reason}
 				if clean(rel) != rel or not re.fullmatch(r"[\w.-]{1,200}", session.sid):

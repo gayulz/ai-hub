@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 
 from . import vault, work_records
-from .backfill_common import child, clean, locked, now, private_write, sha
+from .backfill_common import child, clean, locked, now, private_write, safe, sha
 from .config import ConfigError, Repo, Sources, home
 
 
@@ -129,6 +129,21 @@ def apply_batch(store, bid: str, sources: Sources, repo: Repo) -> None:
 				continue
 			path = target(sources, prepared["target"])
 			current = vault.block_body(path, prepared["block"])
+			if item["state"] == "prepared" and item["data"].get("type") == "session" and prepared["method"] != "existing":
+				try:
+					for folder in vault.landing_dirs(sources.vault):
+						if not safe(folder):
+							raise ConfigError("일지 위치를 확인하지 못했습니다")
+						try:
+							others = list(folder.iterdir())
+						except FileNotFoundError:
+							continue
+						for other in others:
+							if (other.suffix == ".md" and other != path and safe(other) and other.is_file()
+									and vault.block_body(other, prepared["block"])):
+								raise ConfigError("같은 대화가 다른 일지에 있어 중복 반영하지 않았습니다")
+				except (OSError, UnicodeError, ValueError):
+					raise ConfigError("일지 중복 여부를 확인하지 못했습니다") from None
 			if sha(prepared["body"]) != prepared["hash"]:
 				raise ConfigError("준비 결과 해시가 다릅니다")
 			if prepared["method"] == "existing":

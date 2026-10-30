@@ -14,6 +14,34 @@ from test_backfill_support import BackfillCase
 
 
 class BackfillSessionSourcesTest(BackfillCase):
+	def test_cross_day_session_uses_last_day_for_daily_note(self):
+		path = self.codex()
+		rows = [json.loads(line) for line in gzip.decompress(path.read_bytes()).decode().splitlines()]
+		rows[-1]["timestamp"] = "2026-08-02T01:10:00Z"
+		path.write_bytes(gzip.compress("\n".join(json.dumps(row) for row in rows).encode()))
+		self.assertEqual(self.prepare(), 0)
+		self.assertEqual(self.batch()[1][0]["data"]["day"], "2026-08-02")
+
+	def test_legacy_unprepared_session_uses_last_day(self):
+		path = self.codex()
+		rows = [json.loads(line) for line in gzip.decompress(path.read_bytes()).decode().splitlines()]
+		rows[-1]["timestamp"] = "2026-08-02T01:10:00Z"
+		path.write_bytes(gzip.compress("\n".join(json.dumps(row) for row in rows).encode()))
+		self.assertEqual(self.prepare(), 0)
+		batch, items = self.batch()
+		task = items[0]["data"]
+		task["day"] = "2026-08-01"
+		sources = config.load_sources()
+		store = Store(self.hub / "ledger.db")
+		try:
+			result, reason = backfill.prepare_session(store, batch["id"], task, sources, sources.repos[0],
+				config.load_plans(), self.clock, set())
+		finally:
+			store.close()
+		self.assertEqual(reason, "")
+		self.assertEqual(task["day"], "2026-08-02")
+		self.assertTrue(result["target"].endswith("2026-08-02.md"))
+
 	def test_zstd_archive_uses_standard_library_when_available(self):
 		try:
 			from compression import zstd

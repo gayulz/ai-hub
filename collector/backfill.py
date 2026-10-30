@@ -207,6 +207,8 @@ def cached_session(store, task, bid=""):
 
 def prepare_session(store, bid, task, sources, repo, plans, until, failed, company_local=False):
 	session = sessions.load(task)
+	if isinstance(task.get("last"), str):
+		task["day"] = datetime.fromisoformat(task["last"]).date().isoformat()
 	path = vault.daily_path(sources.vault, repo.cls, date.fromisoformat(task["day"]))
 	rel = path.relative_to(sources.vault).as_posix()
 	output.target(sources, rel)

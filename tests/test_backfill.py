@@ -12,6 +12,61 @@ from test_backfill_support import BackfillCase
 
 
 class BackfillFlowTest(BackfillCase):
+	def test_prepared_session_already_in_another_daily_note_does_not_apply(self):
+		self.codex()
+		self.assertEqual(self.prepare(), 0)
+		batch, items = self.batch()
+		other_day = date(2026, 8, 2)
+		other = vault.daily_path(self.vault, "personal", other_day)
+		vault.upsert_block(other, items[0]["key"], "기존 합성 기록", "합성", other_day, "personal")
+		before = self.snapshot(self.vault)
+		self.assertEqual(self.command("--apply", batch["id"]), 2)
+		self.assertIn("다른 일지", self.stderr.getvalue())
+		self.assertEqual(self.snapshot(self.vault), before)
+		self.assertEqual(self.batch()[1][0]["state"], "prepared")
+
+	def test_duplicate_check_never_reads_locked_notes(self):
+		self.codex()
+		self.assertEqual(self.prepare(), 0)
+		batch, _ = self.batch()
+		locked = self.vault / vault.LANDING["personal"] / "🔐 synthetic.md"
+		locked.write_text("synthetic", encoding="utf-8")
+		read = Path.read_text
+		def guarded(path, *args, **kwargs):
+			if path == locked:
+				raise AssertionError("잠금 노트를 읽으면 안 됩니다")
+			return read(path, *args, **kwargs)
+		with mock.patch.object(Path, "read_text", new=guarded):
+			self.assertEqual(self.command("--apply", batch["id"]), 0)
+
+	def test_duplicate_check_stops_before_following_a_landing_directory_link(self):
+		self.codex()
+		self.assertEqual(self.prepare(), 0)
+		batch, _ = self.batch()
+		folder = self.vault / vault.LANDING["company"]
+		folder.rmdir()
+		protected = self.root / "synthetic-protected"
+		protected.mkdir()
+		(protected / "sentinel.md").write_text("synthetic", encoding="utf-8")
+		folder.symlink_to(protected, target_is_directory=True)
+		self.assertEqual(self.command("--apply", batch["id"]), 2)
+		self.assertEqual(self.batch()[1][0]["state"], "prepared")
+
+	def test_duplicate_check_stops_if_a_landing_directory_cannot_be_read(self):
+		self.codex()
+		self.assertEqual(self.prepare(), 0)
+		batch, _ = self.batch()
+		folder = self.vault / vault.LANDING["company"]
+		iterate = Path.iterdir
+		def guarded(path):
+			if path == folder:
+				raise PermissionError("synthetic")
+			return iterate(path)
+		with mock.patch.object(Path, "iterdir", new=guarded):
+			self.assertEqual(self.command("--apply", batch["id"]), 2)
+		self.assertIn("확인하지 못했습니다", self.stderr.getvalue())
+		self.assertEqual(self.batch()[1][0]["state"], "prepared")
+
 	def test_prepare_resume_apply_uses_one_call_and_preserves_human_notes(self):
 		self.codex()
 		path = vault.daily_path(self.vault, "personal", date(2026, 8, 1))

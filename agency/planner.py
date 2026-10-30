@@ -189,6 +189,9 @@ def _replan(identity: str, option: str) -> dict:
 		choice = json.loads(option, object_pairs_hook=unique)
 	except (TypeError, ValueError, RecursionError):
 		raise ValueError("정기 점검 재계획 형식이 잘못됐습니다") from None
+	if isinstance(choice, dict) and set(choice) == {"project", "scope"} and choice["project"] == identity:
+		from . import periodic_scope
+		return periodic_scope.prepare(identity, choice["scope"])
 	if isinstance(choice, dict) and set(choice) == {"project", "retry"} and choice["project"] == identity:
 		if not isinstance(choice["retry"], str) or not re.fullmatch(r"t[1-9][0-9]*", choice["retry"]):
 			raise ValueError("재검토할 보고 작업이 잘못됐습니다")

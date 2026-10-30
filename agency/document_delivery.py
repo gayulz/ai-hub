@@ -13,7 +13,7 @@ KEYS = {"version", "project", "spec_hash", "documents", "criteria", "reviewer", 
 
 def validate(identity, bundle):
 	try:
-		if (not isinstance(bundle, dict) or bundle.keys() != KEYS or type(bundle["version"]) is not int
+		if (not isinstance(bundle, dict) or bundle.keys() not in (KEYS, KEYS | {"scope_sha256"}) or type(bundle["version"]) is not int
 				or bundle["version"] != 2 or bundle["project"] != identity
 				or not valid_text(bundle["reviewer"], 200) or not valid_text(bundle["made"], 100)):
 			raise ValueError
@@ -34,11 +34,16 @@ def validate(identity, bundle):
 		spec_hash = hashlib.sha256(json.dumps(row["spec"], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 		if not row["spec_hash"] or bundle["spec_hash"] != row["spec_hash"] or spec_hash != row["spec_hash"]:
 			raise ValueError
+		from . import periodic_scope
+		scope = periodic_scope.verify(row) if periodic else None
+		if (bundle.get("scope_sha256") != row["periodic_scope"]["sha256"] if scope else "scope_sha256" in bundle):
+			raise ValueError("부분 보고 범위의 해시가 다릅니다")
+		expected_criteria = scope["criteria"] if scope else row["spec"]["done_criteria"]
 		criteria = bundle["criteria"]
-		if (not isinstance(criteria, list) or len(criteria) != len(row["spec"]["done_criteria"])
+		if (not isinstance(criteria, list) or len(criteria) != len(expected_criteria)
 				or any(not isinstance(item, dict) or item.keys() != {"criterion", "verdict", "evidence"}
 					or item["criterion"] != expected or item["verdict"] != "pass" or not valid_text(item["evidence"], 500)
-					for item, expected in zip(criteria, row["spec"]["done_criteria"]))):
+					for item, expected in zip(criteria, expected_criteria))):
 			raise ValueError
 		if not row["tasks"] or any(task["status"] != "완료" for task in row["tasks"]):
 			raise ValueError

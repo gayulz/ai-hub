@@ -68,9 +68,8 @@ def save(identity: str, task_id: str, text: str) -> str:
 	return str(file)
 
 def manifest(row: dict) -> list[dict]:
-	if (row.get("periodic_recovery") and row.get("status") == "검수"
-			and any((project._folder(row["id"]) / name).exists() for name in ("report.md", "delivery.json"))):
-		raise ValueError("기존 최종 검수 또는 납품 기록을 덮어쓸 수 없습니다")
+	from . import periodic_scope
+	periodic_scope.guard(row)
 	items = []
 	for task in row["tasks"]:
 		content = read(row["id"], task["id"])

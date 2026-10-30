@@ -494,4 +494,7 @@ def render_evidence(evidence: dict) -> str:
 	for item in dependencies:
 		lines += ["", "## 선행 보고 " + item["task"], "", item["document"].rstrip()]
 	from . import periodic_facts
-	return "\n".join(lines) + periodic_results.summary(evidence) + (periodic_facts.summary(evidence["facts"]) if evidence.get("facts") else "") + "\n"
+	from . import periodic_retry
+	return ("\n".join(lines) + periodic_results.summary(evidence)
+		+ (periodic_facts.summary(evidence["facts"]) if evidence.get("facts") else "")
+		+ periodic_retry.isolation_summary(evidence) + "\n")

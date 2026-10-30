@@ -491,10 +491,5 @@ def resume(identity, task, execution, department, workdir):
 		raise ValueError("재개할 문서 작업 폴더가 없습니다")
 	return _execute(execution, department, resume=True, identity=identity, task=task, workdir=workdir)
 def retry(identity, task, execution, workdir):
-	with orchestration.locked(execution):
-		execution = load(execution.run_id)
-		check(identity, task, execution, workdir)
-		if (execution.status not in ("실패", "시간 초과", "호출 한도 소진", "예산 소진", "사용자 입력 필요")
-				or execution.approval_pending or "(한도 소진)" not in execution.end_reason):
-			raise ValueError("직전 문서 실행은 한도 대기 상태가 아닙니다")
-		project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
+	from . import periodic_retry
+	return periodic_retry.retry(identity, task, execution, workdir)

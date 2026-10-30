@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import tomllib
 from pathlib import Path
@@ -188,6 +189,11 @@ def _replan(identity: str, option: str) -> dict:
 		choice = json.loads(option, object_pairs_hook=unique)
 	except (TypeError, ValueError, RecursionError):
 		raise ValueError("정기 점검 재계획 형식이 잘못됐습니다") from None
+	if isinstance(choice, dict) and set(choice) == {"project", "retry"} and choice["project"] == identity:
+		if not isinstance(choice["retry"], str) or not re.fullmatch(r"t[1-9][0-9]*", choice["retry"]):
+			raise ValueError("재검토할 보고 작업이 잘못됐습니다")
+		from . import periodic_retry
+		return periodic_retry.prepare(identity, choice["retry"])
 	if (not isinstance(choice, dict) or set(choice) not in ({"project", "reports"},
 			{"project", "reports", "recover", "facts", "isolation_record"}) or choice["project"] != identity):
 		raise ValueError("재계획 대상이 일치하지 않습니다")

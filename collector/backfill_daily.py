@@ -23,13 +23,44 @@ create table if not exists c4_daily_report (day text primary key, status text);
 
 def process(store, repo, day):
 	row = store.conn.execute("select * from c4_daily where day=? and project=?", (day, repo.id)).fetchone()
-	if row and row["done"]:
-		return
 	if row is None:
 		baseline = store.conn.execute("select coalesce(max(rowid),0) from c4_batches").fetchone()[0]
 		with store.conn:
 			store.conn.execute("insert into c4_daily(day,project,baseline) values (?,?,?)", (day, repo.id, baseline))
 		row = store.conn.execute("select * from c4_daily where day=? and project=?", (day, repo.id)).fetchone()
+	while True:
+		bid = row["batch"]
+		if row["done"]:
+			if not (bid and settle_company_noop(store, repo, day, bid)):
+				return
+			row = store.conn.execute("select * from c4_daily where day=? and project=?", (day, repo.id)).fetchone()
+			continue
+		if process_batch(store, repo, day, row):
+			row = store.conn.execute("select * from c4_daily where day=? and project=?", (day, repo.id)).fetchone()
+			continue
+		return
+
+
+def settle_company_noop(store, repo, day, bid):
+	if repo.cls != "company":
+		return False
+	batch = store.batch(bid)
+	scope = store.scope(batch["scope"])
+	items = store.items(bid)
+	if (batch["state"] != "prepared" or scope["project"] != repo.id or scope["kind"] != "sessions"
+			or not items or any(item["state"] not in ("existing", "held") for item in items)):
+		return False
+	for item in items:
+		store.release(item["key"], "backfill:" + bid)
+	with store.conn:
+		store.conn.execute("update c4_batches set state=? where id=?",
+			("held" if any(item["state"] == "held" for item in items) else "applied", bid))
+		store.conn.execute("update c4_daily set batch=null, done=0, baseline=(select coalesce(max(rowid),0) from c4_batches) "
+			"where day=? and project=?", (day, repo.id))
+	return True
+
+
+def process_batch(store, repo, day, row):
 	bid = row["batch"]
 	if not bid:
 		new = store.conn.execute("select b.id from c4_batches b join c4_scopes s on s.id=b.scope "
@@ -52,6 +83,8 @@ def process(store, repo, day):
 		if batch["state"] == "pending":
 			backfill.execute(resume=bid, daily=True)
 		batch = store.batch(bid)
+		if settle_company_noop(store, repo, day, bid):
+			return True
 		if batch["state"] == "held":
 			for item in store.items(bid):
 				store.release(item["key"], "backfill:" + bid)
@@ -59,6 +92,7 @@ def process(store, repo, day):
 			backfill.execute(apply=bid, daily=True)
 	with store.conn:
 		store.conn.execute("update c4_daily set done=1 where day=? and project=?", (day, repo.id))
+	return False
 
 
 def reason_kind(reason):

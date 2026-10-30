@@ -230,6 +230,34 @@ class DailyBackfillTest(BackfillCase):
 			store.close()
 		self.assertIn("회사 승인 대기 2묶음", message)
 
+	def test_company_existing_only_batch_does_not_block_next_batch(self):
+		self.sources(cls="company")
+		repo = config.load_sources().repos[0]
+		store = Store(self.hub / "ledger.db")
+		try:
+			store.conn.executescript(backfill_daily.SCHEMA)
+			for number, states in enumerate((("existing",), ("existing", "held"))):
+				day = (self.clock + timedelta(days=number)).date().isoformat()
+				scope = store.create_scope(repo.id, "sessions", "2026-07-22", self.clock.isoformat(), "synthetic",
+					{"tasks": [], "agy_count": 0})
+				tasks = [{"key": f"synthetic-{number}-{i}", "hash": "synthetic"} for i in range(len(states))]
+				bid = store.create_batch(scope, tasks, self.hub / f"synthetic-{number}.md")
+				for task, state in zip(tasks, states):
+					store.save(bid, task, state)
+					store.claim(task["key"], "backfill:" + bid)
+				store.state(bid, "prepared")
+				with store.conn:
+					store.conn.execute("insert into c4_daily(day,project,baseline,batch,done) values (?,?,0,?,1)",
+						(day, repo.id, bid))
+				with mock.patch.object(backfill, "execute", return_value=0) as prepare:
+					backfill_daily.process(store, repo, day)
+				prepare.assert_called_once_with(project_id=repo.id, kind="sessions", daily=True)
+				self.assertEqual(store.batch(bid)["state"], "held" if "held" in states else "applied")
+				self.assertFalse(any(store.conn.execute("select 1 from claims where key=?", (t["key"],)).fetchone() for t in tasks))
+				self.assertEqual([i["state"] for i in store.items(bid)], list(states))
+		finally:
+			store.close()
+
 	def test_outside_window_does_not_run(self):
 		self.clock = self.clock.replace(hour=12)
 		self.codex()

@@ -5,7 +5,7 @@ import os
 import re
 import unicodedata
 
-from agency import delivery, intake, project
+from agency import delivery, documents, intake, project
 from collector.backfill_common import locked
 from collector.config import ConfigError
 
@@ -33,6 +33,59 @@ def validate(payload):
 			raise ValueError("글은 제어 문자 없이 1~1000자여야 합니다")
 
 
+def periodic_evidence(row, bundle):
+	if row.get("audit_report_mode") != "explicit-v1":
+		return None
+	try:
+		if not row.get("schedule_repo"):
+			raise ValueError("점검 대상이 없습니다")
+		reports = documents.periodic_manifest(row)
+		if not isinstance(reports, list) or not reports:
+			raise ValueError("점검 보고서가 없습니다")
+		if bundle.get("version") == 1:
+			if bundle.get("periodic", {}).get("reports") != reports:
+				raise ValueError("점검 묶음이 다릅니다")
+		elif bundle.get("version") == 2:
+			fields = ("task", "sha256", "request_sha256", "evidence_sha256", "report_seal_sha256")
+			if any(sum(all(key in report and doc.get(key) == report[key] for key in fields)
+					for doc in bundle["documents"]) != 1 for report in reports):
+				raise ValueError("점검 묶음이 다릅니다")
+		else:
+			raise ValueError("점검 묶음 형식이 다릅니다")
+		tasks = {task["id"]: task for task in row["tasks"]}
+		if len(tasks) != len(row["tasks"]) or len({item["task"] for item in reports}) != len(reports):
+			raise ValueError("점검 작업이 중복됐습니다")
+		checks, synthetic = [], []
+		for report in reports:
+			evidence = documents.read_evidence(row["id"], tasks[report["task"]])
+			items = evidence["checks"]
+			if not isinstance(items, list) or not 1 <= len(items) <= 2:
+				raise ValueError("점검 종류가 잘못됐습니다")
+			kinds = set()
+			for item in items:
+				if (not isinstance(item, dict) or item.get("kind") not in ("tests", "dependencies")
+						or item.get("status") not in ("passed", "failed", "unverified") or item["kind"] in kinds):
+					raise ValueError("점검 상태가 잘못됐습니다")
+				kinds.add(item["kind"])
+				checks.append({"kind": item["kind"], "status": item["status"]})
+			facts = evidence.get("facts", {})
+			for test in (evidence.get("synthetic_test"), facts.get("partial")):
+				if test is None:
+					continue
+				counts = test["counts"]
+				if ("tests" not in kinds or not isinstance(counts, dict)
+						or set(counts) != {"ran", "failures", "errors", "skipped"}
+						or any(type(n) is not int or n < 0 for n in counts.values())
+						or counts["failures"] + counts["errors"] + counts["skipped"] > counts["ran"]
+						or test.get("status") not in ("passed", "failed")
+						or test["status"] == "passed" and (not counts["ran"] or counts["failures"] or counts["errors"])):
+					raise ValueError("합성 시험 상태가 잘못됐습니다")
+				synthetic.append({"status": test["status"], "counts": dict(counts)})
+		return {"verified": True, "checks": checks, "synthetic": synthetic}
+	except (AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError, ConfigError):
+		return {"verified": False, "checks": [], "synthetic": []}
+
+
 def detail(identity, view):
 	action_id("agency_answer", identity)
 	row = project.load(identity)
@@ -41,16 +94,25 @@ def detail(identity, view):
 			{"no": item["no"], "question": item["question"]} for item in intake._questions(identity)["open"]]}
 	if view != "delivery" or row["status"] != "납품 대기":
 		raise ValueError("해당 상태의 프로젝트가 아닙니다")
-	bundle = delivery.load_bundle(identity)
+	try:
+		bundle = delivery.load_bundle(identity)
+	except (ValueError, OSError, RuntimeError, TypeError, KeyError, ConfigError):
+		if row.get("audit_report_mode") != "explicit-v1":
+			raise
+		return {"id": identity, "title": row["title"], "hash": "", "criteria": [], "kind": "document",
+			"documents": [], "actions": [], "restart_notice": "",
+			"periodic_evidence": {"verified": False, "checks": [], "synthetic": []}}
+	evidence = periodic_evidence(row, bundle)
+	extra = {"periodic_evidence": evidence} if evidence is not None else {}
 	criteria = [{"criterion": item["criterion"], "verdict": item["verdict"]} for item in bundle["criteria"]]
 	if bundle.get("version") == 2:
 		# 문서 부서 묶음: 시험·병합·push 대신 납품 문서만 확정한다.
 		return {"id": identity, "title": row["title"], "hash": bundle["hash"], "criteria": criteria, "kind": "document",
-			"documents": [item["task"] for item in bundle["documents"]], "actions": ["document"], "restart_notice": ""}
+			"documents": [item["task"] for item in bundle["documents"]], "actions": ["document"], "restart_notice": "", **extra}
 	tests = bundle["tests"]
 	return {"id": identity, "title": row["title"], "hash": bundle["hash"], "criteria": criteria, "kind": "code",
 		"tests": {"ok": tests.get("ok") is True, "detail": str(tests.get("summary", tests.get("detail", "")))},
-		"changed": len(bundle["changed"]), "actions": bundle["actions"], "restart_notice": bundle["restart_notice"]}
+		"changed": len(bundle["changed"]), "actions": bundle["actions"], "restart_notice": bundle["restart_notice"], **extra}
 
 
 def reserve(root, identity, digest):
@@ -90,6 +152,9 @@ def execute(root, payload, audit):
 			if bundle["hash"] != payload["hash"]:
 				raise ValueError("납품 상태 또는 hash가 달라졌습니다")
 			if action == "agency_approve":
+				evidence = periodic_evidence(row, bundle)
+				if evidence is not None and not evidence["verified"]:
+					raise ValueError("점검 근거를 확인하지 못했습니다")
 				reserve(root, identity, payload["hash"])
 				result = delivery.approve(identity, payload["hash"])
 				ok = result["status"] == "완료"

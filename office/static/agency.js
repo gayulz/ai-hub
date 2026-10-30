@@ -16,13 +16,36 @@ function questions(values={}){
 	for(const q of data.questions)if(values[q.no])$('agency-answer-'+q.no).value=values[q.no];
 	buttons('닫기',null,null);
 }
+function validEvidence(){
+	if(!Object.hasOwn(data,'periodic_evidence'))return true;
+	const value=data.periodic_evidence;
+	return !!(value&&value.verified===true&&Array.isArray(value.checks)&&value.checks.length&&value.checks.every(item=>
+		item&&['tests','dependencies'].includes(item.kind)&&['passed','failed','unverified'].includes(item.status))&&
+		Array.isArray(value.synthetic)&&value.synthetic.every(item=>{
+			const c=item?.counts;
+			return c&&['passed','failed'].includes(item.status)&&['ran','failures','errors','skipped'].every(k=>Number.isSafeInteger(c[k])&&c[k]>=0)&&
+				c.failures+c.errors+c.skipped<=c.ran&&(item.status!=='passed'||(c.ran>0&&c.failures===0&&c.errors===0));
+		}));
+}
+function evidenceText(){
+	if(!Object.hasOwn(data,'periodic_evidence'))return '';
+	if(!validEvidence())return '<h3>점검 근거</h3><p>근거 미확인 · 승인을 진행할 수 없습니다.</p>';
+	const kinds={tests:'시험',dependencies:'의존성'},states={passed:'통과',failed:'실패',unverified:'미검증'};
+	return '<h3>보고 검수와 별개인 실제 점검 상태</h3><ul>'+data.periodic_evidence.checks.map(item=>
+		'<li>'+kinds[item.kind]+' · '+states[item.status]+'</li>').join('')+'</ul>'+data.periodic_evidence.synthetic.map(item=>{
+		const c=item.counts;
+		return '<p>합성 부분 시험 · '+states[item.status]+' · 실행 '+c.ran+'개, 실패 '+c.failures+'개, 오류 '+c.errors+'개, 건너뜀 '+c.skipped+'개. 실제 저장소 전체 시험은 미검증입니다.</p>';
+	}).join('');
+}
 function delivery(){
 	stage='delivery';$('agency-title').textContent='납품 묶음 확인';
 	const verdict={pass:'통과',fail:'실패',unverified:'미검증'};
 	body.innerHTML='<p>'+esc(data.title)+' · '+esc(data.id)+'</p><h3>기준별 판정</h3><ul>'+data.criteria.map(item=>'<li>'+esc(item.criterion)+' · '+esc(verdict[item.verdict])+'</li>').join('')+'</ul>'+(data.kind==='document'?'<h3>납품 문서</h3><p>'+esc(data.documents.join(', '))+' · 묶음 hash '+esc(data.hash.slice(0,12))+'</p>':'<h3>시험 결과</h3><p>'+esc(data.tests.ok?'통과':'실패 또는 미실행')+(data.tests.detail?' · '+esc(data.tests.detail):'')+'</p><p>바뀐 파일 '+esc(data.changed)+'개 · 묶음 hash '+esc(data.hash.slice(0,12))+'</p>')+'<h3>승인하면 실행될 바깥 작업</h3>'+actions()+(data.restart_notice?'<p>'+esc(data.restart_notice)+'</p>':'');
-	buttons('닫기','반려','승인');
+	body.innerHTML+=evidenceText();
+	buttons('닫기',data.hash?'반려':null,validEvidence()?'승인':null);
 }
 function confirmation(number){
+	if(!validEvidence())return;
 	stage='confirm'+number;$('agency-title').textContent='납품 승인 확인 '+number+' / 2';
 	body.innerHTML='<p>묶음 hash '+esc(data.hash.slice(0,12))+'</p><p>'+(number===1?'아래 작업을 승인할지 확인해 주세요.':'마지막 확인입니다. 아래 작업이 실행됩니다.')+'</p><h3>승인하면 실행될 바깥 작업</h3>'+actions()+(data.restart_notice?'<p>'+esc(data.restart_notice)+'</p>':'');
 	buttons('취소','이전',number===1?'확인하고 계속':'최종 승인 · 실행');
@@ -85,6 +108,7 @@ async function answer(no){
 }
 async function submit(){
 	if(busy||uncertain)return;
+	if(stage!=='reject'&&!validEvidence())return;
 	if(stage==='delivery'){status.textContent='';confirmation(1);return}
 	if(stage==='confirm1'){confirmation(2);return}
 	if(stage==='confirm2'||stage==='reject'){

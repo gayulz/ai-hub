@@ -131,6 +131,62 @@ class OfficeAgencyTest(ActionCase):
 		self.assertEqual(set(data), {"id", "title", "questions"})
 		self.assertNotIn("asked", data["questions"][0])
 
+	def test_periodic_evidence_projects_states_and_counts_without_private_fields(self):
+		row = {"id": self.identity, "audit_report_mode": "explicit-v1", "schedule_repo": "synthetic",
+			"tasks": [{"id": "t1"}]}
+		report = {"task": "t1", **{key: "b" * 64 for key in
+			("sha256", "request_sha256", "evidence_sha256", "report_seal_sha256")}}
+		bundle = {"version": 2, "documents": [report]}
+		counts = {"ran": 3, "failures": 0, "errors": 0, "skipped": 1}
+		evidence = {"checks": [{"kind": "tests", "status": "unverified", "reason": "합성 비공개"},
+			{"kind": "dependencies", "status": "unverified"}],
+			"synthetic_test": {"status": "passed", "counts": counts, "name": "합성 비공개"}}
+		with mock.patch.object(agency.documents, "periodic_manifest", return_value=[report]), \
+				mock.patch.object(agency.documents, "read_evidence", return_value=evidence):
+			result = agency.periodic_evidence(row, bundle)
+			self.assertEqual(result, {"verified": True, "checks": [
+				{"kind": "tests", "status": "unverified"}, {"kind": "dependencies", "status": "unverified"}],
+				"synthetic": [{"status": "passed", "counts": counts}]})
+			self.assertNotIn("합성 비공개", json.dumps(result, ensure_ascii=False))
+			for status in ("passed", "failed", "unverified"):
+				evidence["checks"][1]["status"] = status
+				self.assertEqual(agency.periodic_evidence(row, bundle)["checks"][1]["status"], status)
+			counts["ran"] = 0
+			self.assertFalse(agency.periodic_evidence(row, bundle)["verified"])
+			counts["ran"] = 3
+			evidence["facts"] = {"partial": evidence.pop("synthetic_test")}
+			self.assertEqual(agency.periodic_evidence(row, bundle)["synthetic"], [{"status": "passed", "counts": counts}])
+
+	def test_periodic_integrity_failure_blocks_approval_without_receipt(self):
+		row = {**project.load(self.identity), "status": "납품 대기", "audit_report_mode": "explicit-v1",
+			"schedule_repo": "synthetic", "tasks": [{"id": "t1"}]}
+		report = {"task": "t1", **{key: "b" * 64 for key in
+			("sha256", "request_sha256", "evidence_sha256", "report_seal_sha256")}}
+		bundle = {"version": 2, "hash": "a" * 64, "criteria": [], "documents": [report]}
+		for boundary in ("periodic_manifest", "read_evidence"):
+			with self.subTest(boundary=boundary), mock.patch.object(agency.project, "load", return_value=row), \
+					mock.patch.object(agency.delivery, "load_bundle", return_value=bundle), \
+					mock.patch.object(agency.documents, "periodic_manifest", return_value=[report]), \
+					mock.patch.object(agency.documents, "read_evidence", return_value={}), \
+					mock.patch.object(agency.documents, boundary, side_effect=ValueError("합성 변조")), \
+					mock.patch.object(agency, "reserve") as reserve, \
+					mock.patch.object(agency.delivery, "approve") as approve:
+				self.assertFalse(agency.detail(self.identity, "delivery")["periodic_evidence"]["verified"])
+				code, result = agency.execute(self.hub, {"action": "agency_approve", "id": self.identity,
+					"hash": bundle["hash"]}, mock.Mock())
+				self.assertEqual((code, result["ok"]), (409, False))
+				reserve.assert_not_called()
+				approve.assert_not_called()
+		with mock.patch.object(agency.documents, "periodic_manifest", return_value=[report]):
+			self.assertFalse(agency.periodic_evidence(row, {**bundle, "documents": []})["verified"])
+			self.assertFalse(agency.periodic_evidence(row, {**bundle, "documents": [report, report]})["verified"])
+		with mock.patch.object(agency.project, "load", return_value=row), \
+				mock.patch.object(agency.delivery, "load_bundle", side_effect=ValueError("합성 비공개")):
+			result = agency.detail(self.identity, "delivery")
+			self.assertFalse(result["periodic_evidence"]["verified"])
+			self.assertEqual(result["hash"], "")
+			self.assertNotIn("합성 비공개", json.dumps(result, ensure_ascii=False))
+
 	def test_delivery_approval_hash_failure_reason_and_duplicate(self):
 		self.waiting()
 		def approve(identity, digest):

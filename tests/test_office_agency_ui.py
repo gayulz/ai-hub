@@ -58,6 +58,29 @@ class OfficeAgencyUITest(unittest.TestCase):
 		assert($('agency-body').textContent.includes('원격 대조: 일치'));assert($('agency-submit').hidden);
 		""")
 
+	def test_periodic_states_partial_counts_and_unconfirmed_approval(self):
+		self.run_js(r"""
+		Object.assign(bundle,{kind:'document',documents:['t1'],actions:['document'],periodic_evidence:{verified:true,
+			checks:[{kind:'tests',status:'unverified'},{kind:'dependencies',status:'failed'},{kind:'tests',status:'passed'}],
+			synthetic:[{status:'passed',counts:{ran:3,failures:0,errors:0,skipped:1}}]}});
+		await bootAgency();await openAgency('delivery');
+		for(const text of ['시험 · 미검증','의존성 · 실패','시험 · 통과','합성 부분 시험 · 통과','건너뜀 1개','실제 저장소 전체 시험은 미검증'])assert($('agency-body').textContent.includes(text));
+		click($('agency-submit'));assert($('agency-title').textContent.includes('1 / 2'));
+		click($('agency-submit'));assert($('agency-title').textContent.includes('2 / 2'));assert.equal(requests.length,0);
+		click($('agency-close'));
+		for(const value of [null,{verified:false,checks:[],synthetic:[]},
+			{verified:true,checks:[{kind:'tests',status:'unknown'}],synthetic:[]},
+			{verified:true,checks:[{kind:'tests',status:'unverified'}],synthetic:[{status:'passed',counts:{ran:0,failures:0,errors:0,skipped:0}}]}]){
+			bundle.periodic_evidence=value;await openAgency('delivery');
+			assert($('agency-body').textContent.includes('근거 미확인'));assert($('agency-submit').hidden);
+			click($('agency-submit'));assert(!$('agency-title').textContent.includes('1 / 2'));assert.equal(requests.length,0);
+			click($('agency-close'));
+		}
+		delete bundle.periodic_evidence;await openAgency('delivery');
+		assert(!$('agency-body').textContent.includes('점검 근거'));assert(!$('agency-submit').hidden);
+		click($('agency-submit'));assert($('agency-title').textContent.includes('1 / 2'));
+		""")
+
 	def test_refresh_after_answer_holds_dialog_and_preserves_other_input_on_failure(self):
 		self.run_js(r"""
 		await bootAgency();await openAgency('questions');$('agency-answer-1').value='합성 답';$('agency-answer-2').value='보존할 입력';

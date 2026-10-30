@@ -37,6 +37,7 @@ class ReviewTest(unittest.TestCase):
 		patch.start()
 		self.addCleanup(patch.stop)
 		self.repo = init_repo(self.root / "repo")
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", side_effect=lambda path: Path(path).resolve() != self.repo.resolve()))
 		(self.repo / "src").mkdir()
 		(self.repo / "src/value.txt").write_text("start\n", encoding="utf-8")
 		self.git("add", "--", "src/value.txt")

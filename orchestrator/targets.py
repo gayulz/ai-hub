@@ -14,7 +14,7 @@ from . import checks
 
 REPO = Path(__file__).resolve().parent.parent
 ID = re.compile(r"[a-z][a-z0-9-]{0,30}")
-KEYS = {"id", "path", "test_command", "commit_pattern", "forbidden", "restart_paths", "restart_notice", "claude_trailer"}
+KEYS = {"id", "path", "test_command", "commit_pattern", "forbidden", "restart_paths", "restart_notice", "claude_trailer", "isolated_inputs"}
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class Target:
 	restart_paths: tuple[str, ...] = ()
 	restart_notice: str = ""
 	claude_trailer: str = ""
+	isolated_inputs: tuple[str, ...] = ()
 
 
 def _invalid(source: str, index: int | None = None, key: str | None = None) -> ConfigError:
@@ -127,8 +128,13 @@ def targets() -> dict[str, Target]:
 				raise _invalid(source, index, key)
 		if row.get("restart_paths") and "restart_notice" not in row:
 			raise _invalid(source, index, "restart_paths")
+		values = row.get("isolated_inputs", [])
+		from .isolated_inputs import valid_path
+		if (not isinstance(values, list) or len(values) > 1000 or any(not valid_path(value) for value in values)
+				or len(set(values)) != len(values)):
+			raise _invalid(source, index, "isolated_inputs")
 		found[identity] = Target(identity, path, command, pattern, tuple(row.get("forbidden", [])),
-			tuple(row.get("restart_paths", [])), row.get("restart_notice", ""), row.get("claude_trailer", ""))
+			tuple(row.get("restart_paths", [])), row.get("restart_notice", ""), row.get("claude_trailer", ""), tuple(values))
 	return found
 
 

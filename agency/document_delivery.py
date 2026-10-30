@@ -23,8 +23,14 @@ def validate(identity, bundle):
 			raise ValueError
 		row = project.load(identity)
 		department = load_departments().get(row["department"])
-		if department is None or department.deliverable != "document" or row["branch"]:
+		periodic = (department is not None and department.deliverable == "code"
+			and row.get("audit_report_mode") == "explicit-v1" and bool(row.get("schedule_repo")))
+		if department is None or not periodic and (department.deliverable != "document" or row["branch"]):
 			raise ValueError
+		if periodic:
+			if any(not task.get("report_seal") or task.get("commit") for task in row["tasks"]):
+				raise ValueError("보고 전용 납품에 코드 변경이 있습니다")
+			documents.unchanged_repo(row, department)
 		spec_hash = hashlib.sha256(json.dumps(row["spec"], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 		if not row["spec_hash"] or bundle["spec_hash"] != row["spec_hash"] or spec_hash != row["spec_hash"]:
 			raise ValueError
@@ -51,7 +57,11 @@ def validate(identity, bundle):
 def approve(identity, bundle_hash, bundle):
 	from . import delivery
 	workdir = project._folder(identity) / "work"
-	with locked("agency-repo:" + str(workdir)):
+	row = project.load(identity)
+	department = load_departments().get(row["department"])
+	periodic = department is not None and department.deliverable == "code" and row.get("audit_report_mode") == "explicit-v1"
+	repo = documents.unchanged_repo(row, department).path if periodic else workdir
+	with locked("agency-repo:" + str(repo)):
 		delivery._waiting(identity)
 		if delivery.load_bundle(identity)["hash"] != bundle_hash or bundle["hash"] != bundle_hash:
 			raise ValueError("승인 hash가 납품 묶음과 다릅니다")

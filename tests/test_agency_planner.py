@@ -39,6 +39,7 @@ class AgencyPlannerTest(unittest.TestCase):
 		self.hub, self.repo = self.root / "hub", self.root / "repo"
 		self.hub.mkdir()
 		self.repo.mkdir()
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", side_effect=lambda path: Path(path).resolve() != self.repo.resolve()))
 		for patch in (mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.hub)}),
 				mock.patch("vaultfilter.public.getpass.getuser", return_value="p01"),
 				mock.patch("orchestrator.providers.call", side_effect=AssertionError("실제 AI 호출 금지"))):

@@ -39,6 +39,7 @@ class BranchApplyTest(unittest.TestCase):
 		for folder in vault.landing_dirs(self.vault):
 			folder.mkdir(parents=True)
 		self.repo = init_repo(self.root / "repo")
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", side_effect=lambda path: Path(path).resolve() != self.repo.resolve()))
 		(self.repo / "src").mkdir()
 		(self.repo / "src/a.py").write_text("VALUE = 1\n", encoding="utf-8")
 		(self.repo / "tests").mkdir()

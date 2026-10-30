@@ -14,7 +14,7 @@ from agency.__main__ import main as agency_main
 from agency.departments import load_departments
 from collector import vault
 from collector.config import load_plans
-from orchestrator import __main__ as cli, checks
+from orchestrator import __main__ as cli, checks, targets
 from orchestrator.flow import Flow
 from orchestrator.record import Run, new_run_id
 from tests.test_orchestrator import FakeAI, PASS, PLANS
@@ -36,6 +36,7 @@ class AgencyReportTest(unittest.TestCase):
 		for folder in vault.landing_dirs(self.vault):
 			folder.mkdir(parents=True)
 		self.repo = init_repo(self.root / "repo")
+		self.enterContext(mock.patch.object(targets, "REPO", self.repo))
 		(self.repo / "src").mkdir()
 		(self.repo / "src/a.py").write_text("VALUE = 1\n", encoding="utf-8")
 		(self.repo / "tests").mkdir()
@@ -45,12 +46,12 @@ class AgencyReportTest(unittest.TestCase):
 		self.git("add", "--", "src/a.py", "tests/test_a.py")
 		self.git("commit", "-q", "-m", "합성 시작")
 		self.head = self.git("rev-parse", "HEAD")
-		write_repos(self.hub, {"id": "sample", "path": str(self.repo), "test_command": checks.DEFAULT_TEST})
+		write_repos(self.hub)
 		(self.hub / "departments.toml").write_text('''[[department]]
 id = "sample"
 name = "합성 부서"
 scope = "로컬 시험"
-repos = ["sample"]
+repos = ["ai-hub"]
 allow_plans = ["codex-personal", "claude-personal"]
 playbook = "sample"
 budget = { calls = 20, minutes = 10 }

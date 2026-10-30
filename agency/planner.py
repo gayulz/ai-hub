@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import os
 import time
+import tomllib
+from pathlib import Path
 
-from orchestrator import checks, draft, targets
+from collector.backfill_common import locked, safe
+from orchestrator import checks, draft, targets, test_isolation, isolated_inputs, providers
 from orchestrator.__main__ import read_request
 from orchestrator.prompts import DRAFT_SCHEMA
 from vaultfilter.public import Rules
 
-from . import ai, inputs, project, schedule, skills
+from . import ai, documents, inputs, project, schedule, skills
 from .departments import load_departments, valid_text
 
 DECISION_FIELDS = ("chosen", "rejected", "assumptions", "verification")
@@ -31,6 +34,15 @@ DOCUMENT_PROPERTIES = {key: value for key, value in TASK_PROPERTIES.items()
 DOCUMENT_SCHEMA = {**SCHEMA, "properties": {**SCHEMA["properties"], "tasks": {
 	"type": "array", "items": {"type": "object", "additionalProperties": False,
 		"required": list(DOCUMENT_PROPERTIES), "properties": DOCUMENT_PROPERTIES}}}}
+PERIODIC_PROPERTIES = {**TASK_PROPERTIES, "task_kind": {"type": "string", "enum": ["report", "code"]},
+	"report_checks": {"type": "array", "items": {"type": "string", "enum": ["tests", "dependencies"]}}}
+PERIODIC_SCHEMA = {**SCHEMA, "properties": {**SCHEMA["properties"], "tasks": {
+	"type": "array", "items": {"type": "object", "additionalProperties": False,
+		"required": list(PERIODIC_PROPERTIES), "properties": PERIODIC_PROPERTIES}}}}
+
+
+def _report_enabled(row, selected):
+	return selected is not None and bool(row.get("schedule_repo")) and row.get("audit_report_mode") == "explicit-v1"
 
 
 def _document_task(task, rules, workdir):
@@ -50,7 +62,7 @@ def _document_task(task, rules, workdir):
 	return {"request": request, "budget": budget}
 
 
-def _checked_task(task, number: int, rules: Rules, selected: targets.Target | None, workdir=None) -> dict:
+def _checked_task(task, number: int, rules: Rules, selected: targets.Target | None, workdir=None, *, allow_reports=False) -> dict:
 	field = "role"
 	try:
 		if not isinstance(task, dict) or task.get("role") not in draft.ROLES:
@@ -68,7 +80,28 @@ def _checked_task(task, number: int, rules: Rules, selected: targets.Target | No
 		field = "depends_on"
 		dependencies = task.get(field)
 		if (not isinstance(dependencies, list)
-				or any(type(index) is not int or not 1 <= index < number for index in dependencies)):
+				or any(type(index) is not int or not 1 <= index < number for index in dependencies)
+				or allow_reports and len(set(dependencies)) != len(dependencies)):
+			raise ValueError
+		field = "task_kind"
+		if allow_reports:
+			if (selected is None or set(task) != set(PERIODIC_PROPERTIES)
+					or task.get("task_kind") not in ("report", "code")):
+				raise ValueError
+			if task["task_kind"] == "report":
+				if (task.get("owned_paths") != [] or task.get("commit_message") != ""
+						or workdir is None or not Path(workdir).is_absolute() or not safe(Path(workdir))
+						or not isinstance(task.get("report_checks"), list) or not 1 <= len(task["report_checks"]) <= 2
+						or any(value not in ("tests", "dependencies") for value in task["report_checks"])
+						or len(set(task["report_checks"])) != len(task["report_checks"])):
+					raise ValueError
+				request = _document_task(task, rules, workdir)
+				request["request"].update(report_mode="periodic-v1", report_project=Path(workdir).parent.name,
+					report_task=f"t{number}", report_checks=task["report_checks"])
+				return request
+			if task.get("report_checks") != []:
+				raise ValueError
+		elif "task_kind" in task:
 			raise ValueError
 		try:
 			return draft.validate(task, task["role"], rules, selected) if selected else _document_task(task, rules, workdir)
@@ -80,7 +113,7 @@ def _checked_task(task, number: int, rules: Rules, selected: targets.Target | No
 		raise ValueError(f"{number}번째 작업의 {field} 칸이 잘못됐습니다") from None
 
 
-def _requests(data, rules: Rules, selected: targets.Target | None, branch: str, workdir=None) -> list[dict]:
+def _requests(data, rules: Rules, selected: targets.Target | None, branch: str, workdir=None, *, allow_reports=False) -> list[dict]:
 	if not isinstance(data, dict) or data.get("size") not in ("small", "medium", "large"):
 		raise ValueError("size 칸이 잘못됐습니다")
 	tasks = data.get("tasks")
@@ -92,9 +125,15 @@ def _requests(data, rules: Rules, selected: targets.Target | None, branch: str, 
 		raise ValueError("나눌 작업이 없습니다")
 	checked = []
 	for number, task in enumerate(tasks, 1):
-		request = _checked_task(task, number, rules, selected, workdir)
-		if selected:
+		request = _checked_task(task, number, rules, selected, workdir, allow_reports=allow_reports)
+		if selected and request["request"]["kind"] == "code":
 			request["request"]["base_branch"] = branch
+		if selected and allow_reports:
+			dependencies = [f"t{index}" for index in task["depends_on"]
+				if tasks[index - 1].get("task_kind") == "report"]
+			if dependencies:
+				request["request"].update(report_project=Path(workdir).parent.name,
+					report_task=f"t{number}", report_dependencies=dependencies)
 		checked.append(request)
 	meeting = data.get("meeting")
 	if (not isinstance(meeting, dict) or type(meeting.get("needed")) is not bool
@@ -107,7 +146,145 @@ def _requests(data, rules: Rules, selected: targets.Target | None, branch: str, 
 	return checked
 
 
+def _replan_write(path: Path, content: bytes) -> None:
+	fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+	with os.fdopen(fd, "wb") as stream:
+		os.fchmod(stream.fileno(), 0o600)
+		stream.write(content)
+		stream.flush()
+		os.fsync(stream.fileno())
+
+
+def _commit_replan(identity, snapshot, sources, rewritten, backup, repo, branch_tip):
+	with locked("agency-repo:" + str(repo)):
+		with project._edit(identity, "periodic_replan") as current:
+			if current != snapshot:
+				raise ValueError("계획 중 원장이 바뀌어 재계획을 중단했습니다")
+			if checks.git(repo, "rev-parse", "--verify", "refs/heads/" + current["branch"], check=False).strip() != branch_tip:
+				raise ValueError("계획 중 프로젝트 가지가 바뀌었습니다")
+			if any(inputs._read(Path(path), inputs.MAX_OUTPUT) != data for path, data in sources.items()):
+				raise ValueError("계획 중 원본 요청서가 바뀌었습니다")
+			for task in rewritten:
+				if inputs._hash(inputs._read(Path(task["request_path"]), inputs.MAX_OUTPUT)) != task["request_sha256"]:
+					raise ValueError("새 요청서의 내용이 바뀌었습니다")
+			if inputs._hash(inputs._read(Path(backup["path"]), inputs.MAX_OUTPUT)) != backup["sha256"]:
+				raise ValueError("원본 원장 보존본이 바뀌었습니다")
+			current["tasks"] = rewritten
+			current["audit_report_mode"] = "explicit-v1"
+			current["periodic_replan"] = backup
+
+
+def _replan(identity: str, option: str) -> dict:
+	if not isinstance(option, str) or len(option) > 4096:
+		raise ValueError("정기 점검 재계획 형식이 잘못됐습니다")
+	def unique(pairs):
+		value = {}
+		for key, item in pairs:
+			if key in value:
+				raise ValueError("중복된 재계획 항목입니다")
+			value[key] = item
+		return value
+	try:
+		choice = json.loads(option, object_pairs_hook=unique)
+	except (TypeError, ValueError, RecursionError):
+		raise ValueError("정기 점검 재계획 형식이 잘못됐습니다") from None
+	if not isinstance(choice, dict) or set(choice) != {"project", "reports"} or choice["project"] != identity:
+		raise ValueError("재계획 대상이 일치하지 않습니다")
+	reports = choice["reports"]
+	if (not isinstance(reports, dict) or not reports
+			or any(not isinstance(key, str) or not isinstance(value, list) or not value
+				or any(item not in ("tests", "dependencies") for item in value)
+				or len(set(value)) != len(value) for key, value in reports.items())):
+		raise ValueError("보고 작업과 점검 항목을 명시해야 합니다")
+	row = project.load(identity)
+	if (not row.get("schedule_repo") or row.get("audit_report_mode") or row.get("periodic_replan")
+			or row["status"] not in ("계획", "막힘")
+			or row["status"] == "막힘" and row.get("blocked_from") != "계획"
+			or not row.get("spec_hash") or not 1 <= len(row["tasks"]) <= 4
+			or any(task.get("status") != "대기" or task.get("run_id") or task.get("commit")
+				or task.get("report_seal") or task.get("report_evidence") for task in row["tasks"])):
+		raise ValueError("시작하지 않은 확정 정기 점검만 재계획할 수 있습니다")
+	project._check_tasks(row["tasks"])
+	if any(len(set(task["depends_on"])) != len(task["depends_on"]) for task in row["tasks"]):
+		raise ValueError("중복된 선행 작업은 재계획할 수 없습니다")
+	if not set(reports) <= {task["id"] for task in row["tasks"]}:
+		raise ValueError("보고 작업이 기존 계획에 없습니다")
+	spec_hash = inputs._hash(json.dumps(row["spec"], ensure_ascii=False, sort_keys=True).encode())
+	if spec_hash != row["spec_hash"]:
+		raise ValueError("확정 명세가 바뀌었습니다")
+	department = load_departments().get(row["department"])
+	if department is None or department.deliverable != "code" or not department.external_ai:
+		raise ValueError("코드 점검 부서를 확인할 수 없습니다")
+	selected = targets.target(schedule.target(row, department))
+	if checks.git(selected.path, "rev-parse", "--is-inside-work-tree").strip() != "true":
+		raise ValueError("대상 저장소를 확인할 수 없습니다")
+	branch_tip = checks.git(selected.path, "rev-parse", "--verify", "refs/heads/" + row["branch"], check=False).strip()
+	folder = project._folder(identity)
+	ledger = inputs._read(folder / "project.json", inputs.MAX_OUTPUT)
+	if json.loads(ledger) != row:
+		raise ValueError("원장이 읽는 중 바뀌었습니다")
+	sources, data = {}, []
+	for task in row["tasks"]:
+		path = Path(task["request_path"])
+		if not path.is_absolute() or not safe(path) or not path.resolve().is_relative_to(folder.resolve()):
+			raise ValueError("원본 요청서 경로가 프로젝트 밖입니다")
+		raw = inputs._read(path, inputs.MAX_OUTPUT)
+		if task.get("request_sha256") and task["request_sha256"] != inputs._hash(raw):
+			raise ValueError("원본 요청서의 해시가 다릅니다")
+		try:
+			parsed = tomllib.loads(raw.decode("utf-8"))
+			request, budget = parsed["request"], parsed["budget"]
+		except (ValueError, UnicodeError, KeyError, TypeError):
+			raise ValueError("원본 요청서 형식이 잘못됐습니다") from None
+		if (not isinstance(request, dict) or not isinstance(budget, dict) or request.get("kind", "code") != "code"
+				or request.get("repo") != str(selected.path) or request.get("base_branch") != row["branch"]
+				or any(key.startswith("report_") for key in request)
+				or any(key not in request for key in ("role", "goal", "done", "forbidden", "details"))
+				or any(type(budget.get(key)) is not int for key in ("calls", "minutes", "fixes"))):
+			raise ValueError("원본 요청서의 대상 또는 예산이 잘못됐습니다")
+		sources[str(path)], data = raw, [*data, parsed]
+	identifier = inputs._hash(ledger + json.dumps(choice, sort_keys=True).encode()
+		+ b"".join(inputs._hash(raw).encode() for raw in sources.values()))[:24]
+	destination = folder / ("tasks-report-" + identifier + "-" + os.urandom(8).hex())
+	if not safe(destination):
+		raise ValueError("재계획 보존 폴더에 링크를 사용할 수 없습니다")
+	try:
+		destination.mkdir(mode=0o700)
+	except FileExistsError:
+		raise ValueError("같은 재계획 기록이 있어 기존 결과를 확인해야 합니다") from None
+	backup_path = destination / "original-project.json"
+	_replan_write(backup_path, ledger)
+	backup = {"path": str(backup_path), "sha256": inputs._hash(ledger),
+		"sources": [{"path": path, "sha256": inputs._hash(raw)} for path, raw in sources.items()]}
+	rewritten = []
+	for task, parsed in zip(row["tasks"], data):
+		request = parsed["request"]
+		if task["id"] in reports:
+			request = {key: request[key] for key in ("role", "goal", "done", "forbidden", "details")}
+			request.update(kind="analysis", workdir=str(folder / "work"), report_mode="periodic-v1",
+				report_project=identity, report_task=task["id"], report_checks=reports[task["id"]])
+		else:
+			request = dict(request)
+		dependencies = [item for item in task["depends_on"] if item in reports]
+		if dependencies:
+			request.update(report_project=identity, report_task=task["id"], report_dependencies=dependencies)
+		prepared = {"request": request, "budget": parsed["budget"]}
+		content = draft.serialize(prepared).encode("utf-8")
+		if tomllib.loads(content.decode("utf-8")) != prepared:
+			raise ValueError("새 요청서 직렬화 결과가 다릅니다")
+		path = destination / (task["id"] + ".toml")
+		_replan_write(path, content)
+		if read_request(str(path)) != prepared:
+			raise ValueError("새 요청서를 다시 읽을 수 없습니다")
+		rewritten.append({**task, "request_path": str(path), "request_sha256": inputs._hash(content)})
+	_commit_replan(identity, row, sources, rewritten, backup, selected.path, branch_tip)
+	return {"tasks": [{key: task[key] for key in ("id", "title", "depends_on")} for task in rewritten],
+		"size": "small" if len(rewritten) == 1 else "medium", "plan": "explicit-replan", "meeting": False}
+
+
 def plan(identity: str) -> dict:
+	if option := os.environ.get("AI_HUB_PERIODIC_REPLAN"):
+		return _replan(identity, option)
 	row = project.load(identity)
 	# 계획 호출이 실패해 막힘 → 재개되면 상태가 '계획'으로 돌아온다. 작업이 없으면 다시 계획할 수 있어야 한다.
 	if row["status"] not in ("명세 확정", "계획"):
@@ -126,8 +303,14 @@ def plan(identity: str) -> dict:
 				raise
 		raise ValueError("외부 AI 금지 부서는 PM 계획 호출을 쓸 수 없습니다")
 	selected = targets.target(schedule.target(row, department)) if department.deliverable == "code" else None
+	if selected is not None and ((selected.id == "blog" or test_isolation.requires(str(selected.path))) and not getattr(selected, "isolated_inputs", ())):
+		reason = "합성 소스와 격리 계획 경로가 준비되지 않았습니다"
+		project.transition(identity, "막힘", reason=reason)
+		raise ValueError(reason)
+	periodic = _report_enabled(row, selected)
 	playbook = skills.prompt_block([skills.load(department.playbook)])
-	files = "\n".join(checks.git(selected.path, "ls-files").splitlines()[:400]) if selected else ""
+	files = ("\n".join(selected.isolated_inputs) if test_isolation.requires(str(selected.path))
+		else "\n".join(checks.git(selected.path, "ls-files").splitlines()[:400])) if selected else ""
 	prompt = (
 		"너는 사무실 대행사의 PM이다. 대상 저장소의 AGENTS.md와 (있으면) RULES.md를 읽고 따른다. "
 		"읽기 전용으로 계획만 작성하고 파일·가지·서비스를 변경하지 않는다.\n"
@@ -167,8 +350,15 @@ def plan(identity: str) -> dict:
 		project.transition(identity, "계획")
 	started = time.monotonic()
 	try:
-		answer = ai.ask(department, prompt, SCHEMA if selected else DOCUMENT_SCHEMA,
-			repo=selected.path if selected else None)
+		if periodic:
+			prompt += ("\n정기 점검의 작업에는 task_kind를 명시한다. 실제로 보고만 하는 작업은 report이며 "
+				"owned_paths는 빈 목록, commit_message는 빈 문자열이다. 코드 변경 작업은 code로 둔다. "
+				"보고 작업의 report_checks는 tests 또는 dependencies를 필요한 만큼 선택하고 코드 작업은 빈 목록이다. "
+				"실패·미실행과 근거가 없는 항목은 보고에서 미검증으로 남긴다.")
+		answer = ai.ask(department, prompt, PERIODIC_SCHEMA if periodic else SCHEMA if selected else DOCUMENT_SCHEMA,
+			repo=selected.path if selected else None, **({"caller": lambda plan, writer, prompt, cwd, schema, timeout:
+				isolated_inputs.call(providers.call, plan, writer, prompt,
+					selected.path, schema, timeout, selected.path)} if selected and test_isolation.requires(str(selected.path)) else {}))
 	except RuntimeError as exc:
 		causes = [cause for cause in ("한도 소진", "로그인 확인 필요", "입력 길이 초과", "네트워크·서버 오류", "시간 초과")
 			if cause in str(exc)]
@@ -178,7 +368,8 @@ def plan(identity: str) -> dict:
 		raise RuntimeError(reason) from None
 	project.add_usage(identity, 1, answer.seconds)
 	try:
-		requests = _requests(answer.data, rules, selected, row["branch"], project._folder(identity) / "work")
+		requests = _requests(answer.data, rules, selected, row["branch"], project._folder(identity) / "work",
+			allow_reports=periodic)
 	except ValueError as exc:
 		project.transition(identity, "막힘", reason=str(exc))
 		raise
@@ -212,7 +403,9 @@ def plan(identity: str) -> dict:
 	tasks = []
 	for number, task in enumerate(answer.data["tasks"], 1):
 		dependencies = [f"t{index}" for index in task["depends_on"]]
-		project.add_task(identity, task["title"], str((folder / f"t{number}.toml").absolute()), depends_on=dependencies)
+		path = folder / f"t{number}.toml"
+		options = {"request_sha256": inputs._hash(inputs._read(path, inputs.MAX_OUTPUT))} if periodic else {}
+		project.add_task(identity, task["title"], str(path.absolute()), depends_on=dependencies, **options)
 		tasks.append({"id": f"t{number}", "title": task["title"], "depends_on": dependencies})
 	decision = answer.data.get("decision")
 	if isinstance(decision, dict) and all(valid_text(decision.get(key), 1000) for key in DECISION_FIELDS):

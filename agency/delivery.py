@@ -13,10 +13,10 @@ from pathlib import Path
 
 from collector.backfill_common import locked, now, private_write, safe
 from collector.config import ConfigError
-from orchestrator import targets
+from orchestrator import targets, test_isolation, isolated_inputs
 from orchestrator.checks import changed_paths, git
 
-from . import document_delivery, project
+from . import document_delivery, documents, project
 from .departments import valid_text
 
 KEYS = {"version", "project", "target", "repo", "branch", "branch_tip", "base", "actions",
@@ -52,7 +52,7 @@ def load_bundle(identity: str) -> dict:
 	if isinstance(bundle, dict) and type(bundle.get("version")) is int and bundle["version"] == 2:
 		return document_delivery.validate(identity, bundle)
 	try:
-		if (not isinstance(bundle, dict) or bundle.keys() != KEYS
+		if (not isinstance(bundle, dict) or set(bundle) not in (KEYS, KEYS | {"periodic"})
 				or type(bundle["version"]) is not int or bundle["version"] != 1 or bundle["project"] != identity):
 			raise ValueError
 		for key in ("target", "repo", "branch", "branch_tip", "base", "hash", "made", "reviewer"):
@@ -86,6 +86,17 @@ def load_bundle(identity: str) -> dict:
 		git(selected.path, "check-ref-format", "--branch", bundle["branch"])
 	except (OSError, RuntimeError):
 		raise ValueError("납품 묶음의 가지 이름이 잘못됐습니다") from None
+	row = project.load(identity)
+	if row.get("audit_report_mode") == "explicit-v1":
+		if row.get("branch") != bundle["branch"] or any(task.get("status") != "완료" for task in row["tasks"]):
+			raise ValueError("정기 점검 가지 또는 작업 상태가 납품 묶음과 다릅니다")
+		expected = {"base": row.get("audit_base"), "file_limit": project.periodic_file_limit(row),
+			"changed": documents.periodic_changed_paths(row, selected.path, bundle["branch_tip"]),
+			"reports": documents.periodic_manifest(row)}
+		if bundle.get("periodic") != expected:
+			raise ValueError("정기 점검 보고 또는 파일 제한이 납품 묶음과 다릅니다")
+	elif "periodic" in bundle:
+		raise ValueError("일반 프로젝트에 정기 점검 납품 기록을 사용할 수 없습니다")
 	return bundle
 
 
@@ -96,7 +107,14 @@ def _git(repo: Path, *args: str, reason: str = "Git 처리 실패") -> str:
 		raise _Failure(reason) from None
 
 
-def _test(command: str, folder: Path) -> None:
+def _test(command: str, folder: Path, repo=None) -> None:
+	from orchestrator import test_isolation, isolated_inputs
+	if repo is not None and test_isolation.requires(str(repo)):
+		with tempfile.TemporaryDirectory(prefix="merge-isolation-") as temporary:
+			result = isolated_inputs.run(repo, Path(temporary) / "evidence", root=folder)
+		if not result["ok"]:
+			raise _Failure("병합 결과 격리 시험 실패 또는 미검증")
+		return
 	try:
 		with subprocess.Popen(shlex.split(command), cwd=folder, stdout=subprocess.DEVNULL,
 				stderr=subprocess.STDOUT, start_new_session=True) as process:
@@ -117,6 +135,25 @@ def _test(command: str, folder: Path) -> None:
 
 
 def _merge_test(repo: Path, main: str, bundle: dict, title: str, command: str) -> str:
+	from orchestrator import isolated_inputs, test_isolation
+	if test_isolation.requires(str(repo)):
+		try:
+			selected = isolated_inputs.selected(repo)
+			isolated_inputs.check_git_safety(selected, main)
+			isolated_inputs.check_git_safety(selected, bundle["branch_tip"])
+			base = _git(repo, "merge-base", main, bundle["branch_tip"]).strip()
+			isolated_inputs.review_material(selected, base, bundle["branch_tip"])
+			tree = _git(repo, "merge-tree", "--write-tree", main, bundle["branch_tip"], reason="병합 충돌 또는 병합 실패").strip()
+			merge = _git(repo, "commit-tree", tree, "-p", main, "-p", bundle["branch_tip"], "-m",
+				f"사무실 프로젝트 {bundle['project']}: {title}", reason="병합 커밋 확인 실패").strip()
+			isolated_inputs.review_material(selected, main, merge)
+			with tempfile.TemporaryDirectory(prefix="merge-isolation-") as temporary:
+				result = isolated_inputs.run(repo, Path(temporary) / "evidence", commit=merge)
+			if not result["ok"]:
+				raise _Failure("병합 결과 격리 시험 실패 또는 미검증")
+			return merge
+		except (OSError, ValueError):
+			raise _Failure("병합 결과의 격리 입력 범위를 확인하지 못했습니다") from None
 	with tempfile.TemporaryDirectory(prefix="agency-delivery-") as temporary:
 		folder = Path(temporary) / "worktree"
 		try:
@@ -127,7 +164,7 @@ def _merge_test(repo: Path, main: str, bundle: dict, title: str, command: str) -
 			except _Failure:
 				git(folder, "merge", "--abort", check=False)
 				raise
-			_test(command, folder)
+			_test(command, folder, repo) if test_isolation.requires(str(repo)) else _test(command, folder)
 			return _git(folder, "rev-parse", "HEAD", reason="병합 커밋 확인 실패").strip()
 		finally:
 			if folder.exists():
@@ -159,6 +196,9 @@ def approve(identity: str, bundle_hash: str) -> dict:
 		bundle = load_bundle(identity)
 		if bundle["version"] == 2:
 			return document_delivery.approve(identity, bundle_hash, bundle)
+		selected = targets.target(bundle["target"])
+		if test_isolation.requires(str(selected.path)) and not getattr(selected, "isolated_inputs", ()):
+			raise ValueError("블로그 납품 시험의 격리 경로가 검증되지 않았습니다")
 		repo = Path(bundle["repo"])
 		with locked("agency-repo:" + str(repo)):
 			row = _waiting(identity)

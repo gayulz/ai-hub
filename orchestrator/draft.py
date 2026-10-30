@@ -15,7 +15,7 @@ from collector.redact_pii import EMAIL
 from vaultfilter.public import Rules
 from vaultfilter.verify import AI_SIGNATURE
 
-from . import prompts, providers, targets
+from . import prompts, providers, targets, test_isolation, isolated_inputs
 from .checks import DEFAULT_TEST
 from .flow import role_plans
 
@@ -141,6 +141,8 @@ def summary(data: dict, plan: str) -> dict:
 
 def create(role: str, text_file: Path, out: Path, previous: Path | None = None, target_id: str = "ai-hub") -> dict:
 	selected = targets.target(target_id)
+	if (selected.id == "blog" or test_isolation.requires(str(selected.path))) and not getattr(selected, "isolated_inputs", ()):
+		raise ValueError("합성 소스와 격리 계획 경로가 준비되지 않았습니다")
 	rules = Rules()
 	text = user_text(text_file.read_text(encoding="utf-8"), rules)
 	prior = read_draft(previous, rules) if previous else None
@@ -152,9 +154,10 @@ def create(role: str, text_file: Path, out: Path, previous: Path | None = None, 
 	if not plans:
 		raise ValueError("기획 역할에 personal 허용 요금제가 없습니다")
 	previous_fields = {key: prior["request"][key] for key in FIELDS} | {"budget": prior["budget"]} if prior else None
-	reply = providers.call(plans[0], writer=False,
-		prompt=prompts.draft(role, text, previous_fields, selected.id, selected.commit_pattern),
-		cwd=selected.path, schema=prompts.DRAFT_SCHEMA, timeout=570)
+	prompt = prompts.draft(role, text, previous_fields, selected.id, selected.commit_pattern)
+	reply = (isolated_inputs.call(providers.call, plans[0], False, prompt, selected.path,
+		prompts.DRAFT_SCHEMA, 570, selected.path) if test_isolation.requires(str(selected.path)) else
+		providers.call(plans[0], writer=False, prompt=prompt, cwd=selected.path, schema=prompts.DRAFT_SCHEMA, timeout=570))
 	data = validate(reply.data, role, rules, selected)
 	content = serialize(data)
 	if tomllib.loads(content) != data:

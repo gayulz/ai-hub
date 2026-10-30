@@ -34,6 +34,7 @@ class DeliveryTest(unittest.TestCase):
 		patch.start()
 		self.addCleanup(patch.stop)
 		self.repo = init_repo(self.root / "repo")
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", side_effect=lambda path: Path(path).resolve() != self.repo.resolve()))
 		for name, value in {"value.txt": "시작\n", "keep.txt": "유지\n", "시험 파일.py":
 				"from pathlib import Path\nassert Path('value.txt').read_text(encoding='utf-8') == '납품\\n'\n"
 				"assert Path('keep.txt').read_text(encoding='utf-8') == '유지\\n'\n"}.items():

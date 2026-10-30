@@ -9,11 +9,12 @@ import time
 from pathlib import Path
 
 from collector.backfill_common import locked, now, private_write
-from orchestrator import targets
+from collector.config import ConfigError, load_plans
+from orchestrator import flow, targets, test_isolation, isolated_inputs
 from orchestrator.checks import git
 from orchestrator.record import Run
 
-from . import ai, document_review, project, schedule, skills
+from . import ai, document_review, document_run, documents, project, schedule, skills, private_provider
 from .departments import load_departments, valid_text
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["criteria", "summary"],
@@ -33,7 +34,16 @@ def _ready(row: dict) -> None:
 		raise ValueError("모든 작업이 완료되어야 검수할 수 있습니다")
 
 
-def _test(selected: targets.Target, tip: str) -> dict:
+def _test(selected: targets.Target, tip: str, evidence_dir=None) -> dict:
+	if (selected.id == "blog" or test_isolation.requires(str(selected.path))) and not getattr(selected, "isolated_inputs", ()):
+		blocked = test_isolation.unverified()
+		return {"command": "격리 미준비로 미실행", "ok": False, "unverified": blocked["unverified"],
+			"executed": False, "summary": blocked["detail"]}
+	if test_isolation.requires(str(selected.path)):
+		with tempfile.TemporaryDirectory(prefix="agency-isolation-") as folder:
+			result = isolated_inputs.run(selected.path, evidence_dir or Path(folder) / "evidence", commit=tip)
+		return {**result, "test_ok": result["ok"],
+			"command": selected.test_command, "summary": result["detail"] + " · 전체 시험 범위 미검증"}
 	result = {"command": selected.test_command, "ok": False, "summary": ""}
 	with tempfile.TemporaryDirectory(prefix="agency-review-") as temporary:
 		worktree = Path(temporary) / "worktree"
@@ -114,10 +124,19 @@ def review(identity: str) -> dict:
 		raise ValueError("외부 AI 금지 부서는 검수 판정 호출을 쓸 수 없습니다")
 	if department.deliverable == "document":
 		return document_review.review(identity, department)
+	if (row.get("audit_report_mode") == "explicit-v1" and row.get("schedule_repo")
+			and all(task.get("report_seal") and not task.get("commit") for task in row["tasks"])):
+		return document_review.review(identity, department, periodic=True)
 	selected = targets.target(schedule.target(row, department))
 	with locked("agency-repo:" + str(selected.path)):
 		row = project.load(identity)
 		_ready(row)
+		if (selected.id == "blog" or test_isolation.requires(str(selected.path))) and not getattr(selected, "isolated_inputs", ()):
+			reason = "합성 소스와 격리 검수 경로가 준비되지 않아 검수하지 않았습니다"
+			status = project.transition(identity, "막힘", reason=reason)["status"]
+			criteria = row["spec"]["done_criteria"]
+			return {"status": status, "passed": False, "report": "", "delivery": "",
+				"failed": [], "unverified": len(criteria)}
 		tip = git(selected.path, "rev-parse", "--verify", "refs/heads/" + row["branch"]).strip()
 		head = git(selected.path, "rev-parse", "HEAD").strip()
 		base = git(selected.path, "merge-base", head, tip).strip()
@@ -130,20 +149,44 @@ def review(identity: str) -> dict:
 			"reviewer": "", "made": now().isoformat(timespec="seconds")}
 		if tip == base:
 			return _finish(row, bundle, "", "", "프로젝트 가지에 변경이 없습니다")
-		stat = git(selected.path, "diff", "--stat", base, tip)
-		diff = git(selected.path, "diff", base, tip)
+		if test_isolation.requires(str(selected.path)):
+			try:
+				stat, diff = isolated_inputs.review_material(selected, base, tip)
+			except (OSError, ValueError, RuntimeError):
+				return _finish(row, bundle, "", "", "격리 검토의 변경 범위를 확인하지 못했습니다")
+		else:
+			stat = git(selected.path, "diff", "--stat", base, tip)
+			diff = git(selected.path, "diff", base, tip)
 		if len(diff) > 60000:
 			diff = diff[:60000] + "\n...(잘림)"
 		bundle["changed"] = [path for path in git(selected.path, "diff", "--name-only", "-z", base, tip).split("\0") if path]
+		if row.get("audit_report_mode") == "explicit-v1":
+			try:
+				periodic_paths = documents.periodic_changed_paths(row, selected.path, tip)
+				reports = documents.periodic_manifest(row)
+			except ValueError as exc:
+				return _finish(row, bundle, stat, "", str(exc))
+			bundle["periodic"] = {"base": row["audit_base"], "file_limit": project.periodic_file_limit(row),
+				"changed": periodic_paths, "reports": reports}
 		if "push" in department.outward:
 			bundle["actions"].append("push")
 		if "restart" in department.outward and any(path.startswith(prefix)
 				for path in bundle["changed"] for prefix in selected.restart_paths):
 			bundle["actions"].append("restart")
-		bundle["tests"] = _test(selected, tip)
+		bundle["tests"] = (_test(selected, tip, project._folder(identity) / "final-isolation")
+			if test_isolation.requires(str(selected.path)) else _test(selected, tip))
 		implemented = {call["plan"] for task in row["tasks"] for call in Run.load(task["run_id"]).calls
 			if call.get("role") == "implement" and call.get("ok") is True}
-		plans = ai.review_plans(department, exclude=tuple(sorted(implemented)))
+		periodic = row.get("audit_report_mode") == "explicit-v1"
+		if periodic:
+			try:
+				calls = [call for task in row["tasks"] for call in Run.load(task["run_id"]).calls]
+				plans = document_run.independent(flow.role_plans(load_plans(),
+					document_run._configuration(department, private=True), "review"), calls)
+			except (ConfigError, ValueError):
+				plans = []
+		else:
+			plans = ai.review_plans(department, exclude=tuple(sorted(implemented)))
 		if not plans:
 			return _finish(row, bundle, stat, "", "구현에 쓰지 않은 검수 요금제가 없습니다")
 		prompt = (
@@ -159,15 +202,23 @@ def review(identity: str) -> dict:
 			+ "\n시험 결과:\n" + json.dumps(bundle["tests"], ensure_ascii=False))
 		if department.review_skill:
 			prompt += "\n검수 스킬:\n" + skills.load(department.review_skill).body
+		if "periodic" in bundle:
+			prompt += "\n검증된 정기 점검 보고서:\n" + "\n".join(
+				documents.read(identity, item["task"], unique=True).decode("utf-8") for item in bundle["periodic"]["reports"])
 		started = time.monotonic()
 		try:
-			answer = ai.ask(department, prompt, SCHEMA, repo=None, plans=plans)
+			answer = (document_review.periodic_call(identity, department, prompt, SCHEMA, plans) if periodic
+				else ai.ask(department, prompt, SCHEMA, repo=None, plans=plans,
+				**({"caller": private_provider.call}
+					if test_isolation.requires(str(selected.path)) else {})))
 		except RuntimeError as exc:
-			project.add_usage(identity, 1, time.monotonic() - started)
+			if not periodic:
+				project.add_usage(identity, 1, time.monotonic() - started)
 			causes = [cause for cause in ("한도 소진", "로그인 확인 필요", "입력 길이 초과", "네트워크·서버 오류", "시간 초과")
 				if cause in str(exc)]
 			return _finish(row, bundle, stat, "", "검수 판정 호출 실패: " + (" / ".join(causes) or "원인 미분류"))
-		project.add_usage(identity, 1, answer.seconds)
+		if not periodic:
+			project.add_usage(identity, 1, answer.seconds)
 		bundle["reviewer"] = answer.plan_id
 		if not _valid(answer.data, row["spec"]["done_criteria"]):
 			return _finish(row, bundle, stat, "", "검수 판정 형식이 잘못됐습니다")

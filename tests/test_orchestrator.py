@@ -83,6 +83,7 @@ class OrchestratorTest(unittest.TestCase):
 		self.tmp = tempfile.TemporaryDirectory()
 		root = Path(self.tmp.name).resolve()
 		self.home, self.repo, self.vault = root / "hub", root / "repo", root / "vault"
+		self.enterContext(mock.patch("orchestrator.targets.REPO", self.repo))
 		(self.home / "redaction").mkdir(parents=True)
 		(self.home / "redaction" / "dictionary.json").write_text(json.dumps({"entries": [
 			{"value": "acme", "kind": "회사명", "token": "⟦회사명-1⟧"}]}), encoding="utf-8")
@@ -120,6 +121,7 @@ class OrchestratorTest(unittest.TestCase):
 	def approved(self, changes):
 		run = self.new_run()
 		Flow(run, load_plans(), cli.orchestration_config()).prepare()
+		self.assertTrue(run.worktree, run.status)
 		for name, value in changes.items():
 			path = Path(run.worktree) / name
 			if value is None:
@@ -233,6 +235,7 @@ class OrchestratorTest(unittest.TestCase):
 		self.assertEqual(checks.git(self.repo, "diff", "--cached", "--name-only"), "")
 
 	def test_target_trailer_only_for_successful_claude_implementation_and_restart_last_line(self):
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", return_value=False))
 		other = init_repo(self.repo.parent / "other")
 		patch = mock.patch.object(targets, "REPO", other)
 		patch.start()
@@ -407,6 +410,7 @@ class PlanSelectionTest(unittest.TestCase):
 		temporary = tempfile.TemporaryDirectory()
 		self.addCleanup(temporary.cleanup)
 		self.root = Path(temporary.name).resolve()
+		self.enterContext(mock.patch("orchestrator.targets.REPO", self.root))
 		patch = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(self.root / "hub")})
 		patch.start()
 		self.addCleanup(patch.stop)

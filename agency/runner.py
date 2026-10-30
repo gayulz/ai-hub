@@ -8,13 +8,13 @@ from pathlib import Path
 
 from collector.backfill_common import locked, safe
 from collector.config import ConfigError
-from orchestrator import __main__ as orchestration, targets
+from orchestrator import __main__ as orchestration, targets, test_isolation, isolated_inputs
 from orchestrator.branch_apply import apply_to_branch
 from orchestrator.checks import git
 from orchestrator.flow import worktrees_dir
 from orchestrator.record import Run, runs_dir
 
-from . import document_run, documents, inputs, meeting, project, schedule
+from . import document_run, documents, inputs, meeting, project, schedule, periodic_results
 from .departments import load_departments
 
 
@@ -34,6 +34,61 @@ def _validate(request: dict, repo: Path, branch: str, *, document=False) -> None
 		raise ValueError("작업 요청서는 부서의 저장소와 프로젝트 가지를 기준으로 한 코드 작업이어야 합니다")
 
 
+def _task_is_document(row: dict, task: dict, project_document: bool) -> bool:
+	if project_document:
+		return True
+	if not row.get("schedule_repo") or row.get("audit_report_mode") != "explicit-v1":
+		return False
+	path = Path(task["request_path"])
+	if (not path.is_absolute() or not safe(path)
+			or not path.resolve().is_relative_to(project._folder(row["id"]).resolve())):
+		raise ValueError("점검 작업 요청서의 소유 경계가 잘못됐습니다")
+	raw = inputs._read(path, inputs.MAX_OUTPUT)
+	if task.get("request_sha256") != inputs._hash(raw):
+		raise ValueError("점검 작업 요청서가 계획 뒤 바뀌었습니다")
+	try:
+		request = tomllib.loads(raw.decode("utf-8"))["request"]
+		if not isinstance(request, dict):
+			raise ValueError
+		kind = request.get("kind", "code")
+	except (KeyError, TypeError, UnicodeError, tomllib.TOMLDecodeError):
+		raise ValueError("점검 작업 요청서 형식이 잘못됐습니다") from None
+	if kind not in ("analysis", "code"):
+		raise ValueError("점검 작업 종류가 잘못됐습니다")
+	return kind == "analysis"
+
+
+def _verify_report_dependencies(row: dict, task: dict, request: dict) -> None:
+	fields = {key: request[key] for key in ("report_project", "report_task", "report_dependencies") if key in request}
+	if not row.get("schedule_repo") or row.get("audit_report_mode") != "explicit-v1":
+		if fields:
+			raise ValueError("명시되지 않은 보고 의존 관계입니다")
+		return
+	try:
+		project._check_tasks(row["tasks"])
+		if len(set(task["depends_on"])) != len(task["depends_on"]):
+			raise ValueError("선행 보고의 의존 관계가 중복됐습니다")
+		matches = [item for item in row["tasks"] if item["id"] == task["id"]]
+		if len(matches) != 1 or matches[0] != task:
+			raise ValueError
+		reports = []
+		for dependency in task["depends_on"]:
+			previous = next(item for item in row["tasks"] if item["id"] == dependency)
+			if previous["status"] != "완료":
+				raise ValueError
+			if _task_is_document(row, previous, False):
+				document_run.verified_report(row["id"], previous)
+				reports.append(dependency)
+		expected = ({"report_project": row["id"], "report_task": task["id"]}
+			if reports or request.get("report_mode") == "periodic-v1" else {})
+		if reports:
+			expected["report_dependencies"] = reports
+		if fields != expected:
+			raise ValueError
+	except (KeyError, TypeError, StopIteration):
+		raise ValueError("선행 보고의 의존 관계가 잘못됐습니다") from None
+
+
 def _usage(identity: str, execution: Run, previous_usage: dict | None = None) -> Run:
 	# 재개·반영 재시도로 같은 호출을 두 번 청구하지 않는다.
 	with orchestration.locked(execution):
@@ -43,22 +98,25 @@ def _usage(identity: str, execution: Run, previous_usage: dict | None = None) ->
 		if latest.kind == "code" and orchestration.unmeasured_call_time(latest.calls):
 			raise ValueError("실행의 호출 시간을 확인해야 합니다")
 		usage = {"calls": len(latest.calls), "seconds": sum(call.get("seconds", 0) for call in latest.calls)}
-		owner = latest.handoff.get("agency_owner")
-		if owner is not None:
-			if not isinstance(owner, dict) or set(owner) != {"project", "task"} or owner["project"] != identity:
-				raise ValueError("실행 사용량의 프로젝트 소유 관계가 다릅니다")
-			project.settle_run_usage(identity, owner["task"], latest.run_id, usage["calls"], usage["seconds"])
-		elif latest.kind == "analysis":
-			previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
-			project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
+		if latest.request.get("report_mode") == "periodic-v1":
+			documents.settle_periodic_usage(identity, latest)
 		else:
-			row = project.load(identity)
-			matches = [task for task in row["tasks"] if task["run_id"] == latest.run_id]
-			if len(matches) != 1:
-				raise ValueError("실행 사용량의 프로젝트 작업을 확인할 수 없습니다")
-			_request_matches(identity, matches[0], Path(latest.repo), row["branch"], latest)
-			previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
-			project.settle_run_usage(identity, matches[0]["id"], latest.run_id, usage["calls"], usage["seconds"], legacy_previous=previous)
+			owner = latest.handoff.get("agency_owner")
+			if owner is not None:
+				if not isinstance(owner, dict) or set(owner) != {"project", "task"} or owner["project"] != identity:
+					raise ValueError("실행 사용량의 프로젝트 소유 관계가 다릅니다")
+				project.settle_run_usage(identity, owner["task"], latest.run_id, usage["calls"], usage["seconds"])
+			elif latest.kind == "analysis":
+				previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+				project.add_usage(identity, usage["calls"] - previous["calls"], usage["seconds"] - previous["seconds"])
+			else:
+				row = project.load(identity)
+				matches = [task for task in row["tasks"] if task["run_id"] == latest.run_id]
+				if len(matches) != 1:
+					raise ValueError("실행 사용량의 프로젝트 작업을 확인할 수 없습니다")
+				_request_matches(identity, matches[0], Path(latest.repo), row["branch"], latest)
+				previous = previous_usage if previous_usage is not None else latest.handoff.get("agency_usage", {"calls": 0, "seconds": 0})
+				project.settle_run_usage(identity, matches[0]["id"], latest.run_id, usage["calls"], usage["seconds"], legacy_previous=previous)
 		latest.handoff["agency_usage"] = usage
 		latest.save()
 		return latest
@@ -220,12 +278,24 @@ def run(identity: str) -> dict:
 			except inputs.InputError as exc:
 				return _result(project.transition(identity, "막힘", reason=str(exc)))
 		raise ValueError("외부 AI 금지 부서는 문서 실행 호출을 쓸 수 없습니다")
-	repo = project._folder(identity) / "work" if document else targets.target(schedule.target(row, department)).path
+	selected = None if document else targets.target(schedule.target(row, department))
+	repo = project._folder(identity) / "work" if document else selected.path
 	with locked("agency-repo:" + str(repo)):
 		row = project.load(identity)
 		# 작업이 0건이면 아래 '모두 완료' 검사가 참이 되어 빈 프로젝트가 검수로 넘어간다. 상태를 바꾸기 전에 거부한다.
 		if not row["tasks"]:
 			raise ValueError("등록된 작업이 없습니다. 먼저 python3 -m agency plan 으로 계획하세요")
+		missing_inputs = (selected is not None and (selected.id == "blog" or test_isolation.requires(str(selected.path)))
+			and not getattr(selected, "isolated_inputs", ()))
+		if missing_inputs and not all(task["status"] == "완료" for task in row["tasks"]):
+			try:
+				next_task = next((task for task in row["tasks"] if task["status"] == "실행 중"), None)
+				next_task = next_task or next(iter(project.next_ready_tasks(row)), None)
+				is_report = next_task is not None and _task_is_document(row, next_task, document)
+			except (KeyError, OSError, ValueError):
+				is_report = False
+			if not is_report:
+				return _result(project.transition(identity, "막힘", reason="합성 소스와 격리 실행 경로가 준비되지 않았습니다"))
 		if row["status"] == "막힘":
 			row = project.resume(identity)
 		if row["status"] == "계획":
@@ -258,6 +328,15 @@ def run(identity: str) -> dict:
 			head = git(repo, "rev-parse", "HEAD").strip()
 			git(repo, "branch", branch, head)
 			project.set_checkpoint(identity, "branch", head)
+		row = project.load(identity)
+		if not document and row.get("audit_report_mode") == "explicit-v1" and not row.get("audit_base"):
+			tip = git(repo, "rev-parse", "--verify", ref).strip()
+			if tip != git(repo, "rev-parse", "HEAD").strip():
+				return _result(project.transition(identity, "막힘", reason="점검 기준 가지가 본 가지와 다릅니다"))
+			try:
+				project.set_audit_base(identity, branch, tip)
+			except ValueError:
+				return _result(project.transition(identity, "막힘", reason="점검 기준 커밋을 안전하게 고정할 수 없습니다"))
 		while True:
 			row = project.load(identity)
 			if row["status"] != "실행 중":
@@ -278,22 +357,46 @@ def run(identity: str) -> dict:
 				if not ready:
 					return _result(project.transition(identity, "막힘", reason="실행할 수 있는 대기 작업이 없습니다"))
 				task = ready[0]
+				try:
+					task_document = _task_is_document(row, task, document)
+				except (OSError, ValueError):
+					return _result(project.transition(identity, "막힘", reason="점검 작업 요청서를 확인할 수 없습니다"))
+				if missing_inputs and not task_document:
+					return _result(project.transition(identity, "막힘", reason="합성 소스와 격리 실행 경로가 준비되지 않았습니다"))
+				task_repo = project._folder(identity) / "work" if task_document else repo
+				if not task_document or not document:
+					try:
+						_verify_report_dependencies(row, task, orchestration.read_request(task["request_path"])["request"])
+					except (OSError, ValueError):
+						return _result(project.transition(identity, "막힘", reason="선행 보고 또는 의존 관계를 확인할 수 없습니다"))
 				if task["run_id"]:
-					if document:
-						document_run.retry(identity, task, document_run.load(task["run_id"]), repo)
-						_validate(orchestration.read_request(task["request_path"])["request"], repo, branch, document=True)
+					if task_document:
+						document_run.retry(identity, task, document_run.load(task["run_id"]), task_repo)
+						_validate(orchestration.read_request(task["request_path"])["request"], task_repo, branch, document=True)
 					else:
 						_cleanup_previous(identity, task, repo, branch)
 				else:
-					_validate(orchestration.read_request(task["request_path"])["request"], repo, branch, document=document)
+					_validate(orchestration.read_request(task["request_path"])["request"], task_repo, branch, document=task_document)
 					project.update_task(identity, task["id"], status="실행 중", run_id="", commit="")
+				if task_document and not document:
+					try:
+						task = next(item for item in project.load(identity)["tasks"] if item["id"] == task["id"])
+						if not task.get("report_evidence"):
+							anchor = periodic_results.prepare(identity, task, selected,
+								git(repo, "rev-parse", "refs/heads/" + branch).strip())
+							project.update_task(identity, task["id"], report_evidence=anchor)
+							task = next(item for item in project.load(identity)["tasks"] if item["id"] == task["id"])
+						documents.read_evidence(identity, task)
+					except (OSError, ValueError):
+						project.update_task(identity, task["id"], status="대기", run_id="")
+						return _result(project.transition(identity, "막힘", reason="점검 근거를 확인할 수 없습니다"))
 				project.set_checkpoint(identity, "task", task["id"])
 				try:
-					execution = (document_run.start(identity, task, department, repo) if document
+					execution = (document_run.start(identity, task, department, task_repo) if task_document
 						else orchestration.start_run(task["request_path"], on_created=lambda run:
 							_link(identity, task["id"], repo, branch, run)))
 				except (OSError, ValueError, RuntimeError):
-					if not document:
+					if not task_document:
 						raise
 					current = next(item for item in project.load(identity)["tasks"] if item["id"] == task["id"])
 					if not current["run_id"]:
@@ -305,17 +408,34 @@ def run(identity: str) -> dict:
 						for item in project.load(identity)["tasks"]):
 					raise ValueError("새 실행 번호가 프로젝트 작업에 연결되지 않았습니다")
 			else:
-				execution = document_run.load(task["run_id"]) if document else Run.load(task["run_id"])
-				if document:
-					_validate(execution.request, repo, branch, document=True)
-					document_run.check(identity, task, execution, repo)
+				try:
+					task_document = _task_is_document(row, task, document)
+				except (OSError, ValueError):
+					return _result(project.transition(identity, "막힘", reason="점검 작업 요청서를 확인할 수 없습니다"))
+				if missing_inputs and not task_document:
+					return _result(project.transition(identity, "막힘", reason="합성 소스와 격리 실행 경로가 준비되지 않았습니다"))
+				task_repo = project._folder(identity) / "work" if task_document else repo
+				if not task_document or not document:
+					try:
+						_verify_report_dependencies(row, task, orchestration.read_request(task["request_path"])["request"])
+					except (OSError, ValueError):
+						return _result(project.transition(identity, "막힘", reason="선행 보고 또는 의존 관계를 확인할 수 없습니다"))
+				if task_document and not document:
+					try:
+						documents.read_evidence(identity, task)
+					except (OSError, ValueError):
+						return _result(project.transition(identity, "막힘", reason="점검 근거가 바뀌었습니다"))
+				execution = document_run.load(task["run_id"]) if task_document else Run.load(task["run_id"])
+				if task_document:
+					_validate(execution.request, task_repo, branch, document=True)
+					document_run.check(identity, task, execution, task_repo)
 				else:
 					_validate({**execution.request, "repo": execution.repo, "kind": execution.kind}, repo, branch)
 				if execution.status not in ("승인 필요", "완료"):
 					previous_usage = execution.handoff.get("agency_usage")
-					if document:
+					if task_document:
 						try:
-							document_run.resume(identity, task, execution, department, repo)
+							document_run.resume(identity, task, execution, department, task_repo)
 						except inputs.InputError:
 							return _result(project.transition(identity, "막힘", reason="입력 자료 또는 권한을 확인해야 합니다"))
 					else:
@@ -334,18 +454,30 @@ def run(identity: str) -> dict:
 			reason = ""
 			if execution.status in ("승인 필요", "완료"):
 				try:
-					if document:
+					report_seal = None
+					if task_document:
+						if not document:
+							report_seal = documents.recover_report_seal(execution)
 						documents.save(identity, task["id"], execution.document)
 						commit = ""
 					else:
+						current = project.load(identity)
+						if current.get("audit_report_mode") == "explicit-v1":
+							expected = "orch/" + execution.run_id
+							if execution.status == "승인 필요" and execution.branch != expected:
+								raise ValueError("점검 실행 가지가 작업과 다릅니다")
+							candidate_ref = "refs/heads/" + expected if execution.status == "승인 필요" else ref
+							tip = git(repo, "rev-parse", "--verify", candidate_ref).strip()
+							documents.periodic_changed_paths(current, repo, tip)
 						commit = (apply_to_branch(execution.run_id, branch) if execution.status == "승인 필요"
 							else git(repo, "rev-parse", ref).strip())
 				except (RuntimeError, ValueError, OSError) as exc:
-					message = (str(exc) if not document or type(exc) is ValueError else "납품 문서 저장 실패")
+					message = (str(exc) if not task_document or type(exc) is ValueError else "납품 문서 저장 실패")
 					reason = f"작업 {task['id']} 실패: " + message[:200]
 					project.update_task(identity, task["id"], status="실패")
 				else:
-					project.update_task(identity, task["id"], status="완료", commit=commit)
+					options = {"report_seal": report_seal} if report_seal is not None else {}
+					project.update_task(identity, task["id"], status="완료", commit=commit, **options)
 			else:
 				quota = "(한도 소진)" in execution.end_reason
 				project.update_task(identity, task["id"], status="대기" if quota else "실패")

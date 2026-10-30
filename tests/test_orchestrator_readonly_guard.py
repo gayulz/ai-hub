@@ -34,6 +34,7 @@ class ReadonlyGuardTest(unittest.TestCase):
 		patch.start()
 		self.addCleanup(patch.stop)
 		self.plain, self.repo = self.root / "plain", self.root / "repo"
+		self.enterContext(mock.patch("orchestrator.targets.REPO", self.plain))
 		self.plain.mkdir()
 		self.repo.mkdir()
 		(self.repo / ".git").mkdir()

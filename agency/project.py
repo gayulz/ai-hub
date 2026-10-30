@@ -232,9 +232,11 @@ def _check_tasks(tasks: list) -> None:
 		previous.add(task["id"])
 
 
-def add_task(identity: str, title: str, request_path: str, depends_on: list[str] | None = None) -> dict:
+def add_task(identity: str, title: str, request_path: str, depends_on: list[str] | None = None, *, request_sha256=None) -> dict:
 	if not valid_text(title, 200) or not isinstance(request_path, str) or "\x00" in request_path:
 		raise ValueError("작업 제목은 1~200자이고 요청서 경로는 문자열이어야 합니다")
+	if request_sha256 is not None and (not isinstance(request_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", request_sha256)):
+		raise ValueError("요청서 해시 형식이 잘못됐습니다")
 	with _edit(identity, "task_added") as row:
 		folder, path = _folder(identity), Path(request_path)
 		try:
@@ -244,26 +246,54 @@ def add_task(identity: str, title: str, request_path: str, depends_on: list[str]
 			valid = False
 		if not valid:
 			raise ValueError("요청서 절대 경로는 이 프로젝트 폴더 안에 있어야 합니다")
-		row["tasks"].append({"id": f"t{len(row['tasks']) + 1}", "title": title, "request_path": str(resolved),
-			"depends_on": [] if depends_on is None else depends_on, "status": "대기", "run_id": "", "commit": ""})
+		if request_sha256 is not None:
+			from . import inputs
+			if inputs._hash(inputs._read(path, inputs.MAX_OUTPUT)) != request_sha256:
+				raise ValueError("요청서 해시가 다릅니다")
+		task = {"id": f"t{len(row['tasks']) + 1}", "title": title, "request_path": str(resolved),
+			"depends_on": [] if depends_on is None else depends_on, "status": "대기", "run_id": "", "commit": ""}
+		if request_sha256 is not None:
+			task["request_sha256"] = request_sha256
+		row["tasks"].append(task)
 		_check_tasks(row["tasks"])
 	return row
 
 
-def update_task(identity: str, task_id: str, *, status=None, run_id=None, commit=None) -> dict:
+def _report_anchor(value) -> bool:
+	return (isinstance(value, dict) and set(value) == {"version", "sha256"}
+		and type(value["version"]) is int and value["version"] == 1
+		and isinstance(value["sha256"], str) and bool(re.fullmatch(r"[0-9a-f]{64}", value["sha256"])))
+
+
+def update_task(identity: str, task_id: str, *, status=None, run_id=None, commit=None, report_seal=None, report_evidence=None) -> dict:
 	if status is not None and status not in TASK_STATUSES:
 		raise ValueError("작업 상태가 잘못됐습니다")
 	if any(value is not None and (not isinstance(value, str) or "\x00" in value) for value in (run_id, commit)):
 		raise ValueError("작업 실행 식별자와 커밋은 문자열이어야 합니다")
+	if any(value is not None and not _report_anchor(value) for value in (report_seal, report_evidence)):
+		raise ValueError("보고서 검증 기록 형식이 잘못됐습니다")
 	with _edit(identity, "task_updated") as row:
 		if row["checkpoint"]["step"] == "meeting" and (status == "실행 중" or run_id or commit):
 			raise ValueError("회의 결정 전에 작업을 시작할 수 없습니다")
 		task = next((task for task in row["tasks"] if task["id"] == task_id), None)
 		if task is None:
 			raise ValueError("프로젝트에 해당 작업이 없습니다")
+		if report_evidence is not None:
+			if (task["status"] != "실행 중" or task["run_id"] or task.get("report_evidence") not in (None, report_evidence)):
+				raise ValueError("보고 근거는 실행 시작 전 한 번만 고정할 수 있습니다")
+			task["report_evidence"] = dict(report_evidence)
+		if task.get("report_seal") and (report_seal is not None and report_seal != task["report_seal"]
+				or any(value is not None and value != task[key] for key, value in
+					(("status", status), ("run_id", run_id), ("commit", commit)))):
+			raise ValueError("완료된 보고 작업의 검증 기록은 변경할 수 없습니다")
+		if report_seal is not None and (status != "완료" or not _report_anchor(task.get("report_evidence"))
+				or (commit if commit is not None else task["commit"])):
+			raise ValueError("보고서 검증 기록은 커밋 없는 완료 작업에만 둘 수 있습니다")
 		for key, value in (("status", status), ("run_id", run_id), ("commit", commit)):
 			if value is not None:
 				task[key] = value
+		if report_seal is not None:
+			task["report_seal"] = dict(report_seal)
 	return row
 
 
@@ -388,8 +418,50 @@ def settle_run_usage(identity: str, task_id: str, run_id: str, calls: int, secon
 	return row
 
 
+def set_audit_base(identity: str, branch: str, commit: str) -> dict:
+	if not isinstance(commit, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit):
+		raise ValueError("점검 기준 커밋 형식이 잘못됐습니다")
+	with _edit(identity, "audit_base") as row:
+		if (row.get("audit_report_mode") != "explicit-v1" or not row.get("schedule_repo")
+				or row.get("branch") != branch or row["status"] != "실행 중"):
+			raise ValueError("점검 기준 가지의 소유 관계가 잘못됐습니다")
+		previous = row.get("audit_base")
+		if previous and previous != commit:
+			raise ValueError("점검 기준 커밋은 변경할 수 없습니다")
+		if not previous and any(task["status"] != "대기" or task["run_id"] or task["commit"] for task in row["tasks"]):
+			raise ValueError("작업 시작 뒤에는 점검 기준 커밋을 정할 수 없습니다")
+		row["audit_base"] = commit
+	return row
+
+
 def over_budget(project: dict) -> bool:
 	return project["used"]["calls"] > project["budget"]["calls"] or project["used"]["seconds"] > project["budget"]["minutes"] * 60
+
+
+def periodic_file_limit(row: dict) -> int | None:
+	if row.get("audit_report_mode") != "explicit-v1":
+		return None
+	spec = row.get("spec")
+	if not isinstance(spec, dict) or hashlib.sha256(
+			json.dumps(spec, ensure_ascii=False, sort_keys=True).encode()).hexdigest() != row.get("spec_hash"):
+		raise ValueError("확정 명세가 바뀌어 파일 제한을 확인할 수 없습니다")
+	values = [spec.get("goal", ""), spec.get("out_of_scope", ""), *spec.get("done_criteria", [])]
+	if any(not isinstance(value, str) for value in values):
+		raise ValueError("확정 명세의 파일 제한 형식이 잘못됐습니다")
+	limits = []
+	for sentence in re.split(r"[.\n]", "\n".join(values)):
+		if "파일" not in sentence or not any(word in sentence for word in ("이내", "이하", "최대", "제한", "넘지")):
+			continue
+		matches = re.findall(r"(\d+)\s*개\s*(?:(?:코드|소스|시험|테스트)\s*)?파일", sentence)
+		matches += re.findall(r"파일(?:\s*수|은|는|을|이)?\s*(?:최대\s*)?(\d+)\s*개", sentence)
+		if not matches:
+			raise ValueError("명세의 파일 수 제한을 기계적으로 확인할 수 없습니다")
+		limits.extend(int(value) for value in matches)
+	if any(value < 1 or value > 10000 for value in limits):
+		raise ValueError("명세의 파일 수 제한이 잘못됐습니다")
+	if len(set(limits)) > 1:
+		raise ValueError("명세의 여러 파일 수 제한을 전체 한도로 확인할 수 없습니다")
+	return min(limits) if limits else None
 
 
 def add_decision(identity: str, topic: str, chosen: str, rejected: str, assumptions: str, verification: str) -> dict:

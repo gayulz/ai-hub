@@ -19,6 +19,7 @@ class StartLinkTest(unittest.TestCase):
 		temporary = tempfile.TemporaryDirectory()
 		self.addCleanup(temporary.cleanup)
 		root = Path(temporary.name).resolve()
+		self.enterContext(mock.patch("orchestrator.targets.REPO", root))
 		patch = mock.patch.dict(os.environ, {"AI_HUB_HOME": str(root / "hub")})
 		patch.start()
 		self.addCleanup(patch.stop)

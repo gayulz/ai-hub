@@ -16,6 +16,7 @@ class DraftTargetsTest(DraftCase):
 		super().setUp()
 		self.repo = init_repo(self.root / "repo")
 		self.other = init_repo(self.root / "other")
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", return_value=False))
 		patch = mock.patch.object(targets, "REPO", self.repo)
 		patch.start()
 		self.addCleanup(patch.stop)

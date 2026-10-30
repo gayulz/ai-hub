@@ -31,6 +31,7 @@ class RunnerTest(unittest.TestCase):
 		self.hub = self.root / "hub"
 		self.hub.mkdir()
 		self.repo = init_repo(self.root / "repo")
+		self.enterContext(mock.patch("orchestrator.test_isolation.requires", side_effect=lambda path: Path(path).resolve() != self.repo.resolve()))
 		(self.repo / "value.txt").write_text("시작\n", encoding="utf-8")
 		self.git("add", "--", "value.txt")
 		self.git("commit", "-q", "-m", "시작")

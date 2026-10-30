@@ -81,6 +81,8 @@ def prepare(identity, task, target, commit):
 	from orchestrator import isolated_inputs
 	from . import documents
 	base = documents._unverified_evidence(identity, task)
+	if json.loads(base).get("facts"):
+		return documents.prepare_evidence(identity, task)
 	if (documents.evidence_path(identity, task["id"]).exists() or not target.isolated_inputs
 			or not any(item["kind"] == "tests" for item in json.loads(base)["checks"])):
 		return documents.prepare_evidence(identity, task)

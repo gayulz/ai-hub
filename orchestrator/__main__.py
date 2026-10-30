@@ -9,6 +9,7 @@
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
 	python3 -m orchestrator apply <run_id> --onto <가지>  프로젝트 기준 가지에 한 커밋으로 반영한다(push 안 함)
+	반영 시 --keep-worktree 를 지정하면 실행 가지와 작업 폴더를 보존한다.
 
 요청서는 [request] goal·done·owned_paths·forbidden·details·test_command·commit_message·kind·role·base_branch, [budget] calls·minutes·fixes.
 role은 plan·backend·frontend·design 중 하나이며 생략하면 backend다.
@@ -258,7 +259,7 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		return _execute_locked(run)
 
 
-def cmd_apply(run_id: str) -> int:
+def cmd_apply(run_id: str, *, keep_worktree: bool = False) -> int:
 	"""검증을 통과한 변경을 본 저장소에 한 커밋으로 합친다. 사용자 승인 뒤에만 부른다(O3 A)."""
 	run = Run.load(run_id)
 	if run.kind != "code" or run.status != "승인 필요":
@@ -280,13 +281,27 @@ def cmd_apply(run_id: str) -> int:
 		raise RuntimeError(f"합칠 변경이 없거나 충돌했습니다: {(merged.stdout + merged.stderr).strip()[-200:]}")
 	checks.git(run.repo, "commit", "-q", "-m", message)
 	commit = checks.git(run.repo, "rev-parse", "--short", "HEAD").strip()
-	checks.git(run.repo, "worktree", "remove", "--force", run.worktree, check=False)
-	checks.git(run.repo, "branch", "-D", run.branch, check=False)
+	if not keep_worktree:
+		checks.git(run.repo, "worktree", "remove", "--force", run.worktree, check=False)
+		checks.git(run.repo, "branch", "-D", run.branch, check=False)
 	run.finish("완료", f"본 저장소에 반영 {commit}(push 안 함)")
 	finish_outputs(run)
 	if selected and any(path.startswith(prefix) for path in paths for prefix in selected.restart_paths):
 		print("재기동 필요: " + selected.restart_notice)
 	return 0
+
+
+def _apply_branch_keep_worktree(run_id: str, branch: str) -> str:
+	from threading import get_ident
+	from unittest.mock import patch
+	git = checks.git
+	owner = get_ident()
+	def preserve(repo, *args, **kwargs):
+		if get_ident() == owner and args[:2] in (("worktree", "remove"), ("branch", "-D")):
+			return ""
+		return git(repo, *args, **kwargs)
+	with patch.object(checks, "git", side_effect=preserve):
+		return apply_to_branch(run_id, branch)
 
 
 def main(argv: list[str]) -> int:
@@ -309,8 +324,16 @@ def main(argv: list[str]) -> int:
 			return 0
 		if argv[:1] == ["apply"] and len(argv) == 2:
 			return cmd_apply(argv[1])
+		if argv[:1] == ["apply"] and len(argv) == 3 and argv[2] == "--keep-worktree":
+			return cmd_apply(argv[1], keep_worktree=True)
 		if argv[:1] == ["apply"] and len(argv) == 4 and argv[2] == "--onto":
 			print(apply_to_branch(argv[1], argv[3])[:12])
+			return 0
+		if argv[:1] == ["apply"] and len(argv) == 5 and argv[2] == "--onto" and argv[4] == "--keep-worktree":
+			print(_apply_branch_keep_worktree(argv[1], argv[3])[:12])
+			return 0
+		if argv[:1] == ["apply"] and len(argv) == 5 and argv[2:4] == ["--keep-worktree", "--onto"]:
+			print(_apply_branch_keep_worktree(argv[1], argv[4])[:12])
 			return 0
 	except (OSError, ValueError, RuntimeError, KeyError, ConfigError) as exc:
 		print(f"orchestrator 실패: {type(exc).__name__}: {exc}", file=sys.stderr)

@@ -188,7 +188,8 @@ def _replan(identity: str, option: str) -> dict:
 		choice = json.loads(option, object_pairs_hook=unique)
 	except (TypeError, ValueError, RecursionError):
 		raise ValueError("정기 점검 재계획 형식이 잘못됐습니다") from None
-	if not isinstance(choice, dict) or set(choice) != {"project", "reports"} or choice["project"] != identity:
+	if (not isinstance(choice, dict) or set(choice) not in ({"project", "reports"},
+			{"project", "reports", "recover", "facts", "isolation_record"}) or choice["project"] != identity):
 		raise ValueError("재계획 대상이 일치하지 않습니다")
 	reports = choice["reports"]
 	if (not isinstance(reports, dict) or not reports
@@ -196,6 +197,12 @@ def _replan(identity: str, option: str) -> dict:
 				or any(item not in ("tests", "dependencies") for item in value)
 				or len(set(value)) != len(value) for key, value in reports.items())):
 		raise ValueError("보고 작업과 점검 항목을 명시해야 합니다")
+	if "recover" in choice:
+		if (choice["recover"] is not True or any(not isinstance(choice[key], str) or not choice[key]
+				or "\x00" in choice[key] or len(choice[key]) > 2000 for key in ("facts", "isolation_record"))):
+			raise ValueError("복구 사실 또는 격리 기록 경로가 잘못됐습니다")
+		from . import periodic_recovery
+		return periodic_recovery.replan(identity, choice)
 	row = project.load(identity)
 	if (not row.get("schedule_repo") or row.get("audit_report_mode") or row.get("periodic_replan")
 			or row["status"] not in ("계획", "막힘")

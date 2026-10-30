@@ -21,7 +21,8 @@ PERIODIC_REVIEW_GUIDANCE = ("\n보고서가 실행기 근거와 미검증 항목
 def path(identity: str, task_id: str):
 	if not isinstance(task_id, str) or not re.fullmatch(r"t[1-9][0-9]*", task_id):
 		raise ValueError("납품 작업 id 형식이 잘못됐습니다")
-	result = project._folder(identity) / "deliverables" / (task_id + ".md")
+	from . import periodic_recovery
+	result = periodic_recovery.output_base(identity) / "deliverables" / (task_id + ".md")
 	if not safe(result):
 		raise ValueError("납품 문서에 심볼릭 링크를 사용할 수 없습니다")
 	return result
@@ -67,6 +68,9 @@ def save(identity: str, task_id: str, text: str) -> str:
 	return str(file)
 
 def manifest(row: dict) -> list[dict]:
+	if (row.get("periodic_recovery") and row.get("status") == "검수"
+			and any((project._folder(row["id"]) / name).exists() for name in ("report.md", "delivery.json"))):
+		raise ValueError("기존 최종 검수 또는 납품 기록을 덮어쓸 수 없습니다")
 	items = []
 	for task in row["tasks"]:
 		content = read(row["id"], task["id"])
@@ -151,7 +155,8 @@ def unchanged_repo(row: dict, department):
 def evidence_path(identity: str, task_id: str) -> Path:
 	if not isinstance(task_id, str) or not re.fullmatch(r"t[1-9][0-9]*", task_id):
 		raise ValueError("점검 작업 id 형식이 잘못됐습니다")
-	result = project._folder(identity) / "evidence" / (task_id + ".json")
+	from . import periodic_recovery
+	result = periodic_recovery.output_base(identity) / "evidence" / (task_id + ".json")
 	if not safe(result):
 		raise ValueError("점검 근거에 심볼릭 링크를 사용할 수 없습니다")
 	return result
@@ -175,6 +180,9 @@ def _unverified_evidence(identity: str, task: dict) -> bytes:
 			raise ValueError
 		value = {"version": 1, "project": identity, "task": task["id"], "request_sha256": inputs._hash(raw),
 			"checks": [{"kind": item, "status": "unverified", "reason": "source_unavailable"} for item in checks]}
+		from . import periodic_recovery
+		if facts := periodic_recovery.facts_for_task(identity, task, request):
+			value["facts"] = facts
 		dependencies = request.get("report_dependencies", [])
 		if not isinstance(dependencies, list) or any(not isinstance(item, str) for item in dependencies):
 			raise ValueError
@@ -480,8 +488,10 @@ def render_evidence(evidence: dict) -> str:
 		raise ValueError("선행 보고 근거를 확인할 수 없습니다")
 	lines = ["# 정기 점검 보고서", "", "## 근거", "",
 		"- 요청된 점검: " + ", ".join(labels[item["kind"]] + " 점검" for item in checks), "", "## 미검증", ""]
-	lines += [("- 시험: 합성 부분 시험만 실행해 전체 시험은 미검증입니다." if item["kind"] == "tests" and evidence.get("synthetic_test") else
+	lines += [("- 시험: 합성 부분 시험만 실행해 전체 시험은 미검증입니다." if item["kind"] == "tests" and (evidence.get("synthetic_test") or evidence.get("facts", {}).get("partial")) else
+		"- 의존성: 직접 선언을 대조했으며 전이 의존성·보안 공지·지원 상태는 미검증입니다." if item["kind"] == "dependencies" and evidence.get("facts", {}).get("dependencies") else
 		"- " + labels[item["kind"]] + ": 안전한 자료와 격리 실행 근거가 없어 실행하지 않았습니다.") for item in checks]
 	for item in dependencies:
 		lines += ["", "## 선행 보고 " + item["task"], "", item["document"].rstrip()]
-	return "\n".join(lines) + periodic_results.summary(evidence) + "\n"
+	from . import periodic_facts
+	return "\n".join(lines) + periodic_results.summary(evidence) + (periodic_facts.summary(evidence["facts"]) if evidence.get("facts") else "") + "\n"

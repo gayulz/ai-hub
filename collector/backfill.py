@@ -9,6 +9,8 @@ import time
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import getproxies, proxy_bypass
 
 from . import backfill_agy as agy
 from . import backfill_output as output
@@ -125,7 +127,7 @@ def prepare_repo(store, bid, task, scope, sources, repo):
 	return output.result(sources, task, rel, body, "commits")
 
 
-def summarize_session(store, bid, task, session, plans, failed, *, local=None, prompts=None):
+def summarize_session(store, bid, task, session, plans, failed, *, local=None, prompts=None, loopback_only=False):
 	if plans is None:
 		return None, "사용 가능한 요금제 없음"
 	if prompts is None:
@@ -148,6 +150,11 @@ def summarize_session(store, bid, task, session, plans, failed, *, local=None, p
 		reason = "사용 가능한 요금제 없음 또는 이전 호출 실패로 보류"
 		for pid in routing:
 			plan = plans.plans[pid]
+			if loopback_only:
+				address = urlsplit(plan.url)
+				if (plan.tool != "ollama" or address.hostname not in ("localhost", "127.0.0.1", "::1")
+						or getproxies().get(address.scheme) and not proxy_bypass(address.netloc)):
+					continue
 			if local is not None and (plan.tool == "ollama") != local:
 				continue
 			if pid in failed or pid in attempted or task["cls"] not in plan.allow:
@@ -198,7 +205,7 @@ def cached_session(store, task, bid=""):
 	return None
 
 
-def prepare_session(store, bid, task, sources, repo, plans, until, failed):
+def prepare_session(store, bid, task, sources, repo, plans, until, failed, company_local=False):
 	session = sessions.load(task)
 	path = vault.daily_path(sources.vault, repo.cls, date.fromisoformat(task["day"]))
 	rel = path.relative_to(sources.vault).as_posix()
@@ -215,7 +222,9 @@ def prepare_session(store, bid, task, sources, repo, plans, until, failed):
 	if matched:
 		summary, method, used, models = matched["summary"], "codex-summary", [], ["기존 요약, 모델 미확인"]
 	else:
-		parts, reason = summarize_session(store, bid, task, session, plans, failed)
+		parts, reason = summarize_session(store, bid, task, session, plans, failed,
+			local=True if company_local and repo.cls == "company" else None,
+			loopback_only=company_local and repo.cls == "company")
 		if parts is None:
 			return None, reason
 		summary = "\n".join(p["summary"] for p in parts)
@@ -228,7 +237,7 @@ def prepare_session(store, bid, task, sources, repo, plans, until, failed):
 		original_missing=sessions.original_missing(task)), ""
 
 
-def prepare(store, bid, sources, repo, plans):
+def prepare(store, bid, sources, repo, plans, company_local=False):
 	batch = store.batch(bid)
 	scope = store.scope(batch["scope"])
 	until = datetime.fromisoformat(scope["until"])
@@ -261,7 +270,7 @@ def prepare(store, bid, sources, repo, plans):
 			if not reason:
 				store.save(bid, task, "processing")
 				if task["type"] == "session":
-					prepared, reason = prepare_session(store, bid, task, sources, repo, plans, until, failed)
+					prepared, reason = prepare_session(store, bid, task, sources, repo, plans, until, failed, company_local)
 				else:
 					prepared = prepare_repo(store, bid, task, scope, sources, repo)
 				if not reason:
@@ -279,7 +288,7 @@ def prepare(store, bid, sources, repo, plans):
 	else:
 		state = "prepared" if states & {"prepared", "existing"} else "held"
 	store.state(bid, state)
-	output.report(store, bid, sources)
+	output.report(store, bid, sources, counts_only=company_local and repo.cls == "company")
 
 
 def recorded(store, task) -> bool:
@@ -329,7 +338,7 @@ def supersede(store, pid, kind):
 
 
 def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=None, apply=None,
-		compare=None, count=20) -> int:
+		compare=None, count=20, daily=False) -> int:
 	if compare:
 		from .backfill_compare import execute as compare_execute
 		return compare_execute(compare, count, dry_run=dry_run)
@@ -360,6 +369,8 @@ def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=Non
 					from .backfill_compare import prepare as compare_prepare
 					return compare_prepare(store, bid, sources, repo, plans)
 				if apply:
+					if daily and repo.cls == "company":
+						raise ConfigError("회사 묶음은 사용자 승인으로만 반영합니다")
 					for item in store.items(bid):
 						if item["state"] not in ("prepared", "existing"):
 							continue
@@ -368,7 +379,10 @@ def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=Non
 							raise ConfigError(reason)
 					output.apply_batch(store, bid, sources, repo)
 				else:
-					prepare(store, bid, sources, repo, plans)
+					daily_rows = store.rows("c4_daily", "project=? and (batch=? or batch is null)", (scope["project"], bid))
+					rowid = store.conn.execute("select rowid from c4_batches where id=?", (bid,)).fetchone()[0]
+					company_local = daily or any(row["batch"] == bid or row["baseline"] < rowid for row in daily_rows)
+					prepare(store, bid, sources, repo, plans, company_local=company_local)
 				return 0
 			repo = project(sources, project_id)
 			start = since or DEFAULT_SINCE
@@ -380,32 +394,45 @@ def execute(*, project_id=None, kind=None, since=None, dry_run=False, resume=Non
 			if scopes:
 				scope = store.scope(scopes[0]["id"])
 				open_batches = store.rows("c4_batches", "scope=? and state in ('pending','prepared','held') order by rowid", (scope["id"],))
+				if daily:
+					open_batches = [b for b in open_batches if b["state"] != "held"]
 				if open_batches:
-					output.report(store, open_batches[0]["id"], sources)
+					output.report(store, open_batches[0]["id"], sources, counts_only=daily and repo.cls == "company")
 					return 0
 			else:
 				supersede(store, project_id, kind)
 				until = now()
 				data = inventory(repo, sources, kind, start, until)
 				if kind == "sessions":
-					path, count = agy.report(data.pop("agy"), sources, str(start), until.isoformat(), write=True)
+					path, count = agy.report(data.pop("agy"), sources, str(start), until.isoformat(), write=not daily)
 					print(f"AGY {count}개 전부 보류 · 보고서: {path}")
 					data["agy_count"] = count
 				scope = store.create_scope(project_id, kind, str(start), until.isoformat(), fingerprint, data)
 			tasks = choose_tasks(store, scope, plans.backfill_batch_size if plans else 10)
+			if daily and kind == "sessions" and not tasks:
+				until = now()
+				data = inventory(repo, sources, kind, start, until)
+				seen = {(r["key"], r["hash"]) for r in store.conn.execute(
+					"select i.key,i.hash from c4_items i join c4_batches b on b.id=i.batch "
+					"join c4_scopes s on s.id=b.scope where s.project=? and s.kind='sessions'", (project_id,))}
+				data["tasks"] = [t for t in data["tasks"] if (t["key"], t["hash"]) not in seen]
+				if data["tasks"]:
+					_, data["agy_count"] = agy.report(data.pop("agy"), sources, str(start), until.isoformat(), write=False)
+					scope = store.create_scope(project_id, kind, str(start), until.isoformat(), fingerprint, data)
+					tasks = choose_tasks(store, scope, plans.backfill_batch_size if plans else 10)
 			if not tasks:
 				batches = store.rows("c4_batches", "scope=? order by rowid desc", (scope["id"],))
 				if batches:
-					if output.audit_batch(store, batches[0]["id"], sources):
+					if not daily and output.audit_batch(store, batches[0]["id"], sources):
 						prepare(store, batches[0]["id"], sources, repo, plans)
 					else:
-						output.report(store, batches[0]["id"], sources)
+						output.report(store, batches[0]["id"], sources, counts_only=daily and repo.cls == "company")
 				print("고정 목록의 다음 묶음이 없습니다. 보류·미분류는 별도 확인이 필요합니다")
 				for entry in scope["data"].get("deferred", []):
 					print(f"목록 보류 {entry['id']}: {entry['reason']}")
 				return 0
 			bid = store.create_batch(scope, tasks, numbered(home() / "backfill", "backfill-result"))
-			prepare(store, bid, sources, repo, plans)
+			prepare(store, bid, sources, repo, plans, company_local=daily)
 			return 0
 	finally:
 		with_store.close()

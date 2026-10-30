@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date
+import os
 from pathlib import Path
+import tempfile
 
 from . import vault, work_records
 from .backfill_common import child, clean, locked, now, private_write, sha
@@ -45,11 +47,25 @@ def audit_batch(store, bid: str, sources: Sources) -> list[str]:
 	return missing
 
 
-def report(store, bid: str, sources: Sources, *, write: bool = True) -> str:
+def report(store, bid: str, sources: Sources, *, write: bool = True, counts_only: bool = False) -> str:
 	batch = store.batch(bid)
 	scope = store.scope(batch["scope"])
 	items = store.items(bid)
 	counts = Counter(item["state"] for item in items)
+	if counts_only:
+		text = (f"# 대화 기록 정리\n\n준비 {counts['prepared']}건 · 기존 {counts['existing']}건 · "
+			f"반영 {counts['applied']}건 · 보류 {counts['held']}건\n")
+		path = Path(batch["report"])
+		if write and not path.exists():
+			path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+			with tempfile.TemporaryDirectory(prefix=".c4-report-", dir=path.parent) as folder:
+				prepared = Path(folder) / "report"
+				private_write(prepared, text)
+				try:
+					os.link(prepared, path)
+				except FileExistsError:
+					pass
+		return str(path)
 	methods = Counter(i["data"].get("result", {}).get("method", "보류") for i in items)
 	calls = store.rows("c4_calls", "batch=?", (bid,))
 	local = sum(bool(c.get("local", 0)) for c in calls)

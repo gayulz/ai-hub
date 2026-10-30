@@ -55,6 +55,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 		runner.run(since)
 		summary = ", ".join(f"{k}={v}" for k, v in sorted(runner.counts.items()))
 		print(f"{'[dry-run] ' if args.dry_run else ''}기간 {since}~ · {summary or '변화 없음'}")
+		if not args.dry_run:
+			from .backfill_daily import run as daily_backfill
+			try:
+				daily_backfill(sources)
+			except Exception as exc:
+				print(f"대화 소급 일일 작업 실패: {type(exc).__name__}")
 		if args.dry_run and runner.excluded_titles:
 			print("AGY 자동 호출로 제외한 대화(제목만, 확인 필요):")
 			for title in runner.excluded_titles:

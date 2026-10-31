@@ -106,7 +106,9 @@ def check_git_safety(target, commit, worktree=None, *, read_only=False):
 			path = Path(checks.git(root, "rev-parse", "--git-path", "hooks/" + name).strip())
 			path = path if path.is_absolute() else root / path
 			if not read_only and os.access(path, os.X_OK):
-				raise ValueError("격리할 수 없는 Git 커밋 훅이 있어 실행하지 않습니다")
+				from .isolated_commit import approved_hook
+				if name != "pre-commit" or not approved_hook(path):
+					raise ValueError("격리할 수 없는 Git 커밋 훅이 있어 실행하지 않습니다")
 		for key in ("core.fsmonitor", "commit.gpgsign"):
 			value = checks.git(root, "config", "--get", key, check=False).strip().lower()
 			if value and value not in ("false", "no", "off", "0"):

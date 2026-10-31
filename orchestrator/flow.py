@@ -15,7 +15,7 @@ from pathlib import Path
 
 from collector.config import Plan, Plans, run_dir
 
-from . import checks, prompts, test_isolation, isolated_inputs
+from . import checks, prompts, test_isolation, isolated_inputs, isolated_commit
 from .providers import ProviderError, call
 from .record import Run, now
 
@@ -207,12 +207,16 @@ class Flow:
 			r.handoff = {key: data.get(key) for key in keys}
 			r.handoff.update(protected)
 			try:
-				_, outside = checks.commit_owned(Path(r.worktree), r.request.get("owned_paths", []),
-					f"orchestrator {r.run_id} 시도 {r.fixes + 1}")
+				message = f"orchestrator {r.run_id} 시도 {r.fixes + 1}"
+				if test_isolation.requires(r.repo):
+					_, outside = isolated_commit.commit_owned_isolated(Path(r.worktree), r.request.get("owned_paths", []), message, Path(r.repo))
+				else:
+					_, outside = checks.commit_owned(Path(r.worktree), r.request.get("owned_paths", []), message)
 			except checks.CommitRejected as exc:
 				r.open_findings = [{"id": "commit", "severity": "blocker", "file": "", "line": 0,
 					"problem": "작업 가지 커밋이 대상 저장소의 커밋 전 검사에 막혔습니다", "evidence": str(exc),
-					"suggestion": "검사 출력대로 고쳐 커밋이 통과하게 한다"}]
+					"suggestion": ("변경 내용을 확인하고 커밋 전 검사를 통과하게 한다" if test_isolation.requires(r.repo)
+						else "검사 출력대로 고쳐 커밋이 통과하게 한다")}]
 				r.event("commit_rejected", attempt=r.fixes)
 				return False
 			r.handoff["outside_paths"] = outside

@@ -64,6 +64,77 @@ class InputsTest(unittest.TestCase):
 			result = isolated_inputs.run(self.repo, self.root / "evidence")
 		self.assertFalse(result["ok"])
 		backend.assert_not_called()
+		unregistered = init_repo(self.root / "unregistered")
+		with mock.patch.object(test_isolation, "run_isolated") as backend:
+			result = isolated_inputs.run(unregistered, self.root / "evidence")
+		self.assertFalse(result["ok"])
+		backend.assert_not_called()
+
+	def test_test_inputs_and_worktree_accept_ten_mib_and_reject_more(self):
+		first = b"a" * (4 * 1024 * 1024)
+		second = b"b" * (6 * 1024 * 1024)
+		(self.repo / self.paths[0]).write_bytes(first)
+		(self.repo / self.paths[1]).write_bytes(second)
+		checks.git(self.repo, "add", "--", *self.paths)
+		checks.git(self.repo, "commit", "-qm", "합성 크기 경계")
+		commit = checks.git(self.repo, "rev-parse", "HEAD").strip()
+		target = targets.target("sample")
+		files = isolated_inputs.snapshot(target)
+		self.assertEqual(files, isolated_inputs.snapshot(target, commit=commit))
+		self.assertEqual([item.sha256 for item in files], [test_isolation.digest(first), test_isolation.digest(second)])
+		outcome = {"ok": True, "reason": "합성 통과", "executed": True, "unverified": 0}
+		with mock.patch.object(isolated_inputs, "policy", return_value=("policy", ("python", "-m", "unittest"))) as policy, \
+				mock.patch.object(test_isolation, "run_isolated", return_value=outcome) as backend:
+			result = isolated_inputs.run(self.repo, self.root / "evidence", commit=commit)
+		self.assertTrue(result["ok"])
+		self.assertEqual(policy.call_args.args[1], files)
+		backend.assert_called_once()
+		worktree = self.root / "large-worktree"
+		isolated_inputs.create_worktree(self.repo, worktree, commit)
+		self.assertEqual((worktree / self.paths[0]).read_bytes(), first)
+		self.assertEqual((worktree / self.paths[1]).read_bytes(), second)
+		self.assertFalse((worktree / "unapproved.txt").exists())
+		(self.repo / self.paths[1]).write_bytes(second + b"b")
+		with self.assertRaises(ValueError):
+			isolated_inputs.snapshot(target)
+		checks.git(self.repo, "add", "--", self.paths[1])
+		checks.git(self.repo, "commit", "-qm", "합성 한도 초과")
+		over = checks.git(self.repo, "rev-parse", "HEAD").strip()
+		with self.assertRaises(ValueError):
+			isolated_inputs.snapshot(target, commit=over)
+		with mock.patch.object(test_isolation, "run_isolated") as backend:
+			result = isolated_inputs.run(self.repo, self.root / "evidence", commit=over)
+		self.assertFalse(result["ok"])
+		backend.assert_not_called()
+		with self.assertRaises(ValueError):
+			isolated_inputs.create_worktree(self.repo, self.root / "too-large", over)
+		self.assertFalse((self.root / "too-large").exists())
+
+	def test_ai_injection_keeps_two_mib_limit_and_excludes_test_inputs(self):
+		(self.repo / self.paths[0]).write_text("a" * (2 * 1024 * 1024))
+		(self.repo / self.paths[1]).write_text("TEST_ONLY_SENTINEL" * 200000)
+		caller = mock.Mock(return_value="synthetic")
+		isolated_inputs.call(caller, None, True, "합성", self.repo, {}, 30, self.repo, owned_paths=[self.paths[0]])
+		self.assertNotIn("TEST_ONLY_SENTINEL", caller.call_args.args[2])
+		(self.repo / self.paths[0]).write_text("a" * (2 * 1024 * 1024 + 1))
+		caller.reset_mock()
+		with self.assertRaises(ValueError):
+			isolated_inputs.call(caller, None, True, "합성", self.repo, {}, 30, self.repo, owned_paths=[self.paths[0]])
+		caller.assert_not_called()
+
+	def test_edits_keep_two_mib_total_limit_without_partial_writes(self):
+		worktree = self.root / "size-edits"
+		isolated_inputs.create_worktree(self.repo, worktree, self.base)
+		request = {"owned_paths": self.paths}
+		edits = [{"path": self.paths[0], "content": "a" * (1024 * 1024)},
+			{"path": self.paths[1], "content": "b" * (1024 * 1024)}]
+		isolated_inputs.write_edits(worktree, request, edits, self.repo)
+		self.assertEqual((worktree / self.paths[0]).read_text(), edits[0]["content"])
+		edits[0]["content"] = "changed"
+		edits[1]["content"] = "b" * (2 * 1024 * 1024)
+		with self.assertRaises(ValueError):
+			isolated_inputs.write_edits(worktree, request, edits, self.repo)
+		self.assertEqual((worktree / self.paths[0]).read_text(), "a" * (1024 * 1024))
 
 	def test_flow_verify_automatically_uses_registered_inputs(self):
 		run = Run("synthetic-run", {"goal": "합성", "owned_paths": ["logic.py"]}, str(self.repo),

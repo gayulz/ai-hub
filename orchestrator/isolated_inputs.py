@@ -17,6 +17,7 @@ from collector.config import ConfigError
 from . import checks, prompts, providers, targets, test_isolation
 
 MAX_BYTES = 2 * 1024 * 1024
+MAX_TEST_INPUT_BYTES = 10 * 1024 * 1024
 
 
 def valid_path(name):
@@ -44,7 +45,7 @@ def ready(repo):
 		return False
 
 
-def snapshot(target, root=None, *, commit=None, missing=False):
+def snapshot(target, root=None, *, commit=None, missing=False, max_bytes=MAX_TEST_INPUT_BYTES):
 	files, total = [], 0
 	for name in target.isolated_inputs:
 		if not valid_path(name):
@@ -56,6 +57,9 @@ def snapshot(target, root=None, *, commit=None, missing=False):
 				continue
 			if mode not in ("100644", "100755"):
 				raise ValueError("격리 입력은 일반 파일이어야 합니다")
+			size = int(checks.git(target.path, "cat-file", "-s", commit + ":" + name).strip())
+			if total + size > max_bytes:
+				raise ValueError("격리 입력 크기가 한도를 넘었습니다")
 			proc = subprocess.run(["git", "-C", str(target.path), "show", commit + ":" + name], capture_output=True, check=True)
 			data = proc.stdout
 		else:
@@ -70,9 +74,9 @@ def snapshot(target, root=None, *, commit=None, missing=False):
 				info = os.fstat(stream.fileno())
 				if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
 					raise ValueError("격리 입력은 링크 없는 일반 파일이어야 합니다")
-				data = stream.read(MAX_BYTES + 1)
+				data = stream.read(max_bytes - total + 1)
 		total += len(data)
-		if total > MAX_BYTES:
+		if total > max_bytes:
 			raise ValueError("격리 입력 크기가 한도를 넘었습니다")
 		files.append(test_isolation.SyntheticFile(name, data, test_isolation.digest(data), "approved-input-v1"))
 	if not files:
@@ -241,7 +245,7 @@ def call(caller, plan, writer, prompt, worktree, schema, timeout, repo, *, revie
 			check_worktree(target, worktree)
 	if not review:
 		names = tuple(name for name in target.isolated_inputs if checks.owned(name, owned_paths))
-		files = snapshot(replace(target, isolated_inputs=names), worktree, missing=True) if names else ()
+		files = snapshot(replace(target, isolated_inputs=names), worktree, missing=True, max_bytes=MAX_BYTES) if names else ()
 		if files:
 			from vaultfilter.public import Rules
 			from .draft import safe_text

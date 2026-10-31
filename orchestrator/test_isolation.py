@@ -160,8 +160,11 @@ def profile(boundary: dict, work: Path, scratch: Path) -> str:
 		"(allow file-read* file-write* (subpath " + _quote(str(scratch)) + "))",
 		'(allow file-read* file-write-data (literal "/dev/null"))',
 		'(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))']
+	timezones = (Path("/usr/share/zoneinfo"), Path("/private/var/db/timezone"), Path("/var/db/timezone"))
+	for path in timezones:
+		lines.append("(allow file-read* (subpath " + _quote(str(path)) + "))")
 	metadata = [work, scratch, Path(boundary["python_root"]), Path("/usr/lib"), Path("/System/Library"),
-		Path("/dev"), Path("/opt/homebrew/opt"), *(Path(path).parent for path in boundary["reads"])]
+		Path("/dev"), Path("/opt/homebrew/opt"), *timezones, *(Path(path).parent for path in boundary["reads"])]
 	for path in metadata:
 		lines.append("(allow file-read-metadata (subpath " + _quote(str(path))
 			+ ") (path-ancestors " + _quote(str(path)) + "))")

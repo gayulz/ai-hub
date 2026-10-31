@@ -42,9 +42,10 @@ def worktrees_dir() -> Path:
 
 
 class Flow:
-	def __init__(self, run: Run, plans: Plans, orchestration: dict, caller=None):
+	def __init__(self, run: Run, plans: Plans, orchestration: dict, caller=None, external_review=None):
 		self.run, self.plans, self.orchestration = run, plans, orchestration
 		self.caller = caller or call
+		self.external_review = external_review
 		self.started = time.monotonic()
 
 	def save(self) -> None:
@@ -279,7 +280,12 @@ class Flow:
 			r.finish("실패", "구현 담당이 아무것도 만들지 않았습니다")
 			return
 		prompt, reports = self._report_context(prompts.review(r.request, r.kind, material, r.checks))
-		data = self._review_answer(prompt)
+		if self.external_review is None:
+			data = self._review_answer(prompt)
+		else:
+			from . import review_evidence
+			data, evidence_sha, diff_sha = review_evidence.validate(self.external_review, r, material)
+			r.event("external_review", source="agy-text", reviewer=self.external_review[0]["reviewer"], evidence_sha256=evidence_sha, diff_sha256=diff_sha)
 		if data is None:
 			return
 		if r.handoff.get("reverify_commit") and test_isolation.requires(r.repo):

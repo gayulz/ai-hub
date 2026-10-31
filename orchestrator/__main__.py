@@ -5,7 +5,7 @@
 	python3 -m orchestrator draft --role <역할> --target <대상> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
 	python3 -m orchestrator meeting --help               읽기 전용 회의(분석·확인·문답·재개)
 	python3 -m orchestrator chat plans                  읽기 전용 PM 대화(요금제·새 대화·전송·문답·종료)
-	python3 -m orchestrator resume <run_id> [--reverify] [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
+	python3 -m orchestrator resume <run_id> [--reverify] [--review-evidence FILE] [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
 	python3 -m orchestrator apply <run_id> --onto <가지>  프로젝트 기준 가지에 한 커밋으로 반영한다(push 안 함)
@@ -167,8 +167,10 @@ def execute(run: Run) -> int:
 		return _execute_locked(run)
 
 
-def _execute_locked(run: Run) -> int:
-	Flow(run, load_plans(), orchestration_config()).run_all()
+def _execute_locked(run: Run, external_review=None) -> int:
+	flow = (Flow(run, load_plans(), orchestration_config(), external_review=external_review) if external_review is not None
+		else Flow(run, load_plans(), orchestration_config()))
+	flow.run_all()
 	finish_outputs(run)
 	return 0 if run.status in ("승인 필요", "완료") else 1
 
@@ -245,6 +247,14 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		if ("agency_owner" in run.handoff or isinstance(run.request.get("base_branch"), str)
 				and run.request["base_branch"].startswith("agency/p-")) and unmeasured_call_time(run.calls):
 			raise RuntimeError("중단된 호출의 사용 시간을 확인하기 전에는 재개할 수 없습니다")
+		external_review = None
+		if "--review-evidence" in options:
+			from . import review_evidence
+			index = options.index("--review-evidence")
+			if options.count("--review-evidence") != 1 or index + 1 >= len(options) or "--reverify" in options or run.step != "review":
+				raise ValueError("검토 근거 입력 옵션이 잘못됐습니다")
+			external_review = review_evidence.load(options[index + 1])
+			options = options[:index] + options[index + 2:]
 		reverify = "--reverify" in options
 		if reverify:
 			if options.count("--reverify") != 1 or run.kind != "code" or run.step != "review" or checks.checks_passed(run.checks):
@@ -267,7 +277,7 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		run.status, run.end_reason = "작업 중", ""
 		run.event("resume", budget=run.budget)
 		run.save()
-		return _execute_locked(run)
+		return _execute_locked(run, external_review) if external_review is not None else _execute_locked(run)
 
 
 def cmd_apply(run_id: str, *, keep_worktree: bool = False) -> int:

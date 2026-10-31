@@ -23,6 +23,8 @@ class InputsTest(unittest.TestCase):
 		self.root = Path(temporary.name).resolve()
 		self.hub = self.root / "hub"
 		self.hub.mkdir()
+		(self.hub / "redaction").mkdir()
+		(self.hub / "redaction" / "dictionary.json").write_text(json.dumps({"entries": [{"value": "SYNTHETIC_NEVER_MATCH_5327", "kind": "회사명"}]}))
 		self.repo = init_repo(self.root / "repo")
 		(self.repo / "tests").mkdir()
 		(self.repo / "logic.py").write_text("VALUE = 1\n")
@@ -150,6 +152,92 @@ class InputsTest(unittest.TestCase):
 		self.assertFalse(any(call.args[1:3] == ("worktree", "add") for call in git.call_args_list))
 		self.assertEqual(checks.git(self.repo, "rev-list", "--parents", "-n", "1", merge).split()[1:], [self.base, tip])
 
+	def test_full_checkout_uses_only_selected_commit_blobs_for_testing(self):
+		worktree = self.root / "legacy"
+		checks.git(self.repo, "worktree", "add", "--detach", str(worktree), self.base)
+		self.assertTrue((worktree / "unapproved.txt").exists())
+		captured = []
+		def policy(target, files):
+			captured.extend(files)
+			return "policy", ("python", "-m", "unittest")
+		outcome = {"ok": True, "reason": "합성 통과", "executed": True, "unverified": 0,
+			"tests": {"ran": 1, "failures": 0, "errors": 0, "skipped": 0}}
+		with mock.patch.object(isolated_inputs, "policy", side_effect=policy), \
+				mock.patch.object(test_isolation, "run_isolated", return_value=outcome):
+			result = isolated_inputs.run(self.repo, self.root / "evidence", root=worktree, commit=self.base)
+		self.assertTrue(result["ok"])
+		self.assertEqual({item.name for item in captured}, set(self.paths))
+		self.assertTrue((worktree / "unapproved.txt").exists())
+		(worktree / "logic.py").write_text("changed outside commit\n")
+		with mock.patch.object(test_isolation, "run_isolated") as backend:
+			result = isolated_inputs.run(self.repo, self.root / "evidence", root=worktree, commit=self.base)
+		self.assertFalse(result["ok"])
+		backend.assert_not_called()
+
+	def test_read_only_commit_snapshot_does_not_run_commit_hooks(self):
+		marker = self.root / "synthetic-hook-ran"
+		hook = self.repo / ".git/hooks/pre-commit"
+		hook.write_text("#!/bin/sh\nprintf ran > " + str(marker) + "\n")
+		hook.chmod(0o700)
+		isolated_inputs.verify_commit(self.repo, self.repo, self.base)
+		self.assertFalse(marker.exists())
+		with self.assertRaises(ValueError):
+			isolated_inputs.check_git_safety(targets.target("sample"), self.base)
+
+	def test_commit_verification_rejects_dirty_or_changed_worktree(self):
+		self.assertEqual(isolated_inputs.verify_commit(self.repo, self.repo, self.base).id, "sample")
+		(self.repo / "logic.py").write_text("VALUE = 2\n")
+		with self.assertRaises(ValueError):
+			isolated_inputs.verify_commit(self.repo, self.repo, self.base)
+		checks.git(self.repo, "add", "--", "logic.py")
+		checks.git(self.repo, "commit", "-qm", "합성 변경")
+		with self.assertRaises(ValueError):
+			isolated_inputs.verify_commit(self.repo, self.repo, self.base)
+
+	def test_commit_verify_uses_snapshot_and_rejects_out_of_scope(self):
+		(self.repo / "logic.py").write_text("VALUE = 2\n")
+		checks.git(self.repo, "add", "--", "logic.py")
+		checks.git(self.repo, "commit", "-qm", "합성 변경")
+		tip = checks.git(self.repo, "rev-parse", "HEAD").strip()
+		result = {"name": "테스트", "ok": True, "detail": "합성 시험"}
+		with mock.patch.object(isolated_inputs, "run", return_value=result) as backend:
+			actual = checks.verify(self.repo, self.base, {"owned_paths": ["logic.py"]}, [],
+				isolated=True, repo=self.repo, evidence_dir=self.root / "evidence", commit=tip)
+		backend.assert_called_once_with(self.repo, self.root / "evidence", root=self.repo, commit=tip)
+		self.assertTrue(checks.checks_passed(actual))
+		with self.assertRaises(ValueError):
+			checks.verify(self.repo, self.base, {"owned_paths": ["tests/*"]}, [],
+				isolated=True, repo=self.repo, evidence_dir=self.root / "evidence", commit=tip)
+
+	def test_review_sends_diff_without_test_input_contents(self):
+		seen = []
+		def caller(plan, writer, prompt, cwd, schema, timeout):
+			seen.append(prompt)
+			self.assertFalse(writer)
+			return "synthetic"
+		isolated_inputs.call(caller, None, False, "합성 diff", self.repo, {}, 30, self.repo, review=True)
+		self.assertEqual(seen, ["합성 diff"])
+		self.assertNotIn("VALUE = 1", seen[0])
+
+	def test_implementer_does_not_send_sensitive_owned_source(self):
+		(self.repo / "logic.py").write_text("VALUE = '" + str(Path.home()) + "/private'\n")
+		caller = mock.Mock()
+		with self.assertRaises(ValueError):
+			isolated_inputs.call(caller, None, True, "합성 구현", self.repo, {}, 30, self.repo, owned_paths=["logic.py"])
+		caller.assert_not_called()
+
+	def test_implementer_excludes_test_only_inputs_and_planner_gets_no_sources(self):
+		seen = []
+		def caller(plan, writer, prompt, cwd, schema, timeout):
+			seen.append(prompt)
+			return "synthetic"
+		isolated_inputs.call(caller, None, True, "합성 구현", self.repo, {}, 30, self.repo, owned_paths=["logic.py"])
+		self.assertIn("VALUE = 1", seen[-1])
+		self.assertNotIn("test_logic.py", seen[-1])
+		isolated_inputs.call(caller, None, False, "합성 기획", self.repo, {}, 30, self.repo)
+		self.assertNotIn("VALUE = 1", seen[-1])
+		self.assertNotIn("test_logic.py", seen[-1])
+
 	def test_ai_receives_only_configured_files_and_edits_stay_in_scope(self):
 		seen = []
 		def caller(plan, writer, prompt, cwd, schema, timeout):
@@ -157,7 +245,7 @@ class InputsTest(unittest.TestCase):
 			self.assertFalse(writer)
 			self.assertEqual(list(cwd.iterdir()), [])
 			return "synthetic"
-		isolated_inputs.call(caller, None, True, "합성 구현", self.repo, {}, 30, self.repo)
+		isolated_inputs.call(caller, None, True, "합성 구현", self.repo, {}, 30, self.repo, owned_paths=["logic.py"])
 		self.assertIn("VALUE = 1", seen[0])
 		self.assertNotIn("private synthetic sentinel", seen[0])
 		request = {"owned_paths": ["logic.py", "unapproved.txt"]}

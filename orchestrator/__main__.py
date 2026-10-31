@@ -5,7 +5,7 @@
 	python3 -m orchestrator draft --role <역할> --target <대상> --text-file <글> --out <초안.toml> [--previous <이전.toml>]
 	python3 -m orchestrator meeting --help               읽기 전용 회의(분석·확인·문답·재개)
 	python3 -m orchestrator chat plans                  읽기 전용 PM 대화(요금제·새 대화·전송·문답·종료)
-	python3 -m orchestrator resume <run_id> [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
+	python3 -m orchestrator resume <run_id> [--reverify] [--calls N] [--minutes M]   끊긴 실행을 이어 간다(예산을 늘릴 수 있다)
 	python3 -m orchestrator status <run_id>             상태 보기
 	python3 -m orchestrator apply <run_id>              승인 필요 상태의 변경을 본 저장소에 한 커밋으로 반영한다(push 안 함)
 	python3 -m orchestrator apply <run_id> --onto <가지>  프로젝트 기준 가지에 한 커밋으로 반영한다(push 안 함)
@@ -245,6 +245,11 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		if ("agency_owner" in run.handoff or isinstance(run.request.get("base_branch"), str)
 				and run.request["base_branch"].startswith("agency/p-")) and unmeasured_call_time(run.calls):
 			raise RuntimeError("중단된 호출의 사용 시간을 확인하기 전에는 재개할 수 없습니다")
+		reverify = "--reverify" in options
+		if reverify:
+			if options.count("--reverify") != 1 or run.kind != "code" or run.step != "review" or checks.checks_passed(run.checks):
+				raise ValueError("검증 미통과 상태의 코드 검토만 재검증할 수 있습니다")
+			options = [option for option in options if option != "--reverify"]
 		for flag, value in zip(options[::2], options[1::2]):
 			if flag == "--calls":
 				run.budget["calls"] += int(value)
@@ -253,6 +258,12 @@ def cmd_resume(run_id: str, options: list[str]) -> int:
 		if project_id:
 			from agency import project
 			project.cap_run_budget(project.load(project_id), run)
+		if reverify:
+			if not run.worktree:
+				raise ValueError("재검증 작업 폴더가 없습니다")
+			run.handoff["reverify_commit"] = checks.git(run.worktree, "rev-parse", "HEAD").strip()
+			run.step = "verify"
+			run.event("reverify_requested", commit=run.handoff["reverify_commit"])
 		run.status, run.end_reason = "작업 중", ""
 		run.event("resume", budget=run.budget)
 		run.save()

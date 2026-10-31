@@ -32,11 +32,9 @@ def git(cwd: Path | str, *args: str, check: bool = True) -> str:
 		raise RuntimeError(f"git {args[0]} 실패: {result.stderr.strip()[-200:]}")
 	return result.stdout
 
-
 def _artifact(path: str) -> bool:
 	# 테스트를 돌리면 생기는 파이썬 캐시는 변경으로 치지 않는다
 	return "__pycache__/" in path or path.endswith(".pyc")
-
 
 def changed_paths(worktree: Path, include_artifacts: bool = False) -> list[str]:
 	"""미커밋 경로. 반영 충돌 검사에서는 캐시와 이름 변경의 원래 경로도 포함한다."""
@@ -55,10 +53,8 @@ def changed_paths(worktree: Path, include_artifacts: bool = False) -> list[str]:
 			index += 1
 	return paths
 
-
 def owned(path: str, patterns: list[str]) -> bool:
 	return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
-
 
 def commit_owned(worktree: Path, patterns: list[str], message: str) -> tuple[list[str], list[str]]:
 	"""허용 경로의 변경만 커밋한다. (커밋한 경로, 허용 밖 경로). git add -A 는 쓰지 않는다."""
@@ -98,30 +94,34 @@ def _names() -> list[re.Pattern]:
 	return patterns
 
 
-def _added_lines(worktree: Path, base: str, path: str) -> str:
+def _added_lines(worktree: Path, base: str, path: str, tip: str = "HEAD") -> str:
 	"""base 에서 HEAD 까지 이 파일에 새로 들어간 줄(새 파일이면 전부)."""
-	patch = git(worktree, "-c", "core.quotepath=false", "diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--", path)
+	patch = git(worktree, "-c", "core.quotepath=false", "diff", "-U0", "--no-color", "--no-ext-diff", base, tip, "--", path)
 	return "\n".join(line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++"))
 
 
-def verify(worktree: Path, base: str, request: dict, outside: list[str], *, isolated: bool = False, repo=None, evidence_dir=None) -> list[dict]:
+def verify(worktree: Path, base: str, request: dict, outside: list[str], *, isolated: bool = False, repo=None, evidence_dir=None, commit=None) -> list[dict]:
 	"""검사 결과 목록. 값·원문은 담지 않고 파일 이름과 종류만 담는다."""
 	if isolated:
 		from . import test_isolation, isolated_inputs
 		if repo is None or evidence_dir is None or not isolated_inputs.ready(repo):
 			return [{"name": "허용 경로", "ok": not outside, "detail": ", ".join(outside[:10])}, test_isolation.unverified()]
 	results = [{"name": "허용 경로", "ok": not outside, "detail": ", ".join(outside[:10])}]
-	files = [p for p in git(worktree, "diff", "--name-only", base, "HEAD").splitlines() if p]
-	existing = [p for p in files if (worktree / p).is_file()]
-	long_files = [p for p in existing if p.endswith(".py")
-		and len((worktree / p).read_text(encoding="utf-8", errors="replace").splitlines()) > MAX_LINES]
+	if commit is not None:
+		if not isolated: raise ValueError("커밋 재검증은 격리 대상만 지원합니다")
+		existing, long_files = isolated_inputs.commit_files(repo, worktree, base, commit, request)
+	else:
+		files = [p for p in git(worktree, "diff", "--name-only", base, "HEAD").splitlines() if p]
+		existing = [p for p in files if (worktree / p).is_file()]
+		long_files = [p for p in existing if p.endswith(".py")
+			and len((worktree / p).read_text(encoding="utf-8", errors="replace").splitlines()) > MAX_LINES]
 	results.append({"name": f"파일 {MAX_LINES}줄", "ok": not long_files, "detail": ", ".join(long_files)})
 	names = _names()
 	# 파일에 원래 있던 이름은 이번 변경의 잘못이 아니다(공개 저장소 push 검사도 새 줄만 본다)
-	leaked = [p for p in existing if any(n.search(p) or n.search(_added_lines(worktree, base, p)) for n in names)]
+	leaked = [p for p in existing if any(n.search(p) or n.search(_added_lines(worktree, base, p, commit or "HEAD")) for n in names)]
 	results.append({"name": "회사·서비스 이름", "ok": not leaked, "detail": ", ".join(leaked)})
 	if isolated:
-		result = isolated_inputs.run(repo, evidence_dir, root=worktree)
+		result = isolated_inputs.run(repo, evidence_dir, root=worktree, commit=commit) if commit else isolated_inputs.run(repo, evidence_dir, root=worktree)
 		result["detail"] += " · 명시된 합성 입력 범위만 검증, 저장소 전체 시험은 미검증"
 	else:
 		result = run_tests(request.get("test_command", DEFAULT_TEST), worktree)

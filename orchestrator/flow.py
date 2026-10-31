@@ -117,7 +117,7 @@ class Flow:
 			started = time.monotonic()
 			try:
 				if self._isolated_provider():
-					reply = isolated_inputs.call(self.caller, plan, writer, prompt, Path(r.worktree), schema, timeout, r.repo)
+					reply = isolated_inputs.call(self.caller, plan, writer, prompt, Path(r.worktree), schema, timeout, r.repo, review=role == "review", commit=r.handoff.get("reverify_commit") if role == "review" else None, owned_paths=r.request.get("owned_paths", []))
 				else:
 					reply = self.caller(plan, writer, prompt, Path(r.worktree), schema, timeout)
 			except ProviderError as exc:
@@ -252,7 +252,8 @@ class Flow:
 			r.checks = [{"name": "문서", "ok": bool(r.document.strip()), "detail": f"{len(r.document)}자"}]
 		else:
 			r.checks = checks.verify(Path(r.worktree), r.base_commit, r.request, r.handoff.get("outside_paths", []),
-				isolated=test_isolation.requires(r.repo), repo=r.repo, evidence_dir=r.folder / "isolation")
+				isolated=test_isolation.requires(r.repo), repo=r.repo, evidence_dir=r.folder / "isolation",
+				commit=r.handoff.get("reverify_commit") if test_isolation.requires(r.repo) else None)
 		r.event("verified", ok=checks.checks_passed(r.checks))
 		r.step = "review"
 		self.save()
@@ -265,9 +266,13 @@ class Flow:
 		if r.kind == "analysis":
 			material = r.document
 		elif test_isolation.requires(r.repo):
-			isolated_inputs.check_worktree(isolated_inputs.selected(r.repo), r.worktree)
+			commit = r.handoff.get("reverify_commit")
+			if commit:
+				isolated_inputs.verify_commit(r.repo, r.worktree, commit)
+			else:
+				isolated_inputs.check_worktree(isolated_inputs.selected(r.repo), r.worktree)
 			_, material = isolated_inputs.review_material(isolated_inputs.selected(r.repo), r.base_commit,
-				checks.git(r.worktree, "rev-parse", "HEAD").strip())
+				commit or checks.git(r.worktree, "rev-parse", "HEAD").strip())
 		else:
 			material = checks.git(r.worktree, "diff", r.base_commit, "HEAD")
 		if not material.strip():
@@ -277,6 +282,8 @@ class Flow:
 		data = self._review_answer(prompt)
 		if data is None:
 			return
+		if r.handoff.get("reverify_commit") and test_isolation.requires(r.repo):
+			isolated_inputs.verify_commit(r.repo, r.worktree, r.handoff["reverify_commit"])
 		if not self._reports_unchanged(reports):
 			r.finish("실패", "검토 중 선행 보고가 바뀌었습니다")
 			return

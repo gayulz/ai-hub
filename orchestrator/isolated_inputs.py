@@ -9,13 +9,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from collector.config import ConfigError
 
 from . import checks, prompts, providers, targets, test_isolation
 
-MAX_BYTES = 1024 * 1024
+MAX_BYTES = 2 * 1024 * 1024
 
 
 def valid_path(name):
@@ -95,12 +96,12 @@ def check_worktree(target, worktree):
 				raise ValueError("격리 작업 폴더에 허용되지 않은 파일이 있습니다")
 
 
-def check_git_safety(target, commit, worktree=None):
+def check_git_safety(target, commit, worktree=None, *, read_only=False):
 	for root in (target.path,) if worktree is None else (target.path, Path(worktree)):
 		for name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"):
 			path = Path(checks.git(root, "rev-parse", "--git-path", "hooks/" + name).strip())
 			path = path if path.is_absolute() else root / path
-			if os.access(path, os.X_OK):
+			if not read_only and os.access(path, os.X_OK):
 				raise ValueError("격리할 수 없는 Git 커밋 훅이 있어 실행하지 않습니다")
 		for key in ("core.fsmonitor", "commit.gpgsign"):
 			value = checks.git(root, "config", "--get", key, check=False).strip().lower()
@@ -121,6 +122,26 @@ def check_git_safety(target, commit, worktree=None):
 			if (attribute == b"filter" and value not in (b"unspecified", b"unset") or
 					attribute == b"merge" and value not in (b"unspecified", b"unset", b"set", b"text", b"binary", b"union")):
 				raise ValueError("격리할 수 없는 Git 파일 속성이 있어 실행하지 않습니다")
+
+
+def verify_commit(repo, worktree, commit):
+	if not isinstance(commit, str) or len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+		raise ValueError("검증할 커밋이 잘못됐습니다")
+	target = selected(repo)
+	check_git_safety(target, commit, worktree, read_only=True)
+	if checks.git(worktree, "rev-parse", "HEAD").strip() != commit or checks.changed_paths(Path(worktree), include_artifacts=True):
+		raise ValueError("검증할 커밋이나 작업 폴더가 변경됐습니다")
+	return target
+
+
+def commit_files(repo, worktree, base, commit, request):
+	target = verify_commit(repo, worktree, commit)
+	files = [p for p in checks.git(worktree, "diff", "--name-only", base, commit).splitlines() if p]
+	if any(p not in target.isolated_inputs or not checks.owned(p, request.get("owned_paths", [])) for p in files):
+		raise ValueError("커밋 변경이 허용 경로를 벗어났습니다")
+	existing = [p for p in files if checks.git(repo, "ls-tree", commit, "--", p).startswith(("100644 ", "100755 "))]
+	long_files = [p for p in existing if p.endswith(".py") and len(checks.git(repo, "show", commit + ":" + p).splitlines()) > checks.MAX_LINES]
+	return existing, long_files
 
 
 def create_worktree(repo, worktree, commit, branch=None):
@@ -185,7 +206,10 @@ def run(repo, evidence_dir, *, root=None, commit=None):
 	try:
 		target = selected(repo)
 		if root is not None and Path(root).resolve() != target.path:
-			check_worktree(target, root)
+			if commit is None:
+				check_worktree(target, root)
+			else:
+				verify_commit(repo, root, commit)
 		files = snapshot(target, root, commit=commit)
 		value, command = policy(target, files)
 		result = test_isolation.run_isolated(value, command, Path(evidence_dir), seconds=900)
@@ -207,15 +231,26 @@ def worker_schema():
 	return value
 
 
-def call(caller, plan, writer, prompt, worktree, schema, timeout, repo):
+def call(caller, plan, writer, prompt, worktree, schema, timeout, repo, *, review=False, commit=None, owned_paths=()):
 	from agency import private_provider
 	target = selected(repo)
 	if Path(worktree).resolve() != target.path:
-		check_worktree(target, worktree)
-	files = snapshot(target, worktree, missing=True)
-	prompt += ("\n도구를 쓰지 않는다. 아래 명시적 입력만 근거로 작업한다. 코드 수정은 edits에 파일 전체 내용을 반환한다. "
-		"미제공 자료를 추측하지 않는다. 시험은 서버가 격리 실행한다.\n"
-		+ json.dumps({item.name: item.content.decode("utf-8") for item in files}, ensure_ascii=False))
+		if review and commit is not None:
+			verify_commit(repo, worktree, commit)
+		else:
+			check_worktree(target, worktree)
+	if not review:
+		names = tuple(name for name in target.isolated_inputs if checks.owned(name, owned_paths))
+		files = snapshot(replace(target, isolated_inputs=names), worktree, missing=True) if names else ()
+		if files:
+			from vaultfilter.public import Rules
+			from .draft import safe_text
+			rules = Rules()
+			for item in files:
+				safe_text(item.name + "\n" + item.content.decode("utf-8"), rules)
+		prompt += ("\n도구를 쓰지 않는다. 아래 명시적 입력만 근거로 작업한다. 코드 수정은 edits에 파일 전체 내용을 반환한다. "
+			"미제공 자료를 추측하지 않는다. 시험은 서버가 격리 실행한다.\n"
+			+ json.dumps({item.name: item.content.decode("utf-8") for item in files}, ensure_ascii=False))
 	with tempfile.TemporaryDirectory(prefix="isolated-provider-") as folder:
 		adapter = private_provider.call if caller is providers.call else caller
 		return adapter(plan, False, prompt, Path(folder), schema, timeout)

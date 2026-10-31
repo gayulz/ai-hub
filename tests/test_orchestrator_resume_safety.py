@@ -29,6 +29,34 @@ class ResumeSafetyTest(unittest.TestCase):
 	registered = cleanup.CleanupTest.registered
 	assert_removed = cleanup.CleanupTest.assert_removed
 
+	def test_reverify_returns_failed_review_to_verify_and_preserves_lock(self):
+		row = self.new()
+		execution = self.quota(row)
+		execution.step = "review"
+		execution.checks = [{"name": "테스트", "ok": False, "unverified": 1}]
+		execution.save()
+		def run_flow(current, *_):
+			self.assertEqual(current.step, "verify")
+			self.assertFalse(current.checks[0]["ok"])
+			with self.assertRaises(RuntimeError), orchestration.locked(current):
+				self.fail("실행 잠금이 해제됐습니다")
+			current.finish("실패", "합성 재검증 실패")
+		with mock.patch.object(orchestration, "Flow") as flow:
+			flow.side_effect = lambda *args: mock.Mock(run_all=lambda: run_flow(*args))
+			self.assertEqual(orchestration.cmd_resume(execution.run_id, ["--reverify", "--calls", "3"]), 1)
+		self.assertIn('"event": "reverify_requested"', (execution.folder / "events.jsonl").read_text())
+
+	def test_reverify_rejects_passed_checks_without_changing_records(self):
+		row = self.new()
+		execution = self.quota(row)
+		execution.step = "review"
+		execution.checks = [{"name": "테스트", "ok": True}]
+		execution.save()
+		before = self.records(execution)
+		with self.assertRaises(ValueError):
+			orchestration.cmd_resume(execution.run_id, ["--reverify"])
+		self.assertEqual(self.records(execution), before)
+
 	def test_other_process_lock_keeps_run_and_events_unchanged(self):
 		row = self.new()
 		execution = self.quota(row)

@@ -177,7 +177,8 @@ def review(identity, department, *, periodic=False):
 		if scope:
 			bundle["scope_sha256"] = row["periodic_scope"]["sha256"]
 		try:
-			plans = (flow.role_plans(load_plans(), document_run._configuration(department, private=periodic), "review")
+			plans = (flow.role_plans(load_plans(), document_run._configuration(department, private=True,
+					identity=identity if any(execution.request.get("inputs") for execution in executions) else None), "review")
 				if private else ai.review_plans(department))
 		except (ConfigError, ValueError):
 			plans = []

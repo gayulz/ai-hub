@@ -34,7 +34,8 @@ class PrivateDocumentTest(unittest.TestCase):
 			"problem": marker, "evidence": marker, "suggestion": marker}
 		answer = {"verdict": "changes", "summary": marker, "findings": [finding]}
 		with mock.patch.object(worker, "_review_isolation_required", return_value=False), \
-				mock.patch.object(flow, "role_plans", return_value=[]), \
+				mock.patch.object(flow, "role_plans", return_value=[
+					SimpleNamespace(id="reviewer", tool="claude", model=None)]), \
 				mock.patch.object(flow.Flow, "ask", return_value=answer):
 			worker.review()
 		self.assertEqual(run.step, "fix")

@@ -22,6 +22,11 @@ def _parser():
 	cancel = commands.add_parser("cancel", help="프로젝트 취소")
 	cancel.add_argument("id", help="프로젝트 식별자")
 	commands.add_parser("check", help="부서 설정과 참조 스킬 점검")
+	document_retry = commands.add_parser("document-retry", help="실패 문서의 요청 개정을 보존하고 재시도 준비")
+	document_retry.add_argument("id", help="프로젝트 식별자")
+	document_retry.add_argument("task", help="실패한 작업 식별자")
+	document_retry.add_argument("--plan", action="append", required=True, help="비공개 입력 사용을 승인한 요금제(반복 가능)")
+	document_retry.add_argument("--details-file", required=True, help="새로운 일반 작성 지침을 담은 소유자 전용 텍스트 파일")
 	retry = commands.add_parser("meeting-retry", help="실패·중단된 회의를 다시 열기(받은 자문은 유지)")
 	retry.add_argument("id", help="프로젝트 식별자")
 	return parser
@@ -105,6 +110,11 @@ def main(argv=None) -> int:
 			print(f"{row['id']}: {row['status']}")
 		elif args.command == "check":
 			return _check()
+		elif args.command == "document-retry":
+			from . import document_retry
+			details = document_retry.read_details(args.details_file)
+			document_retry.prepare(args.id, args.task, args.plan, details=details)
+			print("문서 재시도를 준비했습니다")
 		elif args.command == "meeting-retry":
 			from . import meeting
 			row = meeting.retry(args.id)

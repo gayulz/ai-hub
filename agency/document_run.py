@@ -19,6 +19,7 @@ from orchestrator.flow import Flow
 from orchestrator.record import DEFAULT_BUDGET, Run, new_run_id, runs_dir
 
 from . import ai, documents, inputs, private_provider, project
+from .document_retry import independent, call as _call
 
 class DocumentRun(Run):
 	def save(self):
@@ -47,11 +48,6 @@ class DocumentRun(Run):
 		return super().finish("완료" if status == "승인 필요" else status, reason)
 
 
-def independent(plans, calls):
-	used = [call for call in calls if call.get("role") == "implement" and call.get("ok") is True]
-	return [plan for plan in plans if not any(call.get("plan") == plan.id
-		or call.get("tool") == plan.tool and (not call.get("model") or not plan.model or call["model"] == plan.model)
-		for call in used)]
 
 class DocumentFlow(Flow):
 	def _isolated_provider(self):
@@ -93,6 +89,9 @@ class DocumentFlow(Flow):
 			prompt += ("\n\n검증된 입력 자료다. 이 내용 외의 파일·도구·네트워크는 사용하지 않는다.\n"
 				+ json.dumps(material, ensure_ascii=False))
 		if role == "review":
+			if not independent(plans, self.run.calls):
+				self.run.finish("사용자 입력 필요", "승인된 독립 검토 요금제가 없어 검토를 보류했습니다")
+				return None
 			clipped = prompts._clip(self.run.document)
 			if clipped != self.run.document:
 				prompt = prompt.replace(clipped, self.run.document, 1)
@@ -123,13 +122,19 @@ class DocumentFlow(Flow):
 
 	def absorb(self, data):
 		if data.get("blockers"):
+			if self.run.request.get("inputs"):
+				from .document_retry import private_blockers
+				private_blockers(self.run, data["blockers"])
 			self.run.finish("실패", "분석 담당이 해결하지 못한 막힘을 보고했습니다")
 			return False
 		r = self.run
+		preserved = {key: value for key, value in r.handoff.items()
+			if key in ("agency_owner", "document_retry")}
 		usage = r.handoff.get("agency_usage")
 		r.document = data.get("document", "")
 		r.handoff = {"summary": "입력 자료를 사용한 문서 작성" if r.request.get("inputs") else data.get("summary", ""),
 			"blockers": data.get("blockers", [])}
+		r.handoff.update(preserved)
 		if usage is not None:
 			r.handoff["agency_usage"] = usage
 		summary = "입력 자료를 사용한 문서 작성" if r.request.get("inputs") else str(data.get("summary", ""))[:300]
@@ -238,41 +243,12 @@ class DocumentFlow(Flow):
 		if self.run.request.get("report_mode") == "periodic-v1" and self.run.status == "완료":
 			self.run.handoff["periodic_report_seal"] = report_seal(self.run)
 			self.save()
-def _configuration(department, *, private=False):
-	if not department.external_ai:
-		raise ValueError("외부 AI 금지 부서는 문서 실행 호출을 쓸 수 없습니다")
-	config = orchestration.orchestration_config()
-	config = {**config, **{key: [value for value in config.get(key, []) if value in department.allow_plans]
-		for key in ("implementer", "reviewer")}}
-	if department.prepare or department.inputs or private:
-		plans = load_plans().plans
-		allowed = [identity for identity in department.allow_plans if identity in plans
-			and plans[identity].tool in ("codex", "claude") and "personal" in plans[identity].allow
-			and (not department.inputs or "career" in plans[identity].allow)]
-		config["implementer"] = [identity for identity in config["implementer"] if identity in allowed]
-		config["reviewer"] = list(dict.fromkeys([identity for identity in config["reviewer"] if identity in allowed] + allowed))
-		if config["implementer"] and not any(independent([plans[reviewer] for reviewer in config["reviewer"]],
-				[{"role": "implement", "ok": True, "plan": identity, "tool": plans[identity].tool,
-					"model": plans[identity].model or ""}]) for identity in config["implementer"]):
-			raise ValueError("비공개 입력에는 도구 제한과 독립 검토가 가능한 요금제가 필요합니다")
-	if not config["implementer"] or not config["reviewer"]:
-		raise ValueError("부서가 허용한 도구 제한 구현·검토 요금제가 필요합니다")
-	return config
-def _call(plan, writer, prompt, cwd, schema, timeout, *, private=False):
-	caller = private_provider.call if private else flow.call
-	if private or plan.tool in ai.WRITE_UNSAFE_TOOLS:
-		with tempfile.TemporaryDirectory(prefix="agency-document-") as empty:
-			return caller(plan, writer, prompt, Path(empty), schema, timeout)
-	return caller(plan, writer, prompt, cwd, schema, timeout)
+def _configuration(department, *, private=False, identity=None):
+	from .document_retry import configuration
+	return configuration(department, private=private, identity=identity, loader=load_plans)
 def load(run_id):
-	if not isinstance(run_id, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{3}", run_id):
-		raise ValueError("문서 실행 번호 형식이 잘못됐습니다")
-	try:
-		date.fromisoformat(run_id[:10])
-		if run_id.endswith("-000"):
-			raise ValueError
-	except ValueError:
-		raise ValueError("문서 실행 번호 형식이 잘못됐습니다") from None
+	from .document_retry import validate_run_id
+	validate_run_id(run_id)
 	folder = runs_dir() / run_id
 	if not all(safe(folder / name) for name in ("run.json", "request.toml", "events.jsonl", ".lock")):
 		raise ValueError("문서 실행 기록에 심볼릭 링크를 사용할 수 없습니다")
@@ -304,8 +280,14 @@ def check(identity, task, execution, workdir):
 		raise ValueError("문서 요청서 경로가 잘못됐습니다")
 	stored = load(execution.run_id)
 	data = orchestration.read_request(str(request_path))
-	with (execution.folder / "request.toml").open("rb") as stream:
-		original = tomllib.load(stream)
+	if task.get("request_sha256") is not None and inputs._hash(
+			inputs._read(request_path, inputs.MAX_OUTPUT)) != task["request_sha256"]:
+		raise ValueError("문서 요청서 해시가 다릅니다")
+	raw = inputs._read(request_path, inputs.MAX_OUTPUT)
+	copied = inputs._read(execution.folder / "request.toml", inputs.MAX_OUTPUT)
+	if copied != raw:
+		raise ValueError("문서 요청서 원본 바이트가 다릅니다")
+	original = tomllib.loads(copied.decode("utf-8"))
 	row = project.load(identity)
 	matches = [item for item in row["tasks"] if item["id"] == task["id"]]
 	if (original != data or execution.request != data["request"] or execution.kind != "analysis"
@@ -423,7 +405,9 @@ def code_reports(execution):
 		raise ValueError("선행 보고 또는 작업 의존 관계가 잘못됐습니다") from None
 def _execute(execution, department, *, resume=False, identity=None, task=None, workdir=None):
 	periodic = execution.request.get("report_mode") == "periodic-v1"
-	config = _configuration(department, private=periodic)
+	private = bool(execution.request.get("inputs"))
+	config = _configuration(department, private=periodic or private,
+		identity=(identity or Path(execution.worktree).parent.name) if not periodic else None)
 	with orchestration.locked(execution):
 		execution = DocumentRun(**vars(load(execution.run_id)))
 		if resume:
@@ -437,7 +421,11 @@ def _execute(execution, department, *, resume=False, identity=None, task=None, w
 			execution.save()
 		try:
 			with storage.transaction() if department.inputs else nullcontext(None) as root:
-				inputs.verify(identity or Path(execution.worktree).parent.name, department, execution.request, root)
+				owner = identity or Path(execution.worktree).parent.name
+				inputs.verify(owner, department, execution.request, root)
+				if not periodic:
+					from .document_retry import cap_budget
+					cap_budget(project.load(owner), execution, new=not resume)
 				caller = lambda *args: _call(*args, private=periodic or bool(execution.request.get("inputs")))
 				DocumentFlow(execution, load_plans(), config, caller=caller).run_all()
 		except (ConfigError, OSError, ValueError):
@@ -463,7 +451,11 @@ def _execute(execution, department, *, resume=False, identity=None, task=None, w
 	return execution
 def start(identity, task, department, workdir):
 	data = orchestration.read_request(task["request_path"])
-	_configuration(department, private=data["request"].get("report_mode") == "periodic-v1")
+	_configuration(department, private=bool(data["request"].get("inputs"))
+		or data["request"].get("report_mode") == "periodic-v1",
+		identity=identity if data["request"].get("report_mode") != "periodic-v1" else None)
+	from .document_retry import validate_history
+	validate_history(task)
 	if not safe(runs_dir()) or not safe(workdir):
 		raise ValueError("문서 실행 경로에 심볼릭 링크를 사용할 수 없습니다")
 	workdir.mkdir(mode=0o700, exist_ok=True)
@@ -476,6 +468,10 @@ def start(identity, task, department, workdir):
 	execution = DocumentRun(new_run_id(), data["request"], str(workdir), kind="analysis",
 		worktree=str(workdir), step="implement", budget=budget)
 	execution.folder.chmod(0o700)
+	if task.get("document_retries"):
+		execution.handoff["document_retry"] = {"project": identity, "task": task["id"],
+			"previous_run": task["document_retries"][-1]["run_id"],
+			"revision": task["document_retries"][-1]["revision"]}
 	shutil.copyfile(task["request_path"], execution.folder / "request.toml")
 	(execution.folder / "request.toml").chmod(0o600)
 	execution.save()

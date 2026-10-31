@@ -434,6 +434,11 @@ def run(identity: str) -> dict:
 				if execution.status not in ("승인 필요", "완료"):
 					previous_usage = execution.handoff.get("agency_usage")
 					if task_document:
+						if document and execution.status != "작업 중" and "(한도 소진)" not in execution.end_reason:
+							_usage(identity, execution, previous_usage)
+							project.update_task(identity, task["id"], status="실패")
+							return _result(project.transition(identity, "막힘",
+								reason="실패 문서는 document-retry 명령으로 재시도해야 합니다"))
 						try:
 							document_run.resume(identity, task, execution, department, task_repo)
 						except inputs.InputError:
@@ -482,6 +487,8 @@ def run(identity: str) -> dict:
 				quota = "(한도 소진)" in execution.end_reason
 				project.update_task(identity, task["id"], status="대기" if quota else "실패")
 				reason = ("한도 소진으로 대기: " if quota else f"작업 {task['id']} 실패: ") + execution.end_reason[:200]
+				if task_document and project.budget_exhausted(project.load(identity)):
+					reason = "프로젝트 예산을 모두 사용했습니다: " + reason
 			if project.over_budget(project.load(identity)):
 				reason = "프로젝트 예산을 넘었습니다"
 			if reason:
